@@ -780,10 +780,21 @@
     }
 
     function optionLabels(popup) {
-        return Array.prototype.filter.call(
-            popup && popup.querySelectorAll ? popup.querySelectorAll("[role='option']") : [],
-            visible
-        ).map(function (option) {
+        var candidates = popup && popup.querySelectorAll ? popup.querySelectorAll(
+            ".ant-select-item-option:not(.ant-select-item-option-disabled), "
+            + "[role='option']:not([aria-disabled='true'])"
+        ) : [];
+        var unique = [];
+        Array.prototype.forEach.call(candidates, function (option) {
+            if (unique.indexOf(option) < 0) unique.push(option);
+        });
+        return unique.filter(function (option) {
+            var classDisabled = option.classList
+                && option.classList.contains("ant-select-item-option-disabled");
+            var ariaDisabled = option.getAttribute
+                && option.getAttribute("aria-disabled") === "true";
+            return !classDisabled && !ariaDisabled && visible(option);
+        }).map(function (option) {
             return {
                 node: option,
                 label: normalizeExactText(
@@ -792,6 +803,111 @@
                 )
             };
         }).filter(function (item) { return !!item.label; });
+    }
+
+    function optionIsConnected(option) {
+        if (!option) return false;
+        return typeof option.isConnected === "boolean" ? option.isConnected : true;
+    }
+
+    function caseCommitDiagnostics(extra) {
+        var diagnostic = {
+            option_count: 0,
+            commit_method: "none",
+            commit_attempt_count: 0,
+            option_connected_before_action: false,
+            option_connected_after_action: false,
+            popup_replaced: false,
+            live_option_reacquired: false
+        };
+        extra = extra || {};
+        if (["none", "semantic_click", "semantic_click_event"].indexOf(extra.commit_method) >= 0) {
+            diagnostic.commit_method = extra.commit_method;
+        }
+        ["option_count", "commit_attempt_count"].forEach(function (key) {
+            if (Number.isInteger(extra[key]) && extra[key] >= 0 && extra[key] <= 10000) {
+                diagnostic[key] = extra[key];
+            }
+        });
+        [
+            "option_connected_before_action", "option_connected_after_action",
+            "popup_replaced", "live_option_reacquired"
+        ].forEach(function (key) {
+            if (typeof extra[key] === "boolean") diagnostic[key] = extra[key];
+        });
+        return diagnostic;
+    }
+
+    function findExactLiveCaseOption(expectedLabel, contract) {
+        var input = caseInput(contract);
+        var popup = popupForInput(input, contract);
+        if (!input || !popup || !visible(popup)) return result(
+            false,
+            "case_popup_not_interactive",
+            { input: input, popup: popup, option_count: 0 }
+        );
+        var options = optionLabels(popup);
+        var matches = options.filter(function (item) {
+            return item.label === expectedLabel;
+        });
+        if (matches.length > 1) return result(false, "case_ambiguous", {
+            input: input,
+            popup: popup,
+            option_count: options.length
+        });
+        if (matches.length === 0) return result(false, "case_not_found", {
+            input: input,
+            popup: popup,
+            option_count: options.length
+        });
+        return result(true, "", {
+            input: input,
+            popup: popup,
+            node: matches[0].node,
+            option_count: options.length
+        });
+    }
+
+    function commitExactCaseOption(expectedLabel, contract, diagnostic) {
+        var live = findExactLiveCaseOption(expectedLabel, contract);
+        var details = caseCommitDiagnostics(Object.assign({}, diagnostic || {}, {
+            option_count: live.option_count || 0,
+            live_option_reacquired: true
+        }));
+        if (!live.ok) return stageFailure("case_commit", live.error, details);
+
+        var option = live.node;
+        details.option_connected_before_action = optionIsConnected(option);
+        if (!details.option_connected_before_action) {
+            return stageFailure("case_commit", "case_selection_mismatch", details);
+        }
+
+        var actionSucceeded = false;
+        if (typeof option.click === "function") {
+            details.commit_method = "semantic_click";
+            details.commit_attempt_count = 1;
+            try {
+                option.click();
+                actionSucceeded = true;
+            } catch (_error) {}
+        }
+        if (!actionSucceeded) {
+            live = findExactLiveCaseOption(expectedLabel, contract);
+            details.option_count = live.option_count || 0;
+            details.live_option_reacquired = true;
+            if (!live.ok) return stageFailure("case_commit", live.error, details);
+            option = live.node;
+            details.option_connected_before_action = optionIsConnected(option);
+            if (!details.option_connected_before_action) {
+                return stageFailure("case_commit", "case_selection_mismatch", details);
+            }
+            details.commit_method = "semantic_click_event";
+            details.commit_attempt_count += 1;
+            actionSucceeded = dispatchDomEvent(option, "click", false);
+        }
+        details.option_connected_after_action = optionIsConnected(option);
+        return actionSucceeded ? result(true, "", details)
+            : stageFailure("case_commit", "case_selection_mismatch", details);
     }
 
     async function selectExactCase(expectedLabel, searchQuery, contract, generation) {
@@ -816,44 +932,62 @@
             await requestFrame();
         }
         if (!queryAccepted) return stageFailure("case_query", "case_query_not_applied");
-        var match = null;
         var optionCount = 0;
+        var commitResult = null;
         while (Date.now() <= deadline) {
             if (canceled(generation)) return stageFailure("case_results", "lookup_superseded");
-            input = caseInput(contract);
-            popup = popupForInput(input, contract);
-            var options = optionLabels(popup);
-            optionCount = options.length;
-            var signature = options.map(function (item) { return item.label; }).join("\u0000");
-            var matches = options.filter(function (item) { return item.label === expectedLabel; });
-            if (matches.length > 1) return stageFailure(
-                "case_results", "case_ambiguous", { option_count: optionCount }
+            var live = findExactLiveCaseOption(expectedLabel, contract);
+            optionCount = live.option_count || 0;
+            if (live.error === "case_ambiguous") return stageFailure(
+                "case_results", "case_ambiguous", caseCommitDiagnostics({
+                    option_count: optionCount,
+                    popup_replaced: live.popup !== beforePopup
+                })
             );
-            if (matches.length === 1 && (popup !== beforePopup || signature !== before)) {
-                match = matches[0].node;
+            var signature = live.popup
+                ? optionLabels(live.popup).map(function (item) { return item.label; }).join("\u0000")
+                : "";
+            if (live.ok && (live.popup !== beforePopup || signature !== before)) {
+                commitResult = commitExactCaseOption(expectedLabel, contract, {
+                    option_count: optionCount,
+                    popup_replaced: live.popup !== beforePopup,
+                    live_option_reacquired: true
+                });
                 break;
             }
             await requestFrame();
         }
-        if (!match) return stageFailure(
-            "case_results", "case_not_found", { option_count: optionCount }
+        if (!commitResult) return stageFailure(
+            "case_results", "case_not_found", caseCommitDiagnostics({
+                option_count: optionCount,
+                popup_replaced: popupForInput(caseInput(contract), contract) !== beforePopup
+            })
         );
-        if (!dispatchPointerMouseSequence(match, null)) return stageFailure(
-            "case_commit", "case_selection_mismatch", { option_count: optionCount }
-        );
+        if (!commitResult.ok) return commitResult;
         while (Date.now() <= deadline) {
             if (canceled(generation)) return stageFailure("case_commit", "lookup_superseded", {
-                option_count: optionCount
+                option_count: optionCount,
+                commit_method: commitResult.commit_method,
+                commit_attempt_count: commitResult.commit_attempt_count
             });
             var selected = readSelectedCase(contract);
             if (selected.ok && selected.label === expectedLabel) return result(true, "", {
-                stage: "case_verified", option_count: optionCount
+                stage: "case_verified",
+                option_count: optionCount,
+                commit_method: commitResult.commit_method,
+                commit_attempt_count: commitResult.commit_attempt_count,
+                option_connected_before_action: commitResult.option_connected_before_action,
+                option_connected_after_action: commitResult.option_connected_after_action,
+                popup_replaced: commitResult.popup_replaced,
+                live_option_reacquired: commitResult.live_option_reacquired
             });
             await requestFrame();
         }
-        return stageFailure("case_verified", "case_selection_mismatch", {
-            option_count: optionCount
-        });
+        return stageFailure(
+            "case_verified",
+            "case_selection_mismatch",
+            caseCommitDiagnostics(commitResult)
+        );
     }
 
     async function awaitStableEntryValue(name, expected, contract, generation) {
@@ -1043,10 +1177,17 @@
         ["stage", "internal_error_kind"].forEach(function (key) {
             if (typeof value[key] === "string") safe[key] = value[key];
         });
-        ["viewport_available", "input_exists", "input_interactive"].forEach(function (key) {
+        if (["none", "semantic_click", "semantic_click_event"].indexOf(value.commit_method) >= 0) {
+            safe.commit_method = value.commit_method;
+        }
+        [
+            "viewport_available", "input_exists", "input_interactive",
+            "option_connected_before_action", "option_connected_after_action",
+            "popup_replaced", "live_option_reacquired"
+        ].forEach(function (key) {
             if (typeof value[key] === "boolean") safe[key] = value[key];
         });
-        ["option_count", "date_step_count"].forEach(function (key) {
+        ["option_count", "date_step_count", "commit_attempt_count"].forEach(function (key) {
             if (Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= 10000) {
                 safe[key] = value[key];
             }

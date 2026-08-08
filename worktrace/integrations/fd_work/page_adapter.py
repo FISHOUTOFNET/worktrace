@@ -94,6 +94,8 @@ _FILL_DIAGNOSTIC_STAGES = frozenset(
     }
 )
 
+_CASE_COMMIT_METHODS = frozenset({"none", "semantic_click", "semantic_click_event"})
+
 
 _WORK_SHELL_WINDOW_RESOLVER = r"""
 function workTraceWorkShellWindow() {
@@ -629,20 +631,27 @@ class FDWorkPageAdapter:
         error = value.get("error")
         if isinstance(error, str) and error in _ACTION_ERRORS:
             safe: dict[str, Any] = {"ok": False, "error": error}
+            for key in ("status", "label", "document_visibility"):
+                if isinstance(value.get(key), str):
+                    safe[key] = value[key]
             for key in (
-                "status",
-                "label",
-                "document_visibility",
                 "viewport_available",
                 "input_exists",
                 "input_interactive",
+                "option_connected_before_action",
+                "option_connected_after_action",
+                "popup_replaced",
+                "live_option_reacquired",
             ):
-                if key in value:
+                if type(value.get(key)) is bool:
                     safe[key] = value[key]
+            commit_method = value.get("commit_method")
+            if commit_method in _CASE_COMMIT_METHODS:
+                safe["commit_method"] = commit_method
             stage = value.get("stage")
             if isinstance(stage, str) and stage in _FILL_DIAGNOSTIC_STAGES:
                 safe["stage"] = stage
-            for key in ("option_count", "date_step_count"):
+            for key in ("option_count", "date_step_count", "commit_attempt_count"):
                 metric = value.get(key)
                 if type(metric) is int and 0 <= metric <= 10_000:
                     safe[key] = metric
@@ -759,17 +768,25 @@ class FDWorkPageAdapter:
             stage = value.get("stage")
             if isinstance(stage, str) and stage in _FILL_DIAGNOSTIC_STAGES:
                 diagnostic["stage"] = stage
+            if isinstance(value.get("document_visibility"), str):
+                diagnostic["document_visibility"] = value["document_visibility"]
             for key in (
-                "document_visibility",
                 "viewport_available",
                 "input_exists",
                 "input_interactive",
                 "form_exists",
                 "wrapper_exists",
+                "option_connected_before_action",
+                "option_connected_after_action",
+                "popup_replaced",
+                "live_option_reacquired",
             ):
-                if key in value and isinstance(value[key], (bool, str)):
+                if type(value.get(key)) is bool:
                     diagnostic[key] = value[key]
-            for key in ("option_count", "date_step_count"):
+            commit_method = value.get("commit_method")
+            if commit_method in _CASE_COMMIT_METHODS:
+                diagnostic["commit_method"] = commit_method
+            for key in ("option_count", "date_step_count", "commit_attempt_count"):
                 metric = value.get(key)
                 if type(metric) is int and 0 <= metric <= 10_000:
                     diagnostic[key] = metric

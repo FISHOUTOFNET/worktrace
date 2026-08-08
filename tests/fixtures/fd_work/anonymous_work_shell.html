@@ -44,6 +44,8 @@
         dateClicks: 0,
         popupCreations: 0,
         popupReplacements: 0,
+        optionReplacements: 0,
+        staleOptionClicks: 0,
         caseOpenEvents: [],
         caseQueries: 0,
         caseSearchValues: [],
@@ -60,7 +62,10 @@
         durationAccepted: true,
         narrativeAccepted: true,
         deferCaseResults: false,
-        caseOptions: null
+        caseOptions: null,
+        replaceOptionOnPointerDown: false,
+        includeHiddenAccessibilityOption: false,
+        antOptionWithoutRole: false
       };
 
       function addDays(value, amount) {
@@ -105,17 +110,37 @@
         var popup = document.createElement("div");
         popup.id = "basic_caseId_list";
         popup.setAttribute("role", "listbox");
-        popupLabels(query).forEach(function (label) {
+        function appendOption(label, hidden, antOnly) {
           var option = document.createElement("div");
-          option.setAttribute("role", "option");
+          option.className = "ant-select-item ant-select-item-option";
+          if (!antOnly) option.setAttribute("role", "option");
           option.setAttribute("title", label);
           option.setAttribute("aria-selected", label === state.selectedCase ? "true" : "false");
-          option.textContent = label;
+          if (hidden) option.style.display = "none";
+          var content = document.createElement("div");
+          content.className = "ant-select-item-option-content";
+          content.textContent = label;
+          option.appendChild(content);
+          option.addEventListener("pointerdown", function () {
+            if (!hidden && config.replaceOptionOnPointerDown && option.isConnected) {
+              state.optionReplacements += 1;
+              renderPopup(query);
+            }
+          });
           option.addEventListener("click", function (event) {
+            if (!option.isConnected) {
+              state.staleOptionClicks += 1;
+              event.stopPropagation();
+              return;
+            }
             commitCase(label);
             event.stopPropagation();
           });
           popup.appendChild(option);
+        }
+        popupLabels(query).forEach(function (label) {
+          if (config.includeHiddenAccessibilityOption) appendOption(label, true, false);
+          appendOption(label, false, config.antOptionWithoutRole);
         });
         document.body.appendChild(popup);
         state.popupCreations += 1;
@@ -328,7 +353,10 @@
           durationAccepted: true,
           narrativeAccepted: true,
           deferCaseResults: false,
-          caseOptions: null
+          caseOptions: null,
+          replaceOptionOnPointerDown: false,
+          includeHiddenAccessibilityOption: false,
+          antOptionWithoutRole: false
         });
       }
       function contract(generation, deadlineOffset) {
@@ -371,6 +399,7 @@
         var toolbar = document.getElementById("worktrace-fdwork-picker-toolbar");
         var confirm = toolbar && toolbar.querySelector("button");
         check("picker_dynamic_entry", entered.ok === true && !!confirm && confirm.disabled === true);
+        await Promise.resolve();
         var callbacksBeforeUnrelatedChurn = window.__fdWorkFixture.observerCallbacks();
         var unrelated = document.createElement("div");
         document.body.appendChild(unrelated);
@@ -422,11 +451,51 @@
         var pickerListenersAfterCycles = window.__fdWorkFixture.activeListeners();
         var pickerObserversAfterCycles = window.__fdWorkFixture.activeObservers();
 
+        resetConfig();
+        var controlledLabel = "#26IP0111 长飞光纤IP问题分析";
+        window.__fdWorkFixture.config.caseOptions = [controlledLabel];
+        window.__fdWorkFixture.config.replaceOptionOnPointerDown = true;
+        userOpenAndQuery("26IP0111");
+        await nextTurn();
+        var detachedOption = document.querySelector(
+          "#basic_caseId_list .ant-select-item-option"
+        );
+        var commitsBeforeDetachedClick = window.__fdWorkFixture.state.caseCommits;
+        detachedOption.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+        detachedOption.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        check("controlled_option_was_replaced_on_pointerdown",
+          window.__fdWorkFixture.state.optionReplacements > 0 && !detachedOption.isConnected);
+        check("detached_stale_option_click_does_not_commit",
+          window.__fdWorkFixture.state.caseCommits === commitsBeforeDetachedClick
+          && window.__fdWorkFixture.state.staleOptionClicks > 0);
+        var currentPopupAfterStaleClick = document.getElementById("basic_caseId_list");
+        if (currentPopupAfterStaleClick) currentPopupAfterStaleClick.remove();
+        var staleClicksBeforeAutomatedCommit = window.__fdWorkFixture.state.staleOptionClicks;
+        var durationWritesBeforeControlledCommit = window.__fdWorkFixture.state.durationWrites;
+        var narrativeWritesBeforeControlledCommit = window.__fdWorkFixture.state.narrativeWrites;
+        var controlledCommit = await adapter.fillEntry({
+          case_label: controlledLabel, case_query: "26IP0111", work_date: "2026-01-03",
+          duration_hours: "0.75", narrative: "CONTROLLED REPLACEMENT"
+        }, contract(29));
+        check("controlled_replacement_case_commit_verified",
+          controlledCommit.ok === true && controlledCommit.stage === "entry_verified"
+          && adapter.readSelectedCase(contract(29)).label === controlledLabel);
+        check("controlled_replacement_never_clicks_stale_option",
+          window.__fdWorkFixture.state.staleOptionClicks === staleClicksBeforeAutomatedCommit);
+        check("controlled_replacement_full_fill_continues_after_case_verified",
+          window.__fdWorkFixture.state.durationWrites > durationWritesBeforeControlledCommit
+          && window.__fdWorkFixture.state.narrativeWrites > narrativeWritesBeforeControlledCommit
+          && document.getElementById("basic_hoursWorked").value === "0.75"
+          && document.getElementById("basic_narrative").value === "CONTROLLED REPLACEMENT");
+
+        resetConfig();
         var canonicalLabel = "#26IP0165 IPDD_Miragene";
         window.__fdWorkFixture.config.caseOptions = [
           canonicalLabel,
           "#26IP0165 Another Matter"
         ];
+        window.__fdWorkFixture.config.includeHiddenAccessibilityOption = true;
+        window.__fdWorkFixture.config.antOptionWithoutRole = true;
         var initialDateClicks = window.__fdWorkFixture.state.dateClicks;
         var noDateChange = await adapter.fillEntry({
           case_label: canonicalLabel, case_query: "26IP0165", work_date: "2026-01-03",
@@ -496,11 +565,17 @@
 
         resetConfig();
         window.__fdWorkFixture.config.caseMode = "search_only";
+        var durationWritesBeforeCaseFailure = window.__fdWorkFixture.state.durationWrites;
+        var narrativeWritesBeforeCaseFailure = window.__fdWorkFixture.state.narrativeWrites;
         var searchOnly = await adapter.fillEntry({
           case_label: "UNCOMMITTED MATTER", case_query: "UNCOMMITTED MATTER", work_date: "2026-01-03",
           duration_hours: "1.0", narrative: "UNCOMMITTED"
         }, contract(36, 300));
-        check("search_text_without_commit_fails", searchOnly.error === "case_selection_mismatch");
+        check("search_text_without_commit_fails_at_case_verified",
+          searchOnly.error === "case_selection_mismatch" && searchOnly.stage === "case_verified");
+        check("case_commit_failure_writes_no_duration_or_narrative",
+          window.__fdWorkFixture.state.durationWrites === durationWritesBeforeCaseFailure
+          && window.__fdWorkFixture.state.narrativeWrites === narrativeWritesBeforeCaseFailure);
 
         resetConfig();
         window.__fdWorkFixture.config.durationAccepted = false;
@@ -550,7 +625,9 @@
         metrics: {
           picker_active_listeners_after_cycles: pickerListenersAfterCycles,
           picker_active_observers_after_cycles: pickerObserversAfterCycles,
-          observer_peak: window.__fdWorkFixture.observerPeak()
+          observer_peak: window.__fdWorkFixture.observerPeak(),
+          controlled_commit_stage: controlledCommit && controlledCommit.stage || "none",
+          controlled_commit_error: controlledCommit && controlledCommit.error || "none"
         },
         errors: errors
       };

@@ -197,6 +197,12 @@ def test_fill_diagnostics_preserve_privacy_safe_stage_without_page_values():
             "stage": "case_open",
             "internal_error_kind": "case_popup_not_created",
             "option_count": 0,
+            "commit_method": "semantic_click",
+            "commit_attempt_count": 1,
+            "option_connected_before_action": True,
+            "option_connected_after_action": False,
+            "popup_replaced": True,
+            "live_option_reacquired": True,
         },
     )
 
@@ -207,11 +213,23 @@ def test_fill_diagnostics_preserve_privacy_safe_stage_without_page_values():
         "error": "case_popup_not_created",
         "stage": "case_open",
         "option_count": 0,
+        "commit_method": "semantic_click",
+        "commit_attempt_count": 1,
+        "option_connected_before_action": True,
+        "option_connected_after_action": False,
+        "popup_replaced": True,
+        "live_option_reacquired": True,
     }
     assert diagnostics[-1]["action"] == "fill_entry"
     assert diagnostics[-1]["stage"] == "case_open"
     assert diagnostics[-1]["internal_error_kind"] == "case_popup_not_created"
     assert diagnostics[-1]["option_count"] == 0
+    assert diagnostics[-1]["commit_method"] == "semantic_click"
+    assert diagnostics[-1]["commit_attempt_count"] == 1
+    assert diagnostics[-1]["option_connected_before_action"] is True
+    assert diagnostics[-1]["option_connected_after_action"] is False
+    assert diagnostics[-1]["popup_replaced"] is True
+    assert diagnostics[-1]["live_option_reacquired"] is True
     serialized = repr(diagnostics)
     assert _draft().case_label not in serialized
     assert _draft().case_query not in serialized

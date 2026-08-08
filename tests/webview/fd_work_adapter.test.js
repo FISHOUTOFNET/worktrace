@@ -81,7 +81,15 @@ function fieldHarness() {
   };
 }
 
-function exactCaseHarness({ optionLabels, committedLabel } = {}) {
+function exactCaseHarness({
+  optionLabels,
+  committedLabel,
+  replaceOnPointerDown = false,
+  replacePopupAfterQuery = true,
+  hiddenAccessibilityDuplicate = false,
+  antClassOnly = false,
+  semanticClickNoop = false,
+} = {}) {
   class Input {
     constructor() { this._value = ""; }
     get value() { return this._value; }
@@ -90,8 +98,12 @@ function exactCaseHarness({ optionLabels, committedLabel } = {}) {
   class Textarea extends Input {}
   let currentLabels = ["STALE RESULT"];
   let selectedLabel = "";
+  let popupRevision = 0;
+  let currentPopup = null;
   const queries = [];
   const clickedLabels = [];
+  const staleClickLabels = [];
+  const interactionEvents = [];
   const listeners = new Map();
   const selectionItem = {
     get textContent() { return selectedLabel; },
@@ -116,39 +128,81 @@ function exactCaseHarness({ optionLabels, committedLabel } = {}) {
       if (event.type === "input") {
         queries.push(this.value);
         currentLabels = optionLabels.slice();
+        if (replacePopupAfterQuery) currentPopup = makePopup();
       }
       return true;
     },
   });
-  function option(label) {
-    return {
+  function commit(label) {
+    if (semanticClickNoop) return;
+    clickedLabels.push(label);
+    selectedLabel = committedLabel === undefined ? label : committedLabel;
+  }
+  function option(label, owner, { hidden = false, classOnly = antClassOnly } = {}) {
+    const node = {
       label,
       innerText: label,
       textContent: label,
+      classList: {
+        contains(name) { return name === "ant-select-item-option" && classOnly; },
+      },
       getAttribute(name) {
         if (name === "title") return label;
+        if (name === "role") return classOnly ? null : "option";
+        if (name === "class") return classOnly ? "ant-select-item-option" : "";
+        if (name === "aria-disabled") return "false";
         if (name === "aria-selected") return label === selectedLabel ? "true" : "false";
         return null;
       },
-      getClientRects() { return [{}]; },
+      get isConnected() { return currentPopup === owner; },
+      getClientRects() { return hidden ? [] : [{}]; },
       dispatchEvent(event) {
+        interactionEvents.push({ label, type: event.type, connected: this.isConnected });
+        if (event.type === "pointerdown" && replaceOnPointerDown && this.isConnected) {
+          currentPopup = makePopup();
+        }
         if (event.type === "click") {
-          clickedLabels.push(label);
-          selectedLabel = committedLabel === undefined ? label : committedLabel;
+          if (!this.isConnected) staleClickLabels.push(label);
+          else commit(label);
         }
         return true;
       },
     };
+    node.click = function () {
+      interactionEvents.push({ label, type: "semantic-click", connected: node.isConnected });
+      if (!node.isConnected) staleClickLabels.push(label);
+      else commit(label);
+    };
+    return node;
   }
-  const popup = {
-    getClientRects() { return [{}]; },
-    querySelectorAll(selector) {
-      const options = currentLabels.map(option);
-      return selector.includes("aria-selected='true'")
-        ? options.filter((item) => item.label === selectedLabel)
-        : options;
-    },
-  };
+  function makePopup() {
+    const popup = {
+      revision: ++popupRevision,
+      get isConnected() { return currentPopup === popup; },
+      getClientRects() { return currentPopup === popup ? [{}] : []; },
+      querySelectorAll(selector) {
+        const options = currentLabels.map((label) => option(label, popup));
+        if (hiddenAccessibilityDuplicate && currentLabels.length) {
+          options.unshift(option(currentLabels[0], popup, { hidden: true, classOnly: false }));
+        }
+        if (selector.includes("aria-selected='true'")) {
+          return options.filter((item) => item.label === selectedLabel && item.getClientRects().length);
+        }
+        if (selector.includes("ant-select-item-option") && selector.includes("[role='option']")) {
+          return options;
+        }
+        if (selector.includes("ant-select-item-option")) {
+          return options.filter((item) => item.classList.contains("ant-select-item-option"));
+        }
+        if (selector.includes("[role='option']")) {
+          return options.filter((item) => item.getAttribute("role") === "option");
+        }
+        return [];
+      },
+    };
+    return popup;
+  }
+  currentPopup = makePopup();
   const context = {
     Promise, Object, String, Array,
     Event: class Event { constructor(type) { this.type = type; } },
@@ -165,7 +219,7 @@ function exactCaseHarness({ optionLabels, committedLabel } = {}) {
       body: { firstElementChild: {}, appendChild() {}, insertBefore() {} },
       querySelector(selector) { return selector === "#case" ? input : null; },
       querySelectorAll() { return []; },
-      getElementById(id) { return id === "case-list" ? popup : null; },
+      getElementById(id) { return id === "case-list" ? currentPopup : null; },
       createElement() { return { setAttribute() {}, appendChild() {}, addEventListener() {} }; },
     },
     window: {
@@ -195,6 +249,9 @@ function exactCaseHarness({ optionLabels, committedLabel } = {}) {
     },
     queries,
     clickedLabels,
+    staleClickLabels,
+    interactionEvents,
+    popupRevision() { return popupRevision; },
   };
 }
 
@@ -371,6 +428,36 @@ test("automatic Ant Select path validates every dynamic popup stage", () => {
   assert.doesNotMatch(body, /popup\s*=\s*popupForInput\([^)]*\)\s*\|\|\s*popup/);
 });
 
+test("case commit has a separate live-option resolver and never reuses the open-selector sequence", () => {
+  const start = source.indexOf("function optionLabels");
+  const end = source.indexOf("async function fillDuration", start);
+  const body = source.slice(start, end);
+  assert.match(body, /function findExactLiveCaseOption/);
+  assert.match(body, /function commitExactCaseOption/);
+  assert.match(body, /\.ant-select-item-option:not\(\.ant-select-item-option-disabled\)/);
+  assert.match(body, /\[role=['"]option['"]\]:not\(\[aria-disabled=['"]true['"]\]\)/);
+  assert.doesNotMatch(body, /dispatchPointerMouseSequence\(match,\s*null\)/);
+});
+
+test("canonical 26IP0111 query commits only the exact bound full label", async () => {
+  const expectedLabel = "#26IP0111 长飞光纤IP问题分析";
+  const h = exactCaseHarness({
+    optionLabels: [expectedLabel, "#26IP0111 相似但不同的案件"],
+  });
+
+  const selected = await h.adapter._test.selectExactCase(
+    expectedLabel,
+    "26IP0111",
+    h.contract,
+    0
+  );
+
+  assert.equal(selected.ok, true, JSON.stringify(selected));
+  assert.equal(selected.stage, "case_verified");
+  assert.deepEqual(h.queries, ["26IP0111"]);
+  assert.deepEqual(h.clickedLabels, [expectedLabel]);
+});
+
 test("automatic case selection writes canonical query but matches the full label", async () => {
   const expectedLabel = "#26IP0165 IPDD_Miragene";
   const h = exactCaseHarness({ optionLabels: [expectedLabel] });
@@ -385,6 +472,66 @@ test("automatic case selection writes canonical query but matches the full label
   assert.equal(selected.ok, true, JSON.stringify(selected));
   assert.deepEqual(h.queries, ["26IP0165"]);
   assert.notEqual(h.queries[0], expectedLabel);
+  assert.deepEqual(h.clickedLabels, [expectedLabel]);
+});
+
+test("controlled option replacement after pointerdown cannot commit a detached stale node", async () => {
+  const expectedLabel = "#26IP0111 长飞光纤IP问题分析";
+  const h = exactCaseHarness({
+    optionLabels: [expectedLabel],
+    replaceOnPointerDown: true,
+  });
+
+  const selected = await h.adapter._test.selectExactCase(
+    expectedLabel,
+    "26IP0111",
+    h.contract,
+    0
+  );
+
+  assert.equal(selected.ok, true, JSON.stringify(selected));
+  assert.equal(selected.stage, "case_verified");
+  assert.deepEqual(h.staleClickLabels, []);
+  assert.deepEqual(h.clickedLabels, [expectedLabel]);
+  assert.equal(selected.commit_method, "semantic_click");
+  assert.equal(selected.commit_attempt_count, 1);
+});
+
+test("query-time popup replacement is re-resolved before exact commit", async () => {
+  const expectedLabel = "#26IP0165 IPDD_Miragene";
+  const h = exactCaseHarness({ optionLabels: [expectedLabel], replacePopupAfterQuery: true });
+  const initialRevision = h.popupRevision();
+
+  const selected = await h.adapter._test.selectExactCase(
+    expectedLabel,
+    "26IP0165",
+    h.contract,
+    0
+  );
+
+  assert.equal(selected.ok, true, JSON.stringify(selected));
+  assert.ok(h.popupRevision() > initialRevision);
+  assert.equal(selected.popup_replaced, true);
+  assert.equal(selected.live_option_reacquired, true);
+});
+
+test("hidden accessibility option is ignored in favor of one visible Ant option", async () => {
+  const expectedLabel = "#26IP0165 IPDD_Miragene";
+  const h = exactCaseHarness({
+    optionLabels: [expectedLabel],
+    hiddenAccessibilityDuplicate: true,
+    antClassOnly: true,
+  });
+
+  const selected = await h.adapter._test.selectExactCase(
+    expectedLabel,
+    "26IP0165",
+    h.contract,
+    0
+  );
+
+  assert.equal(selected.ok, true, JSON.stringify(selected));
+  assert.equal(selected.option_count, 1);
   assert.deepEqual(h.clickedLabels, [expectedLabel]);
 });
 
@@ -454,6 +601,26 @@ test("post-click selected full-label mismatch fails closed", async () => {
   assert.deepEqual(h.clickedLabels, [expectedLabel]);
 });
 
+test("semantic click no-op fails closed at case verification", async () => {
+  const expectedLabel = "#26IP0165 IPDD_Miragene";
+  const h = exactCaseHarness({
+    optionLabels: [expectedLabel],
+    semanticClickNoop: true,
+  });
+
+  const selected = await h.adapter._test.selectExactCase(
+    expectedLabel,
+    "26IP0165",
+    h.contract,
+    0
+  );
+
+  assert.equal(selected.ok, false);
+  assert.equal(selected.stage, "case_verified");
+  assert.equal(selected.error, "case_selection_mismatch");
+  assert.equal(selected.commit_attempt_count, 1);
+});
+
 test("anonymous CASE A fixture remains supported when label and query are equal", async () => {
   const h = exactCaseHarness({ optionLabels: ["CASE A"] });
 
@@ -515,7 +682,24 @@ test("fill diagnostics are staged and privacy-safe", () => {
   ]) assert.match(source, new RegExp(`['\"]${stage}['\"]`));
   assert.match(source, /internal_error_kind/);
   assert.match(source, /option_count/);
+  for (const key of [
+    "commit_method", "commit_attempt_count", "option_connected_before_action",
+    "option_connected_after_action", "popup_replaced", "live_option_reacquired",
+  ]) assert.match(source, new RegExp(key));
   assert.doesNotMatch(source, /diagnostic[^\n]*(?:case_number|narrative)/i);
+});
+
+test("case-commit diagnostics are restricted to non-sensitive structured values", () => {
+  const start = source.indexOf("function safeActionResult");
+  const end = source.indexOf("function reportActionResult", start);
+  const body = source.slice(start, end);
+  assert.match(body, /semantic_click/);
+  assert.match(body, /commit_attempt_count/);
+  assert.match(body, /option_connected_before_action/);
+  assert.match(body, /option_connected_after_action/);
+  assert.match(body, /popup_replaced/);
+  assert.match(body, /live_option_reacquired/);
+  assert.doesNotMatch(body, /case_label|case_query|narrative|innerText|textContent/);
 });
 
 test("picker keeps the native form intact and owns one idempotent style node", () => {
