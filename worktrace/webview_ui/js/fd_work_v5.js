@@ -36,20 +36,32 @@
 
     App.receiveFDWorkStatus = function (status) {
         if (!validStatus(status)) return false;
-        var previousOperation = App.fdWorkStatus && App.fdWorkStatus.operation;
+        var previousStatus = App.fdWorkStatus;
+        var previousOperation = previousStatus && previousStatus.operation;
         var incomingGeneration = Number.isInteger(status.navigation_generation)
             ? status.navigation_generation : null;
-        var currentGeneration = App.fdWorkStatus
-            && Number.isInteger(App.fdWorkStatus.navigation_generation)
-            ? App.fdWorkStatus.navigation_generation : null;
+        var currentGeneration = previousStatus
+            && Number.isInteger(previousStatus.navigation_generation)
+            ? previousStatus.navigation_generation : null;
+        var incomingOperationGeneration = Number.isInteger(status.operation_generation)
+            ? status.operation_generation : null;
+        var currentOperationGeneration = previousStatus
+            && Number.isInteger(previousStatus.operation_generation)
+            ? previousStatus.operation_generation : null;
         if (incomingGeneration !== null
             && currentGeneration !== null
             && incomingGeneration < currentGeneration) return false;
+        if (incomingGeneration !== null
+            && currentGeneration !== null
+            && incomingGeneration === currentGeneration
+            && incomingOperationGeneration !== null
+            && currentOperationGeneration !== null
+            && incomingOperationGeneration < currentOperationGeneration) return false;
         var terminalStates = ["login_required", "ready", "error"];
         if (incomingGeneration !== null
             && incomingGeneration === currentGeneration
-            && App.fdWorkStatus
-            && terminalStates.indexOf(App.fdWorkStatus.session_state) >= 0
+            && previousStatus
+            && terminalStates.indexOf(previousStatus.session_state) >= 0
             && status.session_state === "probing") return false;
         App.fdWorkStatus = Object.freeze({
             supported: status.supported === true,
@@ -63,8 +75,7 @@
             page_phase: status.page_phase || "none",
             navigation_generation: incomingGeneration,
             operation_status: status.operation_status || null,
-            operation_generation: Number.isInteger(status.operation_generation)
-                ? status.operation_generation : null,
+            operation_generation: incomingOperationGeneration,
             operation_result_owner: status.operation_result_owner || null
         });
         if (App.lastSettingsStatus) App.lastSettingsStatus.fd_work = App.fdWorkStatus;
@@ -88,8 +99,13 @@
                             : "FD Work 操作已取消",
                         false
                     );
+                } else if (status.error_code === "save_outcome_unknown") {
+                    App.showFDWorkStatus(
+                        "FD Work 保存结果未确认，请先在 FD Work 页面核对；确认前不要重复填入",
+                        true
+                    );
                 } else {
-                    App.showFDWorkStatus("保存到 FD Work 失败，请重试", true);
+                    App.showFDWorkStatus("保存到 FD Work 失败，请重试", false);
                 }
             }
         }
