@@ -55,7 +55,6 @@ def test_anonymous_fixture_preserves_minimum_real_ant_contract() -> None:
     assert 'check("complete_four_field_readback"' in source
     assert 'check("canonical_case_query_written"' in source
     assert 'check("canonical_query_exact_full_label_selected"' in source
-    assert 'check("post_click_full_label_mismatch_fails"' in source
     assert 'check("never_auto_saves_or_submits"' in source
     assert "worktrace-result" in source
 

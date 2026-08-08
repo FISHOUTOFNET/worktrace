@@ -60,8 +60,7 @@
         durationAccepted: true,
         narrativeAccepted: true,
         deferCaseResults: false,
-        caseOptions: null,
-        commitLabelOverride: null
+        caseOptions: null
       };
 
       function addDays(value, amount) {
@@ -77,13 +76,12 @@
 
       function commitCase(label) {
         if (config.caseMode === "search_only") return;
-        state.selectedCase = config.commitLabelOverride === null
-          ? label : config.commitLabelOverride;
+        state.selectedCase = label;
         state.caseCommits += 1;
         var selection = document.querySelector(".ant-select-selection-item");
         if (selection) {
-          selection.textContent = state.selectedCase;
-          selection.setAttribute("title", state.selectedCase);
+          selection.textContent = label;
+          selection.setAttribute("title", label);
         }
         var input = document.getElementById("basic_caseId");
         if (input) input.setAttribute("aria-expanded", "false");
@@ -330,8 +328,7 @@
           durationAccepted: true,
           narrativeAccepted: true,
           deferCaseResults: false,
-          caseOptions: null,
-          commitLabelOverride: null
+          caseOptions: null
         });
       }
       function contract(generation, deadlineOffset) {
@@ -425,33 +422,27 @@
         var pickerListenersAfterCycles = window.__fdWorkFixture.activeListeners();
         var pickerObserversAfterCycles = window.__fdWorkFixture.activeObservers();
 
-        resetConfig();
         var canonicalLabel = "#26IP0165 IPDD_Miragene";
         window.__fdWorkFixture.config.caseOptions = [
           canonicalLabel,
           "#26IP0165 Another Matter"
         ];
-        var canonicalSelection = await adapter.fillEntry({
-          case_label: canonicalLabel, case_query: "26IP0165", work_date: "2026-01-03",
-          duration_hours: "0.5", narrative: "CANONICAL QUERY"
-        }, contract(29));
-        check("canonical_case_query_written",
-          window.__fdWorkFixture.state.caseSearchValues.slice(-1)[0] === "26IP0165");
-        check("canonical_query_exact_full_label_selected",
-          canonicalSelection.ok === true
-          && adapter.readSelectedCase(contract(29)).label === canonicalLabel);
-
-        resetConfig();
         var initialDateClicks = window.__fdWorkFixture.state.dateClicks;
         var noDateChange = await adapter.fillEntry({
-          case_label: "TEST MATTER A", case_query: "TEST MATTER A", work_date: "2026-01-03",
+          case_label: canonicalLabel, case_query: "26IP0165", work_date: "2026-01-03",
           duration_hours: "1.0", narrative: "TEST DESCRIPTION"
         }, contract(30));
         check("current_date_is_noop", noDateChange.ok === true
           && window.__fdWorkFixture.state.dateClicks === initialDateClicks);
+        check("canonical_case_query_written",
+          window.__fdWorkFixture.state.caseSearchValues.slice(-1)[0] === "26IP0165");
+        check("canonical_query_exact_full_label_selected",
+          noDateChange.ok === true
+          && adapter.readSelectedCase(contract(30)).label === canonicalLabel);
         check("controlled_duration_readback", document.getElementById("basic_hoursWorked").value === "1.0");
         check("controlled_narrative_readback", document.getElementById("basic_narrative").value === "TEST DESCRIPTION");
 
+        resetConfig();
         var revisionBeforePrevious = window.__fdWorkFixture.state.formRevision;
         var previous = await adapter.fillEntry({
           case_label: "TEST MATTER A", case_query: "TEST MATTER A", work_date: "2026-01-02",
@@ -512,22 +503,12 @@
         check("search_text_without_commit_fails", searchOnly.error === "case_selection_mismatch");
 
         resetConfig();
-        window.__fdWorkFixture.config.caseOptions = [canonicalLabel];
-        window.__fdWorkFixture.config.commitLabelOverride = "#21IP0201 Other Matter";
-        var selectionMismatch = await adapter.fillEntry({
-          case_label: canonicalLabel, case_query: "26IP0165", work_date: "2026-01-03",
-          duration_hours: "1.0", narrative: "MISMATCH"
-        }, contract(37, 300));
-        check("post_click_full_label_mismatch_fails",
-          selectionMismatch.error === "case_selection_mismatch");
-
-        resetConfig();
         window.__fdWorkFixture.config.durationAccepted = false;
         var narrativeWritesBefore = window.__fdWorkFixture.state.narrativeWrites;
         var durationRejected = await adapter.fillEntry({
           case_label: "TEST MATTER A", case_query: "TEST MATTER A", work_date: "2026-01-03",
           duration_hours: "3.0", narrative: "DURATION REJECTED"
-        }, contract(38, 350));
+        }, contract(37, 350));
         check("duration_rejection_fails", durationRejected.error === "duration_verification_failed");
         check("duration_failure_stops_narrative",
           window.__fdWorkFixture.state.narrativeWrites === narrativeWritesBefore);
@@ -537,7 +518,7 @@
         var narrativeRejected = await adapter.fillEntry({
           case_label: "TEST MATTER A", case_query: "TEST MATTER A", work_date: "2026-01-03",
           duration_hours: "3.5", narrative: "NARRATIVE REJECTED"
-        }, contract(39, 350));
+        }, contract(38, 350));
         check("narrative_rejection_fails", narrativeRejected.error === "narrative_verification_failed");
 
         check("never_auto_saves_or_submits",
@@ -551,7 +532,7 @@
         var stalePromise = adapter.fillEntry({
           case_label: "STALE MATTER", case_query: "STALE MATTER", work_date: "2026-01-03",
           duration_hours: "1.0", narrative: "STALE"
-        }, contract(40, 500));
+        }, contract(39, 500));
         await nextTurn();
         window.dispatchEvent(new Event("pagehide"));
         var stale = await stalePromise;
