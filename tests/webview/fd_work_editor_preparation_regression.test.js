@@ -111,7 +111,8 @@ function harness(options = {}) {
     },
     querySelectorAll(selector) {
       if (selector === "button, [role='button'], input[type='button']") {
-        return createButton ? [createButton] : [];
+        const mounted = !options.createButtonAtFrame || frame >= options.createButtonAtFrame;
+        return createButton && mounted ? [createButton] : [];
       }
       return [];
     },
@@ -197,6 +198,17 @@ test("existing editor shell waits for delayed Ant case mount instead of clicking
   assert.equal(h.byId.has(FILL_BLOCKER_ID), true);
 });
 
+test("transient empty shell waits for create action mount instead of failing missing", async () => {
+  const h = harness({ createButton: true, createButtonAtFrame: 2 });
+
+  const result = await h.adapter.ensureEntryEditor(contract());
+
+  assert.equal(result.ok, true);
+  assert.equal(result.create_click_count, 1);
+  assert.equal(h.getCreateClicks(), 1);
+  assert.equal(h.blockerPresentAtCreateClick(), true);
+});
+
 test("true existing-hours page installs blocker before clicking create exactly once", async () => {
   const h = harness({ createButton: true });
 
@@ -209,7 +221,7 @@ test("true existing-hours page installs blocker before clicking create exactly o
   assert.equal(h.byId.has(FILL_BLOCKER_ID), true);
 });
 
-test("failed rendering releases preparation blocker and never falls through to create", async () => {
+test("failed rendering releases picker preparation blocker and never falls through to create", async () => {
   const h = harness({ formInitiallyPresent: true, createButton: true });
 
   const result = await h.adapter.ensureEntryEditor(contract(Date.now() - 1));
@@ -221,16 +233,23 @@ test("failed rendering releases preparation blocker and never falls through to c
   assert.equal(h.byId.has(FILL_BLOCKER_ID), false);
 });
 
-test("source keeps rendering state ahead of create action and hands blocker to picker or fill", () => {
+test("readiness waiter never owns transaction blocker cleanup", () => {
+  const start = adapterSource.indexOf("async function awaitStableEntryEditor");
+  const end = adapterSource.indexOf("function createEntryActionText", start);
+  const body = adapterSource.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  assert.match(body, /requestFrame/);
+  assert.doesNotMatch(body, /removeFillBlockingLayer/);
+});
+
+test("source waits rendering and transient shell before create and hands blocker to picker or fill", () => {
   const ensureStart = adapterSource.indexOf("async function ensureEntryEditor");
   const ensureEnd = adapterSource.indexOf("async function awaitStableWorkShell", ensureStart);
   const ensureBody = adapterSource.slice(ensureStart, ensureEnd);
   assert.ok(ensureStart >= 0 && ensureEnd > ensureStart);
   assert.ok(ensureBody.indexOf("state.form || state.input || state.wrapper") >= 0);
-  assert.ok(
-    ensureBody.indexOf("state.form || state.input || state.wrapper")
-      < ensureBody.indexOf("document.querySelectorAll")
-  );
+  assert.match(ensureBody, /while \(Date\.now\(\) <= deadline\)/);
+  assert.match(ensureBody, /createEntryActions\(\)/);
   assert.ok(ensureBody.indexOf("installFillBlockingLayer()") < ensureBody.indexOf("action.click()"));
 
   const pickerStart = adapterSource.indexOf("function enterCasePicker");
@@ -241,8 +260,14 @@ test("source keeps rendering state ahead of create action and hands blocker to p
   const fillStart = adapterSource.indexOf("async function fillEntry");
   const fillEnd = adapterSource.indexOf("function actionHandler", fillStart);
   const fillBody = adapterSource.slice(fillStart, fillEnd);
+  const date = fillBody.indexOf("ensureEntryDate");
+  const workPage = fillBody.indexOf("awaitStableWorkPage", date);
+  const editor = fillBody.indexOf("ensureEntryEditor", workPage);
+  const stable = fillBody.indexOf("awaitStableEntryEditor", editor);
+  const caseControl = fillBody.indexOf("prepareCaseCombobox", stable);
+  assert.ok(date >= 0 && workPage > date && editor > workPage && stable > editor && caseControl > stable);
   assert.match(fillBody, /installFillBlockingLayer\(\);/);
-  assert.match(fillBody, /setFillBlockingMessage\("正在填入，请勿操作"\);/);
+  assert.match(fillBody, /finally[\s\S]*removeFillBlockingLayer\(\);/);
   assert.match(fillBody, /selectExactCase/);
   assert.match(fillBody, /fillDuration/);
   assert.match(fillBody, /fillNarrative/);
