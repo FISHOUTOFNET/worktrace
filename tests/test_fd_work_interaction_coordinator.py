@@ -576,18 +576,20 @@ def test_picker_owns_editor_preparation_while_fill_delegates_dom_transaction():
     assert fill_controller.hide_calls == [(4, 1)]
 
 
-def test_fill_is_successful_only_with_explicit_save_completed_stage():
+def test_missing_explicit_save_completed_stage_is_terminalized_as_unknown():
     statuses = []
-    coordinator, _controller, adapter = _coordinator(nonces=["fill-nonce"])
+    coordinator, controller, adapter = _coordinator(nonces=["fill-nonce"])
     coordinator.bind_status_callback(statuses.append)
     adapter.fill_result = {"ok": True, "status": "saved"}
 
     result = coordinator.open_entry(_draft())
 
-    assert result == {"ok": False, "error": "save_completion_failed"}
+    assert result == {"ok": False, "error": "save_outcome_unknown"}
+    assert controller.hide_calls == []
+    assert controller.visible is True
     assert statuses[-1]["operation_status"] == "failed"
     assert statuses[-1]["operation_result_owner"] == "automation_fill"
-    assert statuses[-1]["error_code"] == "save_completion_failed"
+    assert statuses[-1]["error_code"] == "save_outcome_unknown"
     assert all(status.get("operation_status") != "save_completed" for status in statuses)
 
 
