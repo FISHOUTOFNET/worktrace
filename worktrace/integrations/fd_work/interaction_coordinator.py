@@ -337,10 +337,28 @@ class FDWorkInteractionCoordinator:
             self._operation_navigation_generation = navigation_generation
             contract = self._operation_contract_locked(self._fill_timeout_seconds)
         try:
-            stable = dict(self._page_adapter.await_stable_work_shell(window, contract))
+            page_ready = dict(
+                self._page_adapter.await_stable_work_page(window, contract)
+            )
+            if page_ready.get("ok") is not True:
+                return self._finish_fill_failure(
+                    str(page_ready.get("error") or "work_page_not_ready"),
+                    operation_nonce,
+                    operation_generation,
+                )
+            editor = dict(self._page_adapter.ensure_entry_editor(window, contract))
+            if editor.get("ok") is not True:
+                return self._finish_fill_failure(
+                    str(editor.get("error") or "entry_editor_not_rendered"),
+                    operation_nonce,
+                    operation_generation,
+                )
+            stable = dict(
+                self._page_adapter.await_stable_entry_editor(window, contract)
+            )
             if stable.get("ok") is not True:
                 return self._finish_fill_failure(
-                    str(stable.get("error") or "case_input_not_interactive"),
+                    str(stable.get("error") or "entry_editor_not_rendered"),
                     operation_nonce,
                     operation_generation,
                 )
@@ -354,6 +372,12 @@ class FDWorkInteractionCoordinator:
         if filled.get("ok") is not True:
             return self._finish_fill_failure(
                 str(filled.get("error") or "dom_contract_changed"),
+                operation_nonce,
+                operation_generation,
+            )
+        if filled.get("stage") != "save_completed":
+            return self._finish_fill_failure(
+                "save_completion_failed",
                 operation_nonce,
                 operation_generation,
             )
@@ -380,9 +404,12 @@ class FDWorkInteractionCoordinator:
             ):
                 return {"ok": False, "error": "lookup_superseded"}
             self._clear_operation_locked()
-            public_status = self._status_locked()
+            public_status = self._status_locked(
+                operation_status="save_completed",
+                operation_result_owner="automation_fill",
+            )
         self._emit_status(public_status)
-        return {"ok": True, "operation_status": "saved"}
+        return {"ok": True, "operation_status": "save_completed"}
 
     def disable(self) -> None:
         with self._lock:
@@ -573,10 +600,28 @@ class FDWorkInteractionCoordinator:
             self._operation_navigation_generation = navigation_generation
             contract = self._operation_contract_locked(self._picker_timeout_seconds)
         try:
-            stable = dict(self._page_adapter.await_stable_work_shell(window, contract))
+            page_ready = dict(
+                self._page_adapter.await_stable_work_page(window, contract)
+            )
+            if page_ready.get("ok") is not True:
+                self._cancel_current_picker(
+                    str(page_ready.get("error") or "work_page_not_ready"),
+                    restore_main=True,
+                )
+                return page_ready
+            editor = dict(self._page_adapter.ensure_entry_editor(window, contract))
+            if editor.get("ok") is not True:
+                self._cancel_current_picker(
+                    str(editor.get("error") or "entry_editor_not_rendered"),
+                    restore_main=True,
+                )
+                return editor
+            stable = dict(
+                self._page_adapter.await_stable_entry_editor(window, contract)
+            )
             if stable.get("ok") is not True:
                 self._cancel_current_picker(
-                    str(stable.get("error") or "case_input_not_interactive"),
+                    str(stable.get("error") or "entry_editor_not_rendered"),
                     restore_main=True,
                 )
                 return stable
@@ -610,6 +655,8 @@ class FDWorkInteractionCoordinator:
         resume_entry: tuple[FDWorkEntryDraft, str, int] | None = None
         complete_auth: tuple[int, int, str] | None = None
         picker_result = None
+        terminal_operation_status = None
+        terminal_error = None
         with self._lock:
             previous_generation = self._navigation_generation_locked()
             self._controller_status = dict(status)
@@ -657,8 +704,22 @@ class FDWorkInteractionCoordinator:
                 previous_generation != current_generation
                 and self._interaction_owner == "automation_fill"
             ):
-                self._clear_operation_locked()
-            public_status = self._status_locked()
+                closing_window = (
+                    status.get("session_state") == "idle"
+                    and status.get("page_phase") == "none"
+                    and status.get("ready") is False
+                )
+                if not closing_window:
+                    self._clear_operation_locked()
+                    terminal_operation_status = "operation_canceled"
+                    terminal_error = "lookup_superseded"
+            public_status = self._status_locked(
+                error_code=terminal_error,
+                operation_status=terminal_operation_status,
+                operation_result_owner=(
+                    "automation_fill" if terminal_operation_status else None
+                ),
+            )
         if picker_result:
             self._emit_picker_result(picker_result)
         if complete_auth is not None:
@@ -692,9 +753,20 @@ class FDWorkInteractionCoordinator:
     def _on_helper_closed(self, navigation_generation: int) -> None:
         del navigation_generation
         with self._lock:
-            picker_result = self._picker_cancellation_locked("picker_canceled")
+            had_operation = self._interaction_owner != "none"
+            terminal_owner = self._interaction_owner
+            if (
+                terminal_owner == "user_auth"
+                and self._pending_entry_draft is not None
+            ):
+                terminal_owner = "automation_fill"
+            picker_result = self._picker_cancellation_locked("window_closed")
             self._clear_operation_locked()
-            public_status = self._status_locked()
+            public_status = self._status_locked(
+                error_code="window_closed" if had_operation else None,
+                operation_status="operation_canceled" if had_operation else None,
+                operation_result_owner=terminal_owner if had_operation else None,
+            )
         if picker_result:
             self._emit_picker_result(picker_result)
         self._emit_status(public_status)
@@ -744,7 +816,16 @@ class FDWorkInteractionCoordinator:
             ):
                 return {"ok": False, "error": error}
             self._clear_operation_locked()
-            public_status = self._status_locked(error_code=error)
+            operation_status = (
+                "operation_canceled"
+                if error in {"window_closed", "lookup_superseded", "navigation_changed"}
+                else "failed"
+            )
+            public_status = self._status_locked(
+                error_code=error,
+                operation_status=operation_status,
+                operation_result_owner="automation_fill",
+            )
         self._emit_status(public_status)
         return {"ok": False, "error": error}
 
@@ -832,12 +913,24 @@ class FDWorkInteractionCoordinator:
         value = self._controller_status.get("navigation_generation")
         return int(value) if type(value) is int else 0
 
-    def _status_locked(self, *, error_code: str | None = None) -> dict[str, Any]:
+    def _status_locked(
+        self,
+        *,
+        error_code: str | None = None,
+        operation_status: str | None = None,
+        operation_result_owner: str | None = None,
+    ) -> dict[str, Any]:
         status = dict(self._controller_status)
         status["interaction_owner"] = self._interaction_owner
         status["operation"] = self._interaction_owner
         status["operation_generation"] = self._operation_generation
         status["operation_nonce"] = self._operation_nonce
+        if operation_status:
+            status["operation_status"] = operation_status
+            if operation_result_owner in _OWNER_VALUES - {"none"}:
+                status["operation_result_owner"] = operation_result_owner
+        elif self._interaction_owner != "none":
+            status["operation_status"] = "pending"
         if error_code:
             status["error_code"] = error_code
         return status

@@ -82,6 +82,7 @@ function harness({ selectedLabel = "", inputValue = "", bridgeResponse = { ok: t
   };
   const form = {
     children: [],
+    contains(node) { return node === input; },
     appendChild(node) { this.children.push(node); return node; },
     querySelectorAll() { return []; },
   };
@@ -291,7 +292,7 @@ test("confirm submits proof asynchronously without a same-window read and stays 
   assert.equal(h.input.disabled, true);
 });
 
-test("same-label option recommit creates a new revision proof", async () => {
+test("committed picker blocks same-label recommit and keeps one revision proof", async () => {
   const h = harness({ selectedLabel: "CASE A", inputValue: "CASE A" });
   await h.adapter.enterCasePicker(h.contract);
 
@@ -300,7 +301,7 @@ test("same-label option recommit creates a new revision proof", async () => {
   h.toolbar().children[1].click();
   await Promise.resolve();
 
-  assert.deepEqual(h.bridgeCalls, [["confirm", "picker-nonce", "CASE A", 2]]);
+  assert.deepEqual(h.bridgeCalls, [["confirm", "picker-nonce", "CASE A", 1]]);
 });
 
 test("explicit bridge rejection restores picker interaction", async () => {

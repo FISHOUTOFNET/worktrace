@@ -100,14 +100,14 @@ def test_page_phase_probe_has_no_interactive_handshake_or_dom_mutation():
     FDWorkPageAdapter().probe_page_phase(Window(), values.append)
     assert values == [{"phase": "work_shell"}]
     assert "work_shell" in scripts[0]
-    assert "owner.querySelector('#basic_caseId')" in scripts[0]
-    assert '#basic_caseId[role="combobox"]' not in scripts[0]
-    assert '.ant-select[name="workhours/matter/selector"]' in scripts[0]
-    assert "form.contains(matter)" in scripts[0]
-    assert "owner.querySelectorAll(\"iframe\")" in scripts[0]
-    assert "frame.contentDocument" in scripts[0]
-    for safe_field in ("form_exists", "wrapper_exists", "role_matches"):
+    assert 'pathname' in scripts[0]
+    assert '"/works/workhourlist"' in scripts[0]
+    assert "frame.contentWindow" in scripts[0]
+    assert "candidate.document.body" in scripts[0]
+    for safe_field in ("body_exists", "work_page_candidate_count", "editor_exists"):
         assert safe_field in scripts[0]
+    assert "form#basic" not in scripts[0]
+    assert "#basic_caseId" not in scripts[0]
     assert "work_interactive" not in scripts[0]
     for forbidden in (".focus(", ".click(", "KeyboardEvent", ".blur("):
         assert forbidden not in scripts[0]
@@ -155,7 +155,9 @@ def test_picker_actions_use_small_v5_scripts_and_validate_selected_label():
         ("read_selected_case", {"ok": False, "error": "case_selection_required"}, "case_selection_required"),
         ("read_selected_case", {"ok": True, "label": ""}, "dom_contract_changed"),
         ("enter_case_picker", {"ok": False, "error": "fd_work_busy"}, "fd_work_busy"),
-        ("await_stable_work_shell", {"ok": False, "error": "lookup_superseded"}, "lookup_superseded"),
+        ("await_stable_work_page", {"ok": False, "error": "lookup_superseded"}, "lookup_superseded"),
+        ("ensure_entry_editor", {"ok": False, "error": "entry_create_action_missing"}, "entry_create_action_missing"),
+        ("await_stable_entry_editor", {"ok": False, "error": "entry_editor_not_rendered"}, "entry_editor_not_rendered"),
     ],
 )
 def test_picker_and_stable_actions_fail_closed(method, remote_result, expected_error):
@@ -265,15 +267,19 @@ def test_adapter_install_and_actions_resolve_bounded_same_origin_work_shell_fram
     assert "frame.contentWindow" in install_script
     assert "target.eval" in install_script
     assert "windows.length < 16" in install_script
-    assert "form#basic" in install_script
-    assert "#basic_caseId" in install_script
+    install_resolver = install_script.split("var target=", 1)[0]
+    assert '"/works/workhourlist"' in install_resolver
+    assert "form#basic" not in install_resolver
+    assert "#basic_caseId" not in install_resolver
 
     adapter.enter_case_picker(window, _operation())
     action_script = window.calls[-1][0]
     assert "target&&target.WorkTraceFDWorkAdapter" in action_script
     assert "windows.length < 16" in action_script
-    assert "form#basic" in action_script
-    assert "#basic_caseId" in action_script
+    action_resolver = action_script.split("var target=", 1)[0]
+    assert '"/works/workhourlist"' in action_resolver
+    assert "form#basic" not in action_resolver
+    assert "#basic_caseId" not in action_resolver
     assert "target.postMessage" in action_script
     assert "worktrace-fdwork-action-v5" in action_script
     assert "action_nonce" in action_script
@@ -287,11 +293,21 @@ def test_adapter_install_and_actions_resolve_bounded_same_origin_work_shell_fram
     ):
         assert forbidden not in action_script
 
-    adapter.await_stable_work_shell(window, _operation())
+    adapter.await_stable_work_page(window, _operation())
     asynchronous_script = window.calls[-1][0]
     assert "target.postMessage" in asynchronous_script
-    assert '"action":"awaitStableWorkShell"' in asynchronous_script
+    assert '"action":"awaitStableWorkPage"' in asynchronous_script
     assert "return new Promise(function(resolve)" not in asynchronous_script
+
+
+def test_entry_editor_actions_are_one_shared_adapter_contract():
+    adapter = FDWorkPageAdapter()
+    window = _Window(adapter, {"ok": True, "status": "entry_editor_ready"})
+
+    assert adapter.ensure_entry_editor(window, _operation())["ok"] is True
+    assert '"action":"ensureEntryEditor"' in window.calls[-1][0]
+    assert adapter.await_stable_entry_editor(window, _operation())["ok"] is True
+    assert '"action":"awaitStableEntryEditor"' in window.calls[-1][0]
 
 
 def test_post_message_action_waits_for_bridge_result_without_window_reentry():

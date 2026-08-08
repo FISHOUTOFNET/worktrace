@@ -1594,9 +1594,14 @@
         }
         showFDWorkStatus("正在填入 FD Work…", false);
         return App.bridge.openFDWorkEntry(reportDate, selectionKey, revision).then(function (result) {
-            if (result && result.ok !== false) {
-                if (result.operation_status === "saved") {
+            if (result && result.ok === true) {
+                if (result.operation_status === "save_completed") {
                     showFDWorkStatus("已保存到 FD Work", false);
+                } else if (result.operation_status === "session_starting") {
+                    showFDWorkStatus("正在填入 FD Work…", false);
+                } else {
+                    showFDWorkStatus("FD Work 操作结果未确认，请重试", true);
+                    return false;
                 }
                 return true;
             }

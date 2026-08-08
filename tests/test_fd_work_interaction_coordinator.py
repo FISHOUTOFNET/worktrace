@@ -122,13 +122,15 @@ class _Adapter:
         self.enter_picker_calls = []
         self.read_calls = []
         self.leave_calls = []
+        self.work_page_calls = []
+        self.ensure_editor_calls = []
         self.stable_calls = []
         self.fill_calls = []
         self.read_result = {"ok": True, "label": "CASE A"}
         self.fill_started = threading.Event()
         self.fill_release = threading.Event()
         self.block_fill = False
-        self.fill_result = {"ok": True, "status": "saved"}
+        self.fill_result = {"ok": True, "status": "saved", "stage": "save_completed"}
 
     def enter_case_picker(self, window, contract):
         self.enter_picker_calls.append((window, dict(contract)))
@@ -141,6 +143,18 @@ class _Adapter:
     def leave_case_picker(self, window, contract):
         self.leave_calls.append((window, dict(contract)))
         return {"ok": True}
+
+    def await_stable_work_page(self, window, contract):
+        self.work_page_calls.append((window, dict(contract)))
+        return {"ok": True, "status": "work_page_ready"}
+
+    def ensure_entry_editor(self, window, contract):
+        self.ensure_editor_calls.append((window, dict(contract)))
+        return {"ok": True, "status": "entry_editor_ready"}
+
+    def await_stable_entry_editor(self, window, contract):
+        self.stable_calls.append((window, dict(contract)))
+        return {"ok": True, "status": "entry_editor_ready"}
 
     def await_stable_work_shell(self, window, contract):
         self.stable_calls.append((window, dict(contract)))
@@ -332,7 +346,7 @@ def test_cancel_and_helper_close_complete_pending_picker_without_deadlock():
     worker.join(timeout=1)
     assert not worker.is_alive()
     assert results[-1]["request_id"] == "drawer-2"
-    assert results[-1]["error"] == "picker_canceled"
+    assert results[-1]["error"] == "window_closed"
 
 
 def test_navigation_disable_and_shutdown_supersede_stale_callbacks():
@@ -460,7 +474,7 @@ def test_visibility_sequence_fill_saves_hides_and_restores_main():
 
     result = coordinator.open_entry(_draft())
 
-    assert result == {"ok": True, "operation_status": "saved"}
+    assert result == {"ok": True, "operation_status": "save_completed"}
     assert controller.window_actions == [
         "show", "restore", "focus", "hide", "main"
     ]
@@ -524,12 +538,132 @@ def test_five_fill_save_transactions_reuse_ready_helper_without_busy_state():
 
     results = [coordinator.open_entry(_draft()) for _index in range(5)]
 
-    assert results == [{"ok": True, "operation_status": "saved"}] * 5
+    assert results == [{"ok": True, "operation_status": "save_completed"}] * 5
     assert len(adapter.fill_calls) == 5
     assert controller.prepare_calls == []
     assert controller.hide_calls == [(4, generation) for generation in (1, 3, 5, 7, 9)]
     assert coordinator.get_status()["interaction_owner"] == "none"
     assert coordinator.get_status()["ready"] is True
+
+
+def test_picker_and_fill_share_work_page_to_entry_editor_transition():
+    picker, picker_controller, picker_adapter = _coordinator(
+        nonces=["picker-nonce"]
+    )
+
+    assert picker.open_case_picker("drawer-1")["operation_status"] == "picker_ready"
+    assert [
+        len(picker_adapter.work_page_calls),
+        len(picker_adapter.ensure_editor_calls),
+        len(picker_adapter.stable_calls),
+        len(picker_adapter.enter_picker_calls),
+    ] == [1, 1, 1, 1]
+
+    fill, fill_controller, fill_adapter = _coordinator(nonces=["fill-nonce"])
+    assert fill.open_entry(_draft()) == {
+        "ok": True,
+        "operation_status": "save_completed",
+    }
+    assert [
+        len(fill_adapter.work_page_calls),
+        len(fill_adapter.ensure_editor_calls),
+        len(fill_adapter.stable_calls),
+        len(fill_adapter.fill_calls),
+    ] == [1, 1, 1, 1]
+    assert picker_controller.hide_calls == []
+    assert fill_controller.hide_calls == [(4, 1)]
+
+
+def test_fill_is_successful_only_with_explicit_save_completed_stage():
+    statuses = []
+    coordinator, _controller, adapter = _coordinator(nonces=["fill-nonce"])
+    coordinator.bind_status_callback(statuses.append)
+    adapter.fill_result = {"ok": True, "status": "saved"}
+
+    result = coordinator.open_entry(_draft())
+
+    assert result == {"ok": False, "error": "save_completion_failed"}
+    assert statuses[-1]["operation_status"] == "failed"
+    assert statuses[-1]["operation_result_owner"] == "automation_fill"
+    assert statuses[-1]["error_code"] == "save_completion_failed"
+    assert all(status.get("operation_status") != "save_completed" for status in statuses)
+
+
+def test_helper_close_terminalizes_blocked_fill_as_window_closed_and_next_fill_recovers():
+    statuses = []
+    coordinator, controller, adapter = _coordinator(
+        nonces=["fill-1", "fill-2"]
+    )
+    coordinator.bind_status_callback(statuses.append)
+    adapter.block_fill = True
+    first_result = {}
+
+    worker = threading.Thread(
+        target=lambda: first_result.setdefault("value", coordinator.open_entry(_draft()))
+    )
+    worker.start()
+    assert adapter.fill_started.wait(timeout=1)
+
+    controller.publish(
+        session_state="idle", page_phase="none", ready=False,
+        navigation_generation=5,
+    )
+    assert coordinator.get_status()["operation"] == "automation_fill"
+    controller.close_helper()
+    adapter.fill_result = {"ok": False, "error": "window_closed"}
+    adapter.fill_release.set()
+    worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert first_result["value"] == {"ok": False, "error": "window_closed"}
+    assert coordinator.get_status()["operation"] == "none"
+    assert statuses[-1]["operation_status"] == "operation_canceled"
+    assert statuses[-1]["operation_result_owner"] == "automation_fill"
+    assert statuses[-1]["error_code"] == "window_closed"
+
+    adapter.block_fill = False
+    adapter.fill_started.clear()
+    adapter.fill_result = {"ok": True, "status": "saved", "stage": "save_completed"}
+    controller.publish(
+        session_state="ready", page_phase="work_shell", ready=True,
+        navigation_generation=6,
+    )
+    assert coordinator.open_entry(_draft()) == {
+        "ok": True,
+        "operation_status": "save_completed",
+    }
+
+
+def test_session_starting_close_emits_terminal_cancellation_and_clears_pending_draft():
+    statuses = []
+    controller = _Controller()
+    controller.status.update({
+        "session_state": "idle",
+        "page_phase": "none",
+        "ready": False,
+    })
+    coordinator, _controller, _adapter = _coordinator(
+        controller=controller,
+        nonces=["auth-nonce", "next-fill"],
+    )
+    coordinator.bind_status_callback(statuses.append)
+
+    assert coordinator.open_entry(_draft()) == {
+        "ok": True,
+        "operation_status": "session_starting",
+    }
+    assert coordinator.get_status()["operation"] == "user_auth"
+
+    controller.publish(
+        session_state="idle", page_phase="none", ready=False,
+        navigation_generation=5,
+    )
+    controller.close_helper()
+
+    assert coordinator.get_status()["operation"] == "none"
+    assert statuses[-1]["operation_status"] == "operation_canceled"
+    assert statuses[-1]["operation_result_owner"] == "automation_fill"
+    assert statuses[-1]["error_code"] == "window_closed"
 
 
 def test_closed_helper_is_prepared_and_pending_fill_resumes_when_ready():

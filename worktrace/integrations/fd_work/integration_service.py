@@ -710,7 +710,7 @@ class FDWorkIntegrationService:
                 "navigation_generation": self._navigation_generation_locked(),
             }
         status = self._controller_status
-        return {
+        public_status = {
             "supported": self._supported,
             "enabled": True,
             "session_state": str(status.get("session_state") or "idle"),
@@ -726,6 +726,18 @@ class FDWorkIntegrationService:
             ),
             "navigation_generation": self._navigation_generation_locked(),
         }
+        operation_status = status.get("operation_status")
+        if operation_status in {
+            "pending", "save_completed", "operation_canceled", "failed"
+        }:
+            public_status["operation_status"] = str(operation_status)
+        result_owner = status.get("operation_result_owner")
+        if result_owner in {"user_auth", "user_picker", "automation_fill"}:
+            public_status["operation_result_owner"] = str(result_owner)
+        operation_generation = status.get("operation_generation")
+        if type(operation_generation) is int and operation_generation >= 0:
+            public_status["operation_generation"] = operation_generation
+        return public_status
 
     def _enabled_locked(self) -> bool:
         return bool(self._supported and not self._shutdown and self._enabled_reader())

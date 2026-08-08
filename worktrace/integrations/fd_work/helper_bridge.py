@@ -33,6 +33,9 @@ class _ActionResultSink(Protocol):
 
 _ADAPTER_ACTIONS = frozenset(
     {
+        "awaitStableWorkPage",
+        "ensureEntryEditor",
+        "awaitStableEntryEditor",
         "awaitStableWorkShell",
         "enterCasePicker",
         "leaveCasePicker",
@@ -50,6 +53,19 @@ _ADAPTER_RESULT_KEYS = frozenset(
         "viewport_available",
         "input_exists",
         "input_interactive",
+        "editor_exists",
+        "stage",
+        "internal_error_kind",
+        "create_action_count",
+        "create_click_count",
+        "commit_method",
+        "option_connected_before_action",
+        "option_connected_after_action",
+        "popup_replaced",
+        "live_option_reacquired",
+        "option_count",
+        "date_step_count",
+        "commit_attempt_count",
     }
 )
 
@@ -135,10 +151,39 @@ class FDWorkHelperBridge:
             if type(visibility) is not str or len(visibility) > 16:
                 return None
             normalized["document_visibility"] = visibility
-        for key in ("viewport_available", "input_exists", "input_interactive"):
+        for key in (
+            "viewport_available", "input_exists", "input_interactive",
+            "option_connected_before_action", "option_connected_after_action",
+            "popup_replaced", "live_option_reacquired",
+        ):
             value = result.get(key)
             if value is not None:
                 if type(value) is not bool:
+                    return None
+                normalized[key] = value
+        editor_exists = result.get("editor_exists")
+        if editor_exists is not None:
+            if type(editor_exists) is not bool:
+                return None
+            normalized["editor_exists"] = editor_exists
+        for key in ("stage", "internal_error_kind"):
+            value = result.get(key)
+            if value is not None:
+                if type(value) is not str or len(value) > 64:
+                    return None
+                normalized[key] = value
+        commit_method = result.get("commit_method")
+        if commit_method is not None:
+            if commit_method not in {"none", "semantic_click", "semantic_click_event"}:
+                return None
+            normalized["commit_method"] = commit_method
+        for key in (
+            "create_action_count", "create_click_count", "option_count",
+            "date_step_count", "commit_attempt_count",
+        ):
+            value = result.get(key)
+            if value is not None:
+                if type(value) is not int or value < 0 or value > 10_000:
                     return None
                 normalized[key] = value
         return normalized

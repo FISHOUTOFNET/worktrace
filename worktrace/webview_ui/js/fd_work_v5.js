@@ -9,6 +9,7 @@
     var sessionStates = ["disabled", "deferred_by_privacy", "idle", "probing", "login_required", "ready", "error", "shutdown"];
     var operations = ["none", "user_auth", "user_picker", "automation_fill"];
     var pagePhases = ["none", "login_credentials", "login_confirmation", "work_shell", "unauthorized", "error", "unknown"];
+    var operationStatuses = ["pending", "save_completed", "operation_canceled", "failed"];
 
     function validStatus(status) {
         return !!status
@@ -21,6 +22,13 @@
             && typeof status.login_required === "boolean"
             && (status.error_code === null || typeof status.error_code === "string")
             && (status.page_phase === undefined || pagePhases.indexOf(status.page_phase) >= 0)
+            && (status.operation_status === undefined
+                || operationStatuses.indexOf(status.operation_status) >= 0)
+            && (status.operation_generation === undefined
+                || (Number.isInteger(status.operation_generation)
+                    && status.operation_generation >= 0))
+            && (status.operation_result_owner === undefined
+                || operations.indexOf(status.operation_result_owner) > 0)
             && (status.navigation_generation === undefined
                 || (Number.isInteger(status.navigation_generation)
                     && status.navigation_generation >= 0));
@@ -53,18 +61,36 @@
             login_required: status.login_required === true,
             error_code: status.error_code || null,
             page_phase: status.page_phase || "none",
-            navigation_generation: incomingGeneration
+            navigation_generation: incomingGeneration,
+            operation_status: status.operation_status || null,
+            operation_generation: Number.isInteger(status.operation_generation)
+                ? status.operation_generation : null,
+            operation_result_owner: status.operation_result_owner || null
         });
         if (App.lastSettingsStatus) App.lastSettingsStatus.fd_work = App.fdWorkStatus;
         if (typeof App.renderFDWorkToggle === "function") App.renderFDWorkToggle(App.lastSettingsStatus);
         if (typeof App.updateFDWorkEntryButton === "function") App.updateFDWorkEntryButton();
         if (App.projectIdentity) App.projectIdentity.syncStatus();
-        if (previousOperation === "automation_fill" && status.operation === "none") {
+        var fillTerminal = status.operation === "none" && (
+            status.operation_result_owner === "automation_fill"
+            || (previousOperation === "automation_fill"
+                && status.operation_result_owner === undefined)
+        );
+        if (fillTerminal) {
+            App.fdWorkOpenPromise = null;
             if (typeof App.showFDWorkStatus === "function") {
-                App.showFDWorkStatus(
-                    status.error_code ? "保存到 FD Work 失败，请重试" : "已保存到 FD Work",
-                    !!status.error_code
-                );
+                if (status.operation_status === "save_completed") {
+                    App.showFDWorkStatus("已保存到 FD Work", false);
+                } else if (status.operation_status === "operation_canceled") {
+                    App.showFDWorkStatus(
+                        status.error_code === "window_closed"
+                            ? "FD Work 窗口已关闭，操作已取消"
+                            : "FD Work 操作已取消",
+                        false
+                    );
+                } else {
+                    App.showFDWorkStatus("保存到 FD Work 失败，请重试", true);
+                }
             }
         }
         return true;

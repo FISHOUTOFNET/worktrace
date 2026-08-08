@@ -55,6 +55,7 @@
         durationWrites: 0,
         narrativeWrites: 0,
         saveClicks: 0,
+        createClicks: 0,
         savedEntries: [],
         submitCalls: 0,
         apiCalls: 0
@@ -282,6 +283,30 @@
         });
       }
 
+      function renderExistingHours(mode) {
+        mode = mode || "normal";
+        removePopup();
+        var host = document.getElementById("form-host");
+        host.innerHTML = '<section id="existing-hours"><h1>我的工时</h1>'
+          + '<div class="existing-hour-record">已有工时 1.0</div>'
+          + '<div id="create-actions"></div></section>';
+        var actions = document.getElementById("create-actions");
+        var count = mode === "missing" ? 0 : (mode === "duplicate" ? 2 : 1);
+        for (var index = 0; index < count; index += 1) {
+          var button = document.createElement("button");
+          button.type = "button";
+          button.textContent = "创建工时";
+          if (mode === "disabled") button.disabled = true;
+          button.addEventListener("click", function () {
+            state.createClicks += 1;
+            if (mode === "render_failure") return;
+            renderForm();
+            if (mode === "rerender") requestAnimationFrame(renderForm);
+          });
+          actions.appendChild(button);
+        }
+      }
+
       function changeDate(amount) {
         state.dateClicks += 1;
         if (!config.dateChangeAccepted) return;
@@ -297,7 +322,7 @@
         changeDate(1);
       });
       document.getElementById("today-button").addEventListener("click", function () {});
-      renderForm();
+      renderExistingHours("normal");
 
       var nativeAdd = EventTarget.prototype.addEventListener;
       var nativeRemove = EventTarget.prototype.removeEventListener;
@@ -321,8 +346,9 @@
       };
 
       function TrackingMutationObserver(callback) {
+        var trackedObserver = this;
         this._observer = new NativeMutationObserver(function (records, observer) {
-          observerCallbacks += 1;
+          if (trackedObserver._active) observerCallbacks += 1;
           callback(records, observer);
         });
         this._active = false;
@@ -356,6 +382,7 @@
         state: state,
         config: config,
         renderForm: renderForm,
+        renderExistingHours: renderExistingHours,
         renderPopup: renderPopup,
         activeListeners: function () { return activeListeners; },
         activeObservers: function () { return activeObservers; },
@@ -450,13 +477,27 @@
         check("adapter_loaded", adapter && adapter.version === 5);
         check("date_outside_form", !document.getElementById("page-work-date").closest("form#basic"));
         check("case_popup_initially_absent", !document.getElementById("basic_caseId_list"));
+        check("existing_hours_initially_has_no_editor",
+          !!document.querySelector(".existing-hour-record")
+          && !document.querySelector("form#basic")
+          && !document.getElementById("basic_caseId"));
 
         var pickerContract = contract(1);
+        var workReady = await adapter.awaitStableWorkPage(pickerContract);
+        var pickerCreatesBefore = window.__fdWorkFixture.state.createClicks;
+        var pickerEditor = await adapter.ensureEntryEditor(pickerContract);
+        var pickerEditorStable = await adapter.awaitStableEntryEditor(pickerContract);
+        check("existing_hours_picker_clicks_create_once",
+          workReady.ok === true && pickerEditor.ok === true && pickerEditorStable.ok === true
+          && window.__fdWorkFixture.state.createClicks === pickerCreatesBefore + 1);
+        var pickerBaselineListeners = window.__fdWorkFixture.activeListeners();
+        var pickerBaselineObservers = window.__fdWorkFixture.activeObservers();
         var entered = await adapter.enterCasePicker(pickerContract);
         var toolbar = document.getElementById("worktrace-fdwork-picker-toolbar");
         var confirm = toolbar && toolbar.querySelector("button");
         check("picker_dynamic_entry", entered.ok === true && !!confirm && confirm.disabled === true);
-        await Promise.resolve();
+        await nextTurn();
+        await nextTurn();
         var callbacksBeforeUnrelatedChurn = window.__fdWorkFixture.observerCallbacks();
         var unrelated = document.createElement("div");
         document.body.appendChild(unrelated);
@@ -473,9 +514,11 @@
           ".ant-select-dropdown .ant-select-item-option[title='TEST MATTER A']"
         );
         option.click();
-        await Promise.resolve();
-        await Promise.resolve();
+        await nextTurn();
+        await nextTurn();
         check("native_picker_commit_confirmable", confirm.disabled === false);
+        check("picker_commit_installs_interaction_blocker",
+          !!document.getElementById("worktrace-fdwork-picker-blocker"));
         confirm.click();
         await Promise.resolve();
         check("native_picker_revision_proof",
@@ -483,8 +526,9 @@
         adapter.leaveCasePicker();
         check("picker_cleanup",
           adapter._test.activeMode() === "none"
-          && window.__fdWorkFixture.activeListeners() === 0
-          && window.__fdWorkFixture.activeObservers() === 0);
+          && window.__fdWorkFixture.activeListeners() === pickerBaselineListeners
+          && window.__fdWorkFixture.activeObservers() === pickerBaselineObservers
+          && !document.getElementById("worktrace-fdwork-picker-blocker"));
 
         var pickerCyclesStable = true;
         for (var cycle = 0; cycle < 20; cycle += 1) {
@@ -509,6 +553,50 @@
         check("twenty_picker_cycles_no_growth", pickerCyclesStable);
         var pickerListenersAfterCycles = window.__fdWorkFixture.activeListeners();
         var pickerObserversAfterCycles = window.__fdWorkFixture.activeObservers();
+
+        var editorOpenCreates = window.__fdWorkFixture.state.createClicks;
+        var editorOpen = await adapter.ensureEntryEditor(contract(25));
+        check("editor_open_does_not_click_create",
+          editorOpen.ok === true
+          && window.__fdWorkFixture.state.createClicks === editorOpenCreates);
+
+        window.__fdWorkFixture.renderExistingHours("missing");
+        var createMissing = await adapter.ensureEntryEditor(contract(26, 120));
+        check("create_action_missing_fails_closed",
+          createMissing.ok === false && createMissing.error === "entry_create_action_missing");
+        window.__fdWorkFixture.renderExistingHours("duplicate");
+        var createDuplicate = await adapter.ensureEntryEditor(contract(27, 120));
+        check("create_action_duplicate_fails_closed",
+          createDuplicate.ok === false && createDuplicate.error === "entry_create_action_ambiguous");
+        window.__fdWorkFixture.renderExistingHours("disabled");
+        var createDisabled = await adapter.ensureEntryEditor(contract(28, 120));
+        check("create_action_disabled_fails_closed",
+          createDisabled.ok === false && createDisabled.error === "entry_create_action_disabled");
+        window.__fdWorkFixture.renderExistingHours("render_failure");
+        var createRenderFailure = await adapter.ensureEntryEditor(contract(29, 120));
+        check("create_action_render_failure_fails_closed",
+          createRenderFailure.ok === false && createRenderFailure.error === "entry_editor_not_rendered");
+        window.__fdWorkFixture.renderExistingHours("rerender");
+        var createReplacement = await adapter.ensureEntryEditor(contract(30, 500));
+        check("create_action_react_replacement_reconciles",
+          createReplacement.ok === true && !!document.querySelector("form#basic"));
+
+        window.__fdWorkFixture.renderExistingHours("normal");
+        resetConfig();
+        window.__fdWorkFixture.config.caseOptions = ["TEST MATTER A"];
+        var fillCreatesBefore = window.__fdWorkFixture.state.createClicks;
+        var existingFillContract = contract(31, 1500);
+        var fillWorkReady = await adapter.awaitStableWorkPage(existingFillContract);
+        var fillEditor = await adapter.ensureEntryEditor(existingFillContract);
+        var fillEditorStable = await adapter.awaitStableEntryEditor(existingFillContract);
+        var existingHoursFill = await adapter.fillEntry({
+          case_label: "TEST MATTER A", case_query: "TEST MATTER A", work_date: "2026-01-03",
+          duration_hours: "0.5", narrative: "EXISTING HOURS FILL"
+        }, existingFillContract);
+        check("existing_hours_fill_clicks_create_once_and_saves",
+          fillWorkReady.ok === true && fillEditor.ok === true && fillEditorStable.ok === true
+          && existingHoursFill.ok === true && existingHoursFill.stage === "save_completed"
+          && window.__fdWorkFixture.state.createClicks === fillCreatesBefore + 1);
 
         resetConfig();
         var controlledLabel = "#26IP0111 长飞光纤IP问题分析";
@@ -535,7 +623,7 @@
         var controlledCommit = await adapter.fillEntry({
           case_label: controlledLabel, case_query: "26IP0111", work_date: "2026-01-03",
           duration_hours: "0.75", narrative: "CONTROLLED REPLACEMENT"
-        }, contract(29));
+        }, contract(32));
         var controlledSaved = window.__fdWorkFixture.state.savedEntries.slice(-1)[0];
         check("controlled_replacement_case_commit_verified",
           controlledCommit.ok === true && controlledCommit.stage === "save_completed"
@@ -560,7 +648,7 @@
         var noDateChange = await adapter.fillEntry({
           case_label: canonicalLabel, case_query: "26IP0165", work_date: "2026-01-03",
           duration_hours: "1.0", narrative: "TEST DESCRIPTION"
-        }, contract(30));
+        }, contract(33));
         check("current_date_is_noop", noDateChange.ok === true
           && window.__fdWorkFixture.state.dateClicks === initialDateClicks);
         check("canonical_case_query_written",
@@ -585,7 +673,7 @@
         var delayedFill = await adapter.fillEntry({
           case_label: delayedLabel, case_query: "26IP0111", work_date: "2026-01-03",
           duration_hours: "1.25", narrative: "DELAYED CONTROLLED FILL"
-        }, contract(301, 2000));
+        }, contract(34, 2000));
         var delayedSaved = window.__fdWorkFixture.state.savedEntries.slice(-1)[0];
         check("delayed_results_complete_actual_fill",
           delayedFill.ok === true && delayedFill.stage === "save_completed"
@@ -606,7 +694,7 @@
         var previous = await adapter.fillEntry({
           case_label: "TEST MATTER A", case_query: "TEST MATTER A", work_date: "2026-01-02",
           duration_hours: "1.5", narrative: "PREVIOUS DAY DESCRIPTION"
-        }, contract(31));
+        }, contract(35));
         check("previous_date_verified", previous.ok === true
           && document.getElementById("page-work-date").value === "2026-01-02");
         check("date_rerender_re_resolved", window.__fdWorkFixture.state.formRevision > revisionBeforePrevious
@@ -615,7 +703,7 @@
         var next = await adapter.fillEntry({
           case_label: "TEST MATTER A", case_query: "TEST MATTER A", work_date: "2026-01-03",
           duration_hours: "2.0", narrative: "NEXT DAY DESCRIPTION"
-        }, contract(32));
+        }, contract(36));
         check("next_date_verified", next.ok === true
           && document.getElementById("page-work-date").value === "2026-01-03");
         var nextSaved = window.__fdWorkFixture.state.savedEntries.slice(-1)[0];

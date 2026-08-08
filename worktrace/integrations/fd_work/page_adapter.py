@@ -59,6 +59,11 @@ _ACTION_ERRORS = frozenset(
         "duration_verification_failed",
         "narrative_verification_failed",
         "entry_verification_failed",
+        "work_page_not_ready",
+        "entry_create_action_missing",
+        "entry_create_action_ambiguous",
+        "entry_create_action_disabled",
+        "entry_editor_not_rendered",
         "save_action_missing",
         "save_action_ambiguous",
         "save_action_not_interactive",
@@ -82,6 +87,9 @@ _ACTION_ERRORS = frozenset(
 _FILL_DIAGNOSTIC_STAGES = frozenset(
     {
         "page_stable",
+        "work_page_ready",
+        "entry_editor_open",
+        "entry_editor_ready",
         "date_read",
         "date_change",
         "date_verified",
@@ -121,17 +129,17 @@ function workTraceWorkShellWindow() {
       });
     } catch (_error) {}
   }
+  var candidates = [];
   for (var index = 0; index < windows.length; index += 1) {
     try {
       var candidate = windows[index];
-      var form = candidate.document.querySelector("form#basic");
-      var matter = candidate.document.querySelector("#basic_caseId");
-      var wrapper = matter && typeof matter.closest === "function"
-        ? matter.closest('.ant-select[name="workhours/matter/selector"]') : null;
-      if (form && matter && wrapper && form.contains(matter)) return candidate;
+      var path = String(candidate.location.pathname || "")
+        .replace(/\/$/, "").toLowerCase() || "/";
+      var rootReady = !!(candidate.document.documentElement && candidate.document.body);
+      if (path === "/works/workhourlist" && rootReady) candidates.push(candidate);
     } catch (_error) {}
   }
-  return null;
+  return candidates.length === 1 ? candidates[0] : null;
 }
 """.strip()
 
@@ -272,57 +280,50 @@ class FDWorkPageAdapter:
     var rect = element.getBoundingClientRect ? element.getBoundingClientRect() : null;
     return !rect || (rect.width > 0 && rect.height > 0);
   }
-  function candidateDocuments() {
-    var documents = [document];
+  function candidateWindows() {
+    var windows = [window];
     var cursor = 0;
-    while (cursor < documents.length && documents.length < 16) {
-      var owner = documents[cursor++];
-      var frames = owner.querySelectorAll("iframe");
+    while (cursor < windows.length && windows.length < 16) {
+      var owner = windows[cursor++];
+      var frames = owner.document.querySelectorAll("iframe");
       Array.prototype.forEach.call(frames, function(frame) {
-        if (documents.length >= 16) return;
+        if (windows.length >= 16) return;
         try {
-          var child = frame.contentDocument;
-          if (child && documents.indexOf(child) < 0) documents.push(child);
+          var child = frame.contentWindow;
+          if (child && windows.indexOf(child) < 0) windows.push(child);
         } catch (_error) {}
       });
     }
-    return documents;
-  }
-  function locateWorkShell(owner) {
-    var form = owner.querySelector('form#basic');
-    var matter = owner.querySelector('#basic_caseId');
-    var wrapper = matter && typeof matter.closest === "function"
-      ? matter.closest('.ant-select[name="workhours/matter/selector"]') : null;
-    return {
-      form: form,
-      matter: matter,
-      wrapper: wrapper,
-      owns_matter: !!(form && matter && form.contains(matter))
-    };
+    return windows;
   }
   var path = String(window.location.pathname || "").replace(/\/$/, "").toLowerCase() || "/";
   var bodyReady = !!(document.body && document.body.firstElementChild);
-  var documents = candidateDocuments();
-  var shell = locateWorkShell(document);
-  documents.some(function(owner) {
-    var candidate = locateWorkShell(owner);
-    if (!candidate.owns_matter || !candidate.wrapper) return false;
-    shell = candidate;
-    return true;
+  var workCandidates = [];
+  candidateWindows().forEach(function(candidate) {
+    try {
+      var candidatePath = String(candidate.location.pathname || "")
+        .replace(/\/$/, "").toLowerCase() || "/";
+      if (candidatePath === "/works/workhourlist"
+          && candidate.document.documentElement && candidate.document.body) {
+        workCandidates.push(candidate);
+      }
+    } catch (_error) {}
   });
-  var form = shell.form;
-  var matter = shell.matter;
-  var wrapper = shell.wrapper;
-  var formOwnsMatter = shell.owns_matter;
-  var roleMatches = !!(matter && String(matter.getAttribute("role") || "").toLowerCase() === "combobox");
+  var editorExists = false;
+  if (workCandidates.length === 1) {
+    try {
+      var owner = workCandidates[0].document;
+      var form = owner.querySelector("form[id='basic']");
+      var matter = owner.querySelector("[id='basic_caseId']");
+      editorExists = !!(form && matter && form.contains(matter));
+    } catch (_error) {}
+  }
   var shellFacts = {
     body_exists: bodyReady,
-    input_exists: !!matter,
-    form_exists: !!form,
-    wrapper_exists: !!wrapper,
-    role_matches: roleMatches
+    work_page_candidate_count: workCandidates.length,
+    editor_exists: editorExists
   };
-  if (formOwnsMatter && wrapper) return Object.assign({phase:"work_shell"}, shellFacts);
+  if (workCandidates.length === 1) return Object.assign({phase:"work_shell"}, shellFacts);
   if (path === "/login") {
     var account = Array.prototype.find.call(
       document.querySelectorAll('input:not([type="password"]):not([type="hidden"]):not([type="checkbox"])'),
@@ -379,6 +380,42 @@ class FDWorkPageAdapter:
         return self._run_action(
             window,
             "awaitStableWorkShell",
+            self._picker_contract(contract),
+            respect_operation_deadline=True,
+        )
+
+    def await_stable_work_page(
+        self,
+        window: Any,
+        contract: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._run_action(
+            window,
+            "awaitStableWorkPage",
+            self._picker_contract(contract),
+            respect_operation_deadline=True,
+        )
+
+    def ensure_entry_editor(
+        self,
+        window: Any,
+        contract: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._run_action(
+            window,
+            "ensureEntryEditor",
+            self._picker_contract(contract),
+            respect_operation_deadline=True,
+        )
+
+    def await_stable_entry_editor(
+        self,
+        window: Any,
+        contract: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._run_action(
+            window,
+            "awaitStableEntryEditor",
             self._picker_contract(contract),
             respect_operation_deadline=True,
         )
@@ -657,6 +694,7 @@ class FDWorkPageAdapter:
                 "viewport_available",
                 "input_exists",
                 "input_interactive",
+                "editor_exists",
                 "option_connected_before_action",
                 "option_connected_after_action",
                 "popup_replaced",
@@ -673,7 +711,10 @@ class FDWorkPageAdapter:
             stage = value.get("stage")
             if isinstance(stage, str) and stage in _FILL_DIAGNOSTIC_STAGES:
                 safe["stage"] = stage
-            for key in ("option_count", "date_step_count", "commit_attempt_count"):
+            for key in (
+                "option_count", "date_step_count", "commit_attempt_count",
+                "create_action_count", "create_click_count",
+            ):
                 metric = value.get(key)
                 if type(metric) is int and 0 <= metric <= 10_000:
                     safe[key] = metric
@@ -798,6 +839,7 @@ class FDWorkPageAdapter:
                 "input_interactive",
                 "form_exists",
                 "wrapper_exists",
+                "editor_exists",
                 "option_connected_before_action",
                 "option_connected_after_action",
                 "popup_replaced",
@@ -808,7 +850,10 @@ class FDWorkPageAdapter:
             commit_method = value.get("commit_method")
             if commit_method in _CASE_COMMIT_METHODS:
                 diagnostic["commit_method"] = commit_method
-            for key in ("option_count", "date_step_count", "commit_attempt_count"):
+            for key in (
+                "option_count", "date_step_count", "commit_attempt_count",
+                "create_action_count", "create_click_count",
+            ):
                 metric = value.get(key)
                 if type(metric) is int and 0 <= metric <= 10_000:
                     diagnostic[key] = metric

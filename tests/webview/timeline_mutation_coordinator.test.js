@@ -663,7 +663,7 @@ test("FD Work bridge receives only current timeline identity and versions", asyn
   let captured = null;
   App.callBridge = (method, ...args) => {
     if (method === "open_fd_work_entry") captured = args;
-    return Promise.resolve({ ok: true, status: "opening" });
+    return Promise.resolve({ ok: true, operation_status: "session_starting" });
   };
 
   assert.equal(await App.openFDWorkEntryForSelection(), true);
@@ -691,6 +691,7 @@ test("dirty Timeline waits for accepted autosave and uses refreshed revision", a
     if (method === "open_fd_work_entry") {
       order.push("open");
       openArgs = args;
+      return Promise.resolve({ ok: true, operation_status: "session_starting" });
     }
     return Promise.resolve({ ok: true });
   };
@@ -750,8 +751,80 @@ test("concurrent FD Work clicks reuse one opening request", async () => {
   assert.equal(openCalls, 0);
   await Promise.resolve();
   assert.equal(openCalls, 1);
-  opening.resolve({ ok: true, status: "opening" });
+  opening.resolve({ ok: true, operation_status: "session_starting" });
   assert.equal(await first, true);
+});
+
+test("session_starting is accepted pending and helper close immediately ends Timeline busy state", async () => {
+  const { App, element } = harness();
+  configureFDWorkSession(App, element);
+  App.callBridge = (method) => Promise.resolve(method === "open_fd_work_entry"
+    ? { ok: true, operation_status: "session_starting" }
+    : { ok: true });
+
+  assert.equal(await App.openFDWorkEntryForSelection(), true);
+  assert.match(element("fd-work-status").textContent, /正在填入/);
+
+  App.receiveFDWorkStatus({
+    supported: true, enabled: true, session_state: "idle", operation: "none",
+    interaction_owner: "none", ready: false, login_required: false,
+    error_code: "window_closed", operation_status: "operation_canceled",
+    operation_result_owner: "automation_fill",
+    operation_generation: 2, navigation_generation: 5,
+  });
+
+  assert.equal(App.fdWorkOpenPromise, null);
+  assert.doesNotMatch(element("fd-work-status").textContent, /正在填入|已保存/);
+  assert.match(element("fd-work-status").textContent, /已取消|关闭/);
+  assert.equal(element("fd-work-entry-btn").disabled, false);
+});
+
+test("automation fill terminal status shows saved only for explicit save_completed", () => {
+  for (const [operationStatus, errorCode, saved] of [
+    ["save_completed", null, true],
+    ["operation_canceled", "window_closed", false],
+    ["failed", "callback_timeout", false],
+    ["operation_canceled", null, false],
+  ]) {
+    const { App, element } = harness();
+    configureFDWorkSession(App, element);
+    App.receiveFDWorkStatus({
+      supported: true, enabled: true, session_state: "ready",
+      operation: "automation_fill", interaction_owner: "automation_fill",
+      ready: true, login_required: false, error_code: null,
+      operation_status: "pending", operation_generation: 1,
+      navigation_generation: 4,
+    });
+    App.showFDWorkStatus("正在填入 FD Work…", false);
+
+    App.receiveFDWorkStatus({
+      supported: true, enabled: true, session_state: errorCode ? "idle" : "ready",
+      operation: "none", interaction_owner: "none",
+      ready: !errorCode, login_required: false, error_code: errorCode,
+      operation_status: operationStatus, operation_generation: 2,
+      operation_result_owner: "automation_fill",
+      navigation_generation: errorCode === "window_closed" ? 5 : 4,
+    });
+
+    assert.equal(/已保存到 FD Work/.test(element("fd-work-status").textContent), saved);
+    assert.doesNotMatch(element("fd-work-status").textContent, /正在填入/);
+  }
+});
+
+test("picker cancellation does not complete or overwrite a Timeline fill transaction", () => {
+  const { App, element } = harness();
+  configureFDWorkSession(App, element);
+  App.showFDWorkStatus("Timeline 状态保持", false);
+
+  App.receiveFDWorkStatus({
+    supported: true, enabled: true, session_state: "idle", operation: "none",
+    interaction_owner: "none", ready: false, login_required: false,
+    error_code: "window_closed", operation_status: "operation_canceled",
+    operation_result_owner: "user_picker", operation_generation: 2,
+    navigation_generation: 5,
+  });
+
+  assert.equal(element("fd-work-status").textContent, "Timeline 状态保持");
 });
 
 test("Timeline duration input uses deterministic one-decimal half-up normalization", () => {
@@ -854,7 +927,7 @@ test("FD Work stale response refreshes and retries exactly once with latest sess
     calls.push(args);
     return Promise.resolve(calls.length === 1
       ? { ok: false, error: "stale_selection", message: "stale" }
-      : { ok: true, status: "opening" });
+      : { ok: true, operation_status: "session_starting" });
   };
   App.loadTimelineReport = () => {
     refreshes += 1;

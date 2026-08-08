@@ -6,6 +6,7 @@
     var PICKER_ROOT_ATTRIBUTE = "data-worktrace-fdwork-picker";
     var STYLE_ID = "worktrace-fdwork-style";
     var PICKER_TOOLBAR_ID = "worktrace-fdwork-picker-toolbar";
+    var PICKER_BLOCKER_ID = "worktrace-fdwork-picker-blocker";
     var FILL_BLOCKER_ID = "worktrace-fdwork-fill-blocker";
     var ACTION_MESSAGE_CHANNEL = "worktrace-fdwork-action-v5";
     var activeMode = "none";
@@ -20,6 +21,9 @@
     var pickerDocumentClickListener = null;
     var pickerOptionClickSequence = 0;
     var pickerAcceptedClickSequence = 0;
+    var pickerPendingExpectedLabel = "";
+    var pickerCommitPromise = null;
+    var pickerBlockerListeners = [];
     var lastPayload = null;
     var lastContract = null;
     var actionQueue = Promise.resolve();
@@ -67,8 +71,9 @@
         var style = document.createElement("style");
         style.id = STYLE_ID;
         style.textContent = [
-            "#worktrace-fdwork-picker-toolbar{position:fixed;right:24px;bottom:24px;z-index:1000;display:flex;align-items:center;gap:12px;max-width:calc(100vw - 48px);padding:12px 16px;border:1px solid #d9d9d9;border-radius:8px;background:#fff;box-shadow:0 6px 20px rgba(0,0,0,.18);font:14px/1.5 sans-serif}",
+            "#worktrace-fdwork-picker-toolbar{position:fixed;right:24px;bottom:24px;z-index:2147483647;display:flex;align-items:center;gap:12px;max-width:calc(100vw - 48px);padding:12px 16px;border:1px solid #d9d9d9;border-radius:8px;background:#fff;box-shadow:0 6px 20px rgba(0,0,0,.18);font:14px/1.5 sans-serif}",
             "#worktrace-fdwork-picker-toolbar button{min-width:72px;padding:4px 12px}",
+            "#worktrace-fdwork-picker-blocker{position:fixed;inset:0;z-index:2147483646;background:rgba(255,255,255,.01)}",
             "#worktrace-fdwork-fill-blocker{position:fixed;inset:0;z-index:2147483646;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.82);font:16px/1.5 sans-serif}"
         ].join("");
         var owner = document.head || document.documentElement;
@@ -135,53 +140,130 @@
         });
     }
 
-    async function awaitStableWorkShell(contract) {
+    async function awaitStableWorkPage(contract) {
         var generation = Number(contract && contract.operation_generation) || activeGeneration;
-        if (activeMode === "none" && generation > activeGeneration) {
-            activeGeneration = generation;
-        }
+        if (activeMode === "none" && generation > activeGeneration) activeGeneration = generation;
         var deadline = deadlineAt(contract);
+        var stableFrames = 0;
         while (Date.now() <= deadline) {
             if (canceled(generation)) return result(false, "lookup_superseded");
-            var input = caseInput(contract);
             var visibilityReady = document.visibilityState === "visible";
             var viewportReady = Number(window.innerWidth) > 0 && Number(window.innerHeight) > 0;
-            var interactive = !!(
-                input && visible(input) && !input.disabled && !input.readOnly
-                && !blockingOverlayVisible()
-            );
-            if (visibilityReady && viewportReady && interactive) {
-                var firstInput = input;
-                var first = firstInput.getBoundingClientRect ? firstInput.getBoundingClientRect() : null;
-                await requestFrame();
-                if (canceled(generation)) return result(false, "lookup_superseded");
-                var secondInput = caseInput(contract);
-                if (secondInput !== firstInput) continue;
-                var second = secondInput.getBoundingClientRect ? secondInput.getBoundingClientRect() : null;
-                await requestFrame();
-                if (canceled(generation)) return result(false, "lookup_superseded");
-                var thirdInput = caseInput(contract);
-                if (thirdInput !== firstInput) continue;
-                var third = thirdInput.getBoundingClientRect ? thirdInput.getBoundingClientRect() : null;
-                if (sameRect(first, second) && sameRect(second, third)) {
-                    return result(true, "", {
-                        status: "stable",
-                        document_visibility: document.visibilityState,
-                        viewport_available: true,
-                        input_exists: true,
-                        input_interactive: true
-                    });
-                }
+            var rootReady = !!(document.documentElement && document.body);
+            if (visibilityReady && viewportReady && rootReady && !blockingOverlayVisible()) {
+                stableFrames += 1;
+                if (stableFrames >= 2) return result(true, "", {
+                    status: "work_page_ready",
+                    document_visibility: document.visibilityState,
+                    viewport_available: true
+                });
+            } else {
+                stableFrames = 0;
             }
-            await new Promise(function (resolve) { setTimeout(resolve, 25); });
+            await requestFrame();
         }
-        var finalInput = caseInput(contract);
-        return result(false, finalInput ? "case_input_not_interactive" : "case_input_missing", {
+        return result(false, "work_page_not_ready", {
             document_visibility: document.visibilityState,
-            viewport_available: Number(window.innerWidth) > 0 && Number(window.innerHeight) > 0,
-            input_exists: !!finalInput,
-            input_interactive: !!(finalInput && !finalInput.disabled && !finalInput.readOnly)
+            viewport_available: Number(window.innerWidth) > 0 && Number(window.innerHeight) > 0
         });
+    }
+
+    function entryEditorState(contract) {
+        var formSelector = String(contract && contract.form_selector || "form#basic");
+        var form = document.querySelector(formSelector);
+        var input = caseInput(contract);
+        var wrapper = selectWrapperFor(input);
+        var ready = !!(
+            form && input && wrapper && form.contains(input)
+            && visible(form) && visible(input)
+            && !input.disabled && !input.readOnly
+        );
+        return { ready: ready, form: form, input: input, wrapper: wrapper };
+    }
+
+    async function awaitStableEntryEditor(contract) {
+        var generation = Number(contract && contract.operation_generation) || activeGeneration;
+        if (activeMode === "none" && generation > activeGeneration) activeGeneration = generation;
+        var deadline = deadlineAt(contract);
+        var stableFrames = 0;
+        while (Date.now() <= deadline) {
+            if (canceled(generation)) return result(false, "lookup_superseded");
+            var state = entryEditorState(contract);
+            if (state.ready && !blockingOverlayVisible()) {
+                stableFrames += 1;
+                if (stableFrames >= 2) return result(true, "", {
+                    status: "entry_editor_ready",
+                    editor_exists: true,
+                    input_exists: true,
+                    input_interactive: true
+                });
+            } else {
+                stableFrames = 0;
+            }
+            await requestFrame();
+        }
+        var finalState = entryEditorState(contract);
+        return result(false, "entry_editor_not_rendered", {
+            editor_exists: finalState.ready,
+            input_exists: !!finalState.input,
+            input_interactive: !!(
+                finalState.input && !finalState.input.disabled && !finalState.input.readOnly
+            )
+        });
+    }
+
+    function createEntryActionText(node) {
+        return normalizeExactText(node && node.getAttribute && (
+            node.getAttribute("aria-label") || node.getAttribute("title")
+        ) || node && (node.innerText || node.textContent || node.value));
+    }
+
+    async function ensureEntryEditor(contract) {
+        var generation = Number(contract && contract.operation_generation) || activeGeneration;
+        if (activeMode === "none" && generation > activeGeneration) activeGeneration = generation;
+        if (canceled(generation)) return result(false, "lookup_superseded");
+        if (entryEditorState(contract).ready) return result(true, "", {
+            status: "entry_editor_ready", editor_exists: true,
+            create_action_count: 0, create_click_count: 0
+        });
+        var expected = "创建工时";
+        var matches = Array.prototype.filter.call(
+            document.querySelectorAll("button, [role='button'], input[type='button']"),
+            function (node) { return visible(node) && createEntryActionText(node) === expected; }
+        );
+        if (!matches.length) return result(false, "entry_create_action_missing", {
+            create_action_count: 0, create_click_count: 0
+        });
+        if (matches.length !== 1) return result(false, "entry_create_action_ambiguous", {
+            create_action_count: matches.length, create_click_count: 0
+        });
+        var action = matches[0];
+        if (action.disabled || (action.getAttribute && action.getAttribute("aria-disabled") === "true")) {
+            return result(false, "entry_create_action_disabled", {
+                create_action_count: 1, create_click_count: 0
+            });
+        }
+        try {
+            if (typeof action.click !== "function") throw new Error("not_interactive");
+            action.click();
+        } catch (_error) {
+            return result(false, "entry_create_action_disabled", {
+                create_action_count: 1, create_click_count: 0
+            });
+        }
+        var reconciled = await awaitStableEntryEditor(contract);
+        if (!reconciled.ok) return result(false,
+            reconciled.error === "lookup_superseded" ? reconciled.error : "entry_editor_not_rendered",
+            { create_action_count: 1, create_click_count: 1, editor_exists: false }
+        );
+        return result(true, "", {
+            status: "entry_editor_ready", editor_exists: true,
+            create_action_count: 1, create_click_count: 1
+        });
+    }
+
+    async function awaitStableWorkShell(contract) {
+        return awaitStableEntryEditor(contract);
     }
 
     function clearPickerObserver() {
@@ -199,14 +281,56 @@
         if (pickerDocumentClickListener && typeof document.removeEventListener === "function") {
             document.removeEventListener("click", pickerDocumentClickListener, true);
         }
+        var liveInput = activePickerContract ? caseInput(activePickerContract) : null;
         if (pickerInput) pickerInput.disabled = pickerInputInitiallyDisabled;
+        if (liveInput && liveInput !== pickerInput) liveInput.disabled = pickerInputInitiallyDisabled;
         pickerInput = null;
         pickerInputInitiallyDisabled = false;
         pickerInputListener = null;
         pickerDocumentClickListener = null;
         pickerOptionClickSequence = 0;
         pickerAcceptedClickSequence = 0;
+        pickerPendingExpectedLabel = "";
+        pickerCommitPromise = null;
         pickerInitialSelection = null;
+    }
+
+    function removePickerInteractionBlocker() {
+        pickerBlockerListeners.forEach(function (binding) {
+            if (typeof document.removeEventListener === "function") {
+                document.removeEventListener(binding[0], binding[1], true);
+            }
+        });
+        pickerBlockerListeners = [];
+        var blocker = document.getElementById && document.getElementById(PICKER_BLOCKER_ID);
+        if (blocker && blocker.remove) blocker.remove();
+    }
+
+    function installPickerInteractionBlocker() {
+        ensureStyle();
+        removePickerInteractionBlocker();
+        var blocker = document.createElement("div");
+        blocker.id = PICKER_BLOCKER_ID;
+        blocker.setAttribute("aria-hidden", "true");
+        if (document.body && typeof document.body.appendChild === "function") {
+            document.body.appendChild(blocker);
+        }
+        function blockOutsideToolbar(event) {
+            var toolbar = document.getElementById && document.getElementById(PICKER_TOOLBAR_ID);
+            if (toolbar && typeof toolbar.contains === "function" && toolbar.contains(event.target)) return;
+            if (event && typeof event.preventDefault === "function") event.preventDefault();
+            if (event && typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+            else if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+        }
+        ["pointerdown", "mousedown", "click", "keydown", "submit"].forEach(function (name) {
+            if (typeof document.addEventListener === "function") {
+                document.addEventListener(name, blockOutsideToolbar, true);
+                pickerBlockerListeners.push([name, blockOutsideToolbar]);
+            }
+        });
+        var liveInput = activePickerContract ? caseInput(activePickerContract) : null;
+        if (liveInput) liveInput.disabled = true;
+        return blocker;
     }
 
     function selectedCaseItem(input) {
@@ -277,29 +401,46 @@
         return !!(popup && typeof popup.contains === "function" && popup.contains(option));
     }
 
-    function acceptPickerCommit(clickSequence, expectedLabel) {
-        if (activeMode !== "picker" || !activePickerContract) return false;
-        if (clickSequence > 0 && clickSequence <= pickerAcceptedClickSequence) return false;
-        var selected = readSelectedCase(activePickerContract);
-        if (!selected.ok || (expectedLabel && selected.label !== expectedLabel)) {
-            updatePickerToolbar();
-            return false;
+    async function reconcilePickerCommit(clickSequence, expectedLabel, generation) {
+        var contract = activePickerContract;
+        var deadline = deadlineAt(contract);
+        while (Date.now() <= deadline) {
+            if (activeMode !== "picker" || activePickerContract !== contract
+                || canceled(generation) || clickSequence <= pickerAcceptedClickSequence) return false;
+            var liveInput = caseInput(contract);
+            var selected = readSelectedCase(contract);
+            if (liveInput && selected.ok && selected.label === expectedLabel) {
+                pickerSelectionRevision += 1;
+                pickerAcceptedClickSequence = clickSequence;
+                pickerPendingExpectedLabel = "";
+                installPickerInteractionBlocker();
+                updatePickerToolbar();
+                return true;
+            }
+            await requestFrame();
         }
-        var selectedItem = selectedCaseItem(pickerInput);
-        if (
-            clickSequence <= 0
-            && pickerInitialSelection
-            && selectedItem
-            && selectedItem.node === pickerInitialSelection.node
-            && selectedItem.label === pickerInitialSelection.label
-        ) {
-            updatePickerToolbar();
-            return false;
-        }
-        pickerSelectionRevision += 1;
-        if (clickSequence > 0) pickerAcceptedClickSequence = clickSequence;
+        pickerPendingExpectedLabel = "";
         updatePickerToolbar();
-        return true;
+        return false;
+    }
+
+    function startPickerCommitReconciliation(clickSequence, expectedLabel) {
+        if (activeMode !== "picker" || !activePickerContract || !expectedLabel) return;
+        if (clickSequence <= pickerAcceptedClickSequence) return;
+        pickerPendingExpectedLabel = expectedLabel;
+        if (pickerCommitPromise) return;
+        var generation = activeGeneration;
+        pickerCommitPromise = reconcilePickerCommit(
+            clickSequence, expectedLabel, generation
+        ).finally(function () {
+            pickerCommitPromise = null;
+            if (pickerPendingExpectedLabel
+                && pickerOptionClickSequence > pickerAcceptedClickSequence) {
+                startPickerCommitReconciliation(
+                    pickerOptionClickSequence, pickerPendingExpectedLabel
+                );
+            }
+        });
     }
 
     function mutationContainsOptionCommit(records) {
@@ -341,9 +482,12 @@
 
     function handlePickerMutations(records) {
         if (!mutationContainsOptionCommit(records) && !mutationContainsSelectionCommit(records)) return;
-        var pendingClick = pickerOptionClickSequence > pickerAcceptedClickSequence
-            ? pickerOptionClickSequence : 0;
-        acceptPickerCommit(pendingClick, "");
+        if (pickerPendingExpectedLabel
+            && pickerOptionClickSequence > pickerAcceptedClickSequence) {
+            startPickerCommitReconciliation(
+                pickerOptionClickSequence, pickerPendingExpectedLabel
+            );
+        }
     }
 
     function observePickerSelectionDom(contract) {
@@ -545,9 +689,7 @@
             var label = optionLabel(option);
             if (!label) return;
             var clickSequence = ++pickerOptionClickSequence;
-            Promise.resolve().then(function () {
-                acceptPickerCommit(clickSequence, label);
-            });
+            startPickerCommitReconciliation(clickSequence, label);
         };
         observePickerSelectionDom(contract);
         if (input && typeof input.addEventListener === "function") {
@@ -562,6 +704,8 @@
     }
 
     function leaveCasePicker() {
+        activeGeneration += 1;
+        removePickerInteractionBlocker();
         clearPickerObserver();
         clearPickerListeners();
         var toolbar = document.getElementById && document.getElementById(PICKER_TOOLBAR_ID);
@@ -1238,13 +1382,13 @@
         installFillBlockingLayer();
         var currentStage = "page_stable";
         try {
-            var stable = await awaitStableWorkShell(contract);
+            var stable = await awaitStableEntryEditor(contract);
             if (!stable.ok) return stageResult(stable, "page_stable");
             currentStage = "date_read";
             var dated = await ensureEntryDate(payload.work_date, contract, generation);
             if (!dated.ok) return dated;
             currentStage = "page_stable";
-            var stableAfterDate = await awaitStableWorkShell(contract);
+            var stableAfterDate = await awaitStableEntryEditor(contract);
             if (!stableAfterDate.ok) return stageResult(stableAfterDate, "page_stable");
             currentStage = "case_open";
             var prepared = await prepareCaseCombobox(contract, generation);
@@ -1281,6 +1425,9 @@
 
     function actionHandler(action) {
         var handlers = {
+            awaitStableWorkPage: function (args) { return awaitStableWorkPage(args[0]); },
+            ensureEntryEditor: function (args) { return ensureEntryEditor(args[0]); },
+            awaitStableEntryEditor: function (args) { return awaitStableEntryEditor(args[0]); },
             awaitStableWorkShell: function (args) { return awaitStableWorkShell(args[0]); },
             enterCasePicker: function (args) { return enterCasePicker(args[0]); },
             leaveCasePicker: function () { return leaveCasePicker(); },
@@ -1306,12 +1453,16 @@
         }
         [
             "viewport_available", "input_exists", "input_interactive",
+            "editor_exists",
             "option_connected_before_action", "option_connected_after_action",
             "popup_replaced", "live_option_reacquired"
         ].forEach(function (key) {
             if (typeof value[key] === "boolean") safe[key] = value[key];
         });
-        ["option_count", "date_step_count", "commit_attempt_count"].forEach(function (key) {
+        [
+            "option_count", "date_step_count", "commit_attempt_count",
+            "create_action_count", "create_click_count"
+        ].forEach(function (key) {
             if (Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= 10000) {
                 safe[key] = value[key];
             }
@@ -1352,6 +1503,7 @@
     window.addEventListener("pagehide", function () {
         window.removeEventListener("message", handleActionMessage);
         activeGeneration += 1;
+        removePickerInteractionBlocker();
         clearPickerObserver();
         clearPickerListeners();
         removeFillBlockingLayer();
@@ -1363,6 +1515,9 @@
 
     window.WorkTraceFDWorkAdapter = Object.freeze({
         version: VERSION,
+        awaitStableWorkPage: awaitStableWorkPage,
+        ensureEntryEditor: ensureEntryEditor,
+        awaitStableEntryEditor: awaitStableEntryEditor,
         awaitStableWorkShell: awaitStableWorkShell,
         enterCasePicker: enterCasePicker,
         leaveCasePicker: leaveCasePicker,

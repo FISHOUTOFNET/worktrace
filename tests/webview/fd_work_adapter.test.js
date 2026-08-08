@@ -294,11 +294,43 @@ function exactCaseHarness({
 test("adapter contract v5 exposes picker and fill modes without inline search handshake", () => {
   const { adapter } = fieldHarness();
   assert.equal(adapter.version, 5);
-  for (const method of ["awaitStableWorkShell", "enterCasePicker", "leaveCasePicker", "readSelectedCase", "fillEntry"]) {
+  for (const method of [
+    "awaitStableWorkPage", "ensureEntryEditor", "awaitStableEntryEditor",
+    "enterCasePicker", "leaveCasePicker", "readSelectedCase", "fillEntry"
+  ]) {
     assert.equal(typeof adapter[method], "function");
   }
   assert.equal(adapter.searchCases, undefined);
   assert.equal(adapter.interactiveHandshake, undefined);
+});
+
+test("work page readiness is independent from entry editor readiness", () => {
+  const workStart = source.indexOf("async function awaitStableWorkPage");
+  const stableEditorStart = source.indexOf("async function awaitStableEntryEditor", workStart);
+  const editorStart = source.indexOf("async function ensureEntryEditor", stableEditorStart);
+  assert.ok(workStart >= 0 && stableEditorStart > workStart && editorStart > stableEditorStart);
+  const workBody = source.slice(workStart, source.indexOf("function entryEditorState", workStart));
+  assert.doesNotMatch(workBody, /form#basic|basic_caseId/);
+  const editorBody = source.slice(editorStart, source.indexOf("async function awaitStableWorkShell", editorStart));
+  assert.match(editorBody, /创建工时/);
+  assert.match(editorBody, /awaitStableEntryEditor/);
+  const stableEditorBody = source.slice(stableEditorStart, editorStart);
+  assert.match(stableEditorBody, /requestFrame/);
+  assert.match(editorBody, /entry_create_action_missing/);
+  assert.match(editorBody, /entry_create_action_ambiguous/);
+  assert.match(editorBody, /entry_create_action_disabled/);
+  assert.match(editorBody, /entry_editor_not_rendered/);
+});
+
+test("picker commit reconciles on RAF and installs a cleaned interaction blocker", () => {
+  assert.match(source, /async function reconcilePickerCommit/);
+  assert.match(source, /expectedLabel/);
+  assert.match(source, /await requestFrame\(\)/);
+  assert.match(source, /installPickerInteractionBlocker/);
+  assert.match(source, /removePickerInteractionBlocker/);
+  const leaveStart = source.indexOf("function leaveCasePicker");
+  const nativeSetStart = source.indexOf("function nativeSet", leaveStart);
+  assert.match(source.slice(leaveStart, nativeSetStart), /removePickerInteractionBlocker/);
 });
 
 test("picker entry is a synchronous DOM installation result", () => {
@@ -435,9 +467,9 @@ test("fill golden path is linear date then rerender-safe case and controlled fie
   const start = source.indexOf("async function fillEntry");
   const end = source.indexOf("function actionHandler", start);
   const body = source.slice(start, end);
-  const stable = body.indexOf("awaitStableWorkShell");
+  const stable = body.indexOf("awaitStableEntryEditor");
   const date = body.indexOf("ensureEntryDate");
-  const stableAgain = body.indexOf("awaitStableWorkShell", stable + 1);
+  const stableAgain = body.indexOf("awaitStableEntryEditor", stable + 1);
   const caseControl = body.indexOf("prepareCaseCombobox");
   const exactCase = body.indexOf("selectExactCase");
   const duration = body.indexOf("fillDuration");
@@ -787,13 +819,12 @@ test("picker does not focus click write clear escape or blur the native case inp
 
 test("stable shell check only observes visibility viewport overlay and stable frames", () => {
   const body = source.slice(
-    source.indexOf("async function awaitStableWorkShell"),
-    source.indexOf("function clearPickerObserver")
+    source.indexOf("async function awaitStableEntryEditor"),
+    source.indexOf("function createEntryActionText")
   );
-  assert.match(body, /document\.visibilityState/);
-  assert.match(body, /window\.innerWidth/);
   assert.match(body, /blockingOverlayVisible/);
-  assert.match(body, /sameRect\(first, second\)/);
+  assert.match(body, /stableFrames/);
+  assert.match(body, /entryEditorState/);
   assert.doesNotMatch(body, /\.focus\s*\(|\.click\s*\(|nativeSet|setSearchValue|KeyboardEvent|\.blur\s*\(/);
 });
 
