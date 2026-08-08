@@ -52,6 +52,7 @@ class FDWorkInteractionCoordinator:
         status_callback: Callable[[dict[str, Any]], None] | None = None,
         picker_timeout_seconds: float = 30.0,
         fill_timeout_seconds: float = 15.0,
+        save_timeout_seconds: float = 5.0,
     ) -> None:
         self._controller = window_controller
         self._page_adapter = page_adapter or FDWorkPageAdapter()
@@ -60,6 +61,7 @@ class FDWorkInteractionCoordinator:
         self._status_callback = status_callback or (lambda _status: None)
         self._picker_timeout_seconds = max(1.0, float(picker_timeout_seconds))
         self._fill_timeout_seconds = max(1.0, float(fill_timeout_seconds))
+        self._save_timeout_seconds = max(1.0, float(save_timeout_seconds))
         self._lock = threading.RLock()
         self._controller_status = dict(window_controller.get_status())
         self._interaction_owner = "none"
@@ -354,8 +356,14 @@ class FDWorkInteractionCoordinator:
                 else:
                     current = True
                     self._operation_deadline_ms = None
-                    contract = self._operation_contract_locked(
-                        self._fill_timeout_seconds
+                    total_timeout = self._fill_timeout_seconds + self._save_timeout_seconds
+                    contract = self._operation_contract_locked(total_timeout)
+                    now_ms = int(time.time() * 1000)
+                    contract["fill_deadline_ms"] = int(
+                        now_ms + self._fill_timeout_seconds * 1000
+                    )
+                    contract["save_timeout_ms"] = int(
+                        self._save_timeout_seconds * 1000
                     )
             if not current:
                 return {"ok": False, "error": "lookup_superseded"}
@@ -363,14 +371,20 @@ class FDWorkInteractionCoordinator:
         except Exception:
             filled = {"ok": False, "error": "javascript_exception"}
         if filled.get("ok") is not True:
+            error = str(filled.get("error") or "dom_contract_changed")
+            if (
+                error == "save_completion_failed"
+                and filled.get("stage") == "save_completed"
+            ):
+                error = "save_outcome_unknown"
             return self._finish_fill_failure(
-                str(filled.get("error") or "dom_contract_changed"),
+                error,
                 operation_nonce,
                 operation_generation,
             )
         if filled.get("stage") != "save_completed":
             return self._finish_fill_failure(
-                "save_completion_failed",
+                "save_outcome_unknown",
                 operation_nonce,
                 operation_generation,
             )
@@ -808,13 +822,18 @@ class FDWorkInteractionCoordinator:
             "lookup_superseded",
             "navigation_changed",
         }
+        outcome_unknown = error == "save_outcome_unknown"
         with self._lock:
             if not self._operation_is_current_locked(
                 "automation_fill", operation_nonce, operation_generation
             ):
                 return {"ok": False, "error": error}
             navigation_generation = self._operation_navigation_generation
-        if not canceled_error and navigation_generation is not None:
+        if (
+            not canceled_error
+            and not outcome_unknown
+            and navigation_generation is not None
+        ):
             try:
                 self._controller.hide_and_restore_main(
                     navigation_generation,
