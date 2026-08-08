@@ -143,28 +143,26 @@ test("explicit picker click opens once and disables the button while pending", a
   element("rules-panel-fd-work-pick").fire("click");
 
   assert.equal(calls.picker.length, 1);
-  assert.equal(App.rulesFDWorkPickerPending, true);
   assert.equal(element("rules-panel-fd-work-pick").disabled, true);
   await tick();
   assert.match(element("rules-panel-fd-work-status").textContent, /原生案件框/);
 });
 
 test("picker result must match the current Drawer request and session", async () => {
-  const { App, element } = harness();
+  const { App, element, calls } = harness();
   App.openRulesPanel("project", {});
   element("rules-panel-fd-work-pick").fire("click");
   await tick();
-  const requestId = App.rulesFDWorkPickerRequestId;
+  const requestId = calls.picker[0];
 
   assert.equal(App.receiveFDWorkCasePickerResult({
     ok: true, request_id: "stale", selected_label: "OLD", selection_token: "old-token",
   }), false);
-  assert.equal(App.rulesFDWorkSelectionToken, null);
+  assert.equal(element("rules-panel-fd-work-selected-label").value, "");
   assert.equal(App.receiveFDWorkCasePickerResult({
     ok: true, request_id: requestId, selected_label: "CASE A", selection_token: "token-a",
   }), true);
   assert.equal(element("rules-panel-fd-work-selected-label").value, "CASE A");
-  assert.equal(App.rulesFDWorkSelectionToken, "token-a");
   assert.equal(element("rules-panel-save-project").disabled, false);
 });
 
@@ -175,7 +173,7 @@ test("manual display-label tampering cannot be saved", async () => {
   await tick();
   App.receiveFDWorkCasePickerResult({
     ok: true,
-    request_id: App.rulesFDWorkPickerRequestId,
+    request_id: calls.picker[0],
     selected_label: "CASE A",
     selection_token: "token-a",
   });
@@ -188,13 +186,13 @@ test("manual display-label tampering cannot be saved", async () => {
 });
 
 test("FD Work create success waits for verified binding and project-list readback", async () => {
-  const { App, element } = harness();
+  const { App, element, calls } = harness();
   App.openRulesPanel("project", {});
   element("rules-panel-fd-work-pick").fire("click");
   await tick();
   App.receiveFDWorkCasePickerResult({
     ok: true,
-    request_id: App.rulesFDWorkPickerRequestId,
+    request_id: calls.picker[0],
     selected_label: "CASE A",
     selection_token: "token-a",
   });
@@ -238,17 +236,16 @@ test("historical unbound unchanged project can edit non-name fields", async () =
 });
 
 test("picker cancel or close restores pending state without changing the project name", async () => {
-  const { App, element } = harness();
+  const { App, element, calls } = harness();
   App.openRulesPanel("project", {});
   element("rules-panel-fd-work-pick").fire("click");
   await tick();
-  const requestId = App.rulesFDWorkPickerRequestId;
+  const requestId = calls.picker[0];
 
   assert.equal(App.receiveFDWorkCasePickerResult({
     ok: false, request_id: requestId, error: "picker_canceled",
   }), true);
-  assert.equal(App.rulesFDWorkPickerPending, false);
-  assert.equal(App.rulesFDWorkSelectionToken, null);
+  assert.equal(element("rules-panel-fd-work-pick").disabled, false);
   assert.equal(element("rules-panel-fd-work-selected-label").value, "");
   assert.match(element("rules-panel-fd-work-status").textContent, /已取消/);
 });
@@ -263,5 +260,5 @@ test("explicit cancel association clears an existing durable binding", async () 
   await tick();
 
   assert.deepEqual(calls.clear, [7]);
-  assert.equal(App.rulesFDWorkOriginalBound, false);
+  assert.equal(element("rules-panel-fd-work-clear").hidden, true);
 });

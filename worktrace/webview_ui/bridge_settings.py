@@ -31,7 +31,12 @@ class SettingsBridgeMixin:
 
     def get_settings_privacy_status(self) -> dict[str, Any]:
         try:
-            return self._services.settings.get_settings_privacy_status()
+            result = self._services.settings.get_settings_privacy_status()
+            if result.get("ok") is not True:
+                return result
+            status = dict(result.get("status") or {})
+            status["fd_work"] = self._services.fd_work.get_settings_status()
+            return {"ok": True, "status": status}
         except Exception:
             logger.exception("webview bridge get_settings_privacy_status failed")
             return {"ok": False, "error": "加载设置状态失败"}
@@ -68,11 +73,30 @@ class SettingsBridgeMixin:
             }
 
     def set_fd_work_enabled(self, enabled) -> dict[str, Any]:
+        if enabled is not True and enabled is not False:
+            return {
+                "ok": False,
+                "error": "请选择有效的 FD Work 插件状态",
+                "status": self.get_settings_privacy_status().get("status"),
+            }
         try:
-            return self._services.settings.set_fd_work_enabled(enabled)
+            self._services.fd_work.set_enabled(enabled)
+            status = self.get_settings_privacy_status().get("status")
+            actual = bool(
+                isinstance(status, dict)
+                and isinstance(status.get("fd_work"), dict)
+                and status["fd_work"].get("enabled") is True
+            )
+            if actual is not enabled:
+                return {
+                    "ok": False,
+                    "error": "FD Work 插件状态未能保存",
+                    "status": status,
+                }
+            return {"ok": True, "status": status}
         except Exception:
             logger.exception("webview bridge set_fd_work_enabled failed")
-            status = self._services.settings.get_settings_privacy_status()
+            status = self.get_settings_privacy_status()
             return {
                 "ok": False,
                 "error": "设置 FD Work 插件失败",

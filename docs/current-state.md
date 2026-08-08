@@ -25,18 +25,21 @@ webview_main -> DesktopShellController -> AppRuntime
 - `DesktopShellController` owns visible/hidden/exiting window state. Its tray
   host and instance-activation listener send shell commands only and never
   manage the database, Collector or workers.
-- `ApplicationServices` is explicit frozen-dataclass composition with no service
-  locator. `WebViewBridge` calls `self._services.<capability>.*` only.
+- `ApplicationServices` is explicit composition with no service locator. It
+  injects core project callbacks and fixed lifecycle tuples; bridges call explicit capabilities.
+- Project Rules uses an external-identity port; Settings/Backup use a post-commit
+  lifecycle hook. None imports or instantiates FD Work.
+- Privacy startup sees generic participants; a typed main-window sink owns
+  JSON callback delivery and fails softly for stale/shutdown windows.
 - `RuntimeMaintenanceCoordinator` solely owns snapshot/replacement ordering and
   the stable fail-closed latch.
 - `CollectorControl`/`CollectorStateMachine` own command identity, terminal
   states and collection transitions; the maintenance command atomically seals
   an open activity and enqueues eligible inference.
 
-Workers are declared by `WorkerSpec` in one `AppRuntime` registry. Readiness
-requires successful initialization and an explicit ready signal before the stable
-blocking loop. AppRuntime alone publishes lifecycle state, signals and joins all
-handles, and releases the instance lease only after every writer stops.
+Workers are declared by `WorkerSpec` in one `AppRuntime` registry. Readiness needs
+successful initialization and an explicit ready signal. AppRuntime alone publishes
+lifecycle state, joins handles and releases the lease after every writer stops.
 
 ## Maintenance
 Collector maintenance is not user pause:
@@ -136,6 +139,8 @@ bounded reconciliation.
   FD Work disabled, project names remain ordinary editable local text. With it
   enabled, new projects use an explicit native FD Work picker and require its
   one-use selection proof; WorkTrace provides no cross-window autocomplete.
+- `window.WorkTraceApp` is a namespace, not a state owner. Pages reset their own
+  transient state; FD Work owns picker state behind `projectIdentity`.
 - Settings/Privacy: four categories. General owns authoritative HKCU launch state
   and clipboard control; Privacy, Data and Backup, and Advanced retain their
   responsibilities. Secret inputs remain local and are cleared after use.
@@ -149,22 +154,17 @@ null clears an override, and true plus an integer sets the normalized override.
 Rule batches are atomic, manual assignments are preserved, and statistics/export
 use persisted report facts rather than frontend time.
 
-FD Work is shared by Settings, Timeline and Project Rules. Its sidecar keeps explicit
-bindings outside the main schema/backup; only bindings authorize Timeline fill.
-Privacy gates startup and passive probes stay hidden. Session state is separate from
-the exclusive interaction owner: auth/picker are user-owned, fill is automation-owned,
-and verified fill becomes user review without auto-submit. Selection occurs only in
-FD Work's native Ant Select after “选择案件”; Drawer/focus/input events never show it.
-Adapter v5 provides side-effect-free stable-shell observation plus picker/fill modes.
-GUI-dispatched mutations are generation-guarded; close permits safe recreation; v4 bindings remain valid under v5. WorkTrace never reads or exports credentials.
+FD Work is shared by Settings, Timeline and Project Rules. Its sidecar stays outside
+the main schema/backup; only bindings authorize Timeline fill. Privacy gates startup
+and passive probes stay hidden. Auth/picker are user-owned; fill is automation-owned,
+then user review without auto-submit. Selection uses FD Work's native Ant Select only.
+Adapter v5 is side-effect-free and generation-guarded; v4 bindings remain valid.
+WorkTrace never reads or exports credentials.
 
 ## Validation
 Affected validation: `python scripts/run_affected_tests.py`; full validation uses `python -m pytest`, `node --test tests/webview/*.test.js`, and Windows executable/installer smoke in Standard CI.
 
-Standard CI validates one exact revision. Python business-test diagnostics are
-artifact-only (`diagnostics.json` and JUnit XML); logs do not replay failures,
-tracebacks or test tails. Repairs are grouped by semantic root cause. Concurrency
-tests use bounded events/joins and required risk markers. Only
-`.github/workflows/ci.yml` and `_validation.yml` are permanent workflows;
-acceptance and temporary agent workflows remain absent. Historical WebView phases
-are archived in [`history/webview-phases.md`](history/webview-phases.md).
+Standard CI validates one exact revision. Python diagnostics are artifact-only;
+repairs are grouped by root cause, and concurrency tests use bounded events/joins
+plus risk markers. Only `ci.yml` and `_validation.yml` are permanent workflows;
+historical phases are in [`history/webview-phases.md`](history/webview-phases.md).

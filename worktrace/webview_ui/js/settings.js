@@ -1081,4 +1081,13 @@
         });
     }
     App.openPrivacyNoticeFromSettings = openPrivacyNoticeFromSettings;
+
+    function resetSettingsGeneration() {
+        App.settingsLoaded = false;
+        App.firstRunNoticeLoaded = false;
+        App.firstRunNoticeLoading = false;
+        App.settingsRequestToken = (App.settingsRequestToken || 0) + 1;
+        resetSettingsTransientUi();
+    }
+    App.settings = Object.freeze({ resetGeneration: resetSettingsGeneration });
 })();

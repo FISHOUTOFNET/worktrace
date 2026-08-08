@@ -2,12 +2,10 @@
 from __future__ import annotations
 
 import logging
-import json
 import sys
-import threading
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from . import config
 from .collector.single_instance import get_application_instance_coordinator
@@ -15,6 +13,7 @@ from .desktop.shell import DesktopShellController
 from .desktop.windows_tray import WindowsTrayHost
 from .integrations.fd_work.helper_bridge import FDWorkHelperBridge
 from .integrations.fd_work.interaction_coordinator import FDWorkInteractionCoordinator
+from .integrations.fd_work.main_window_sink import FDWorkMainWindowSink
 from .integrations.fd_work.page_adapter import FDWorkPageAdapter
 from .integrations.fd_work.window_controller import FDWorkWindowController
 from .runtime.app_runtime import AppRuntime
@@ -193,37 +192,7 @@ def main(*, background: bool = False) -> int:
                 background=background,
             )
 
-        main_window_holder: dict[str, Any] = {}
-        fd_work_status_delivery_ready = threading.Event()
-
-        def report_fd_work_status(status: Mapping[str, Any]) -> None:
-            if not fd_work_status_delivery_ready.is_set():
-                return
-            window = main_window_holder.get("window")
-            if window is None:
-                return
-            payload = json.dumps(dict(status), ensure_ascii=True)
-            try:
-                window.evaluate_js(
-                    "window.WorkTraceApp&&"
-                    f"window.WorkTraceApp.receiveFDWorkStatus({payload})"
-                )
-            except Exception:
-                logging.debug("FD Work status delivery skipped")
-
-        def report_fd_work_picker_result(result: Mapping[str, Any]) -> None:
-            window = main_window_holder.get("window")
-            if window is None:
-                return
-            payload = json.dumps(dict(result), ensure_ascii=True)
-            try:
-                window.evaluate_js(
-                    "window.WorkTraceApp&&"
-                    f"window.WorkTraceApp.receiveFDWorkCasePickerResult({payload})"
-                )
-            except Exception:
-                logging.debug("FD Work picker result delivery skipped")
-
+        fd_work_main_sink = FDWorkMainWindowSink()
         fd_work_page_adapter = FDWorkPageAdapter()
         fd_work_helper_bridge = FDWorkHelperBridge(
             action_result_sink=fd_work_page_adapter
@@ -243,8 +212,8 @@ def main(*, background: bool = False) -> int:
             fd_work_interaction_coordinator=fd_work_coordinator,
             paths=paths,
         )
-        services.fd_work.bind_status_callback(report_fd_work_status)
-        services.fd_work.bind_picker_result_callback(report_fd_work_picker_result)
+        services.fd_work.bind_status_callback(fd_work_main_sink.status_changed)
+        services.fd_work.bind_picker_result_callback(fd_work_main_sink.picker_result)
         app_control = services.app_control
         startup_result: dict[str, Any] = {"ok": False}
         try:
@@ -279,7 +248,7 @@ def main(*, background: bool = False) -> int:
                 focus=not initial_hidden,
             )
             bridge.set_window(window)
-            main_window_holder["window"] = window
+            fd_work_main_sink.bind_window(window)
 
             def focus_main_window() -> None:
                 for action in ("show", "restore", "focus"):
@@ -322,9 +291,9 @@ def main(*, background: bool = False) -> int:
                     fd_work_controller.mark_renderer_unavailable()
                     _show_blocking_startup_message(_RENDERER_UNAVAILABLE_MESSAGE)
                     return
-                fd_work_status_delivery_ready.set()
+                fd_work_main_sink.mark_ready()
                 fd_work_controller.on_renderer_initialized(safe_renderer)
-                report_fd_work_status(services.fd_work.get_settings_status())
+                fd_work_main_sink.status_changed(services.fd_work.get_settings_status())
 
             webview.start(
                 func=handle_webview_initialized,
@@ -347,6 +316,8 @@ def main(*, background: bool = False) -> int:
         )
     finally:
         instance_coordinator.stop_activation_listener()
+        if "fd_work_main_sink" in locals():
+            fd_work_main_sink.mark_unavailable()
         if services is not None:
             services.fd_work.shutdown()
         elif fd_work_controller is not None:

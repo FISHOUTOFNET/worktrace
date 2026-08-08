@@ -23,6 +23,7 @@ from tests.support.activity_factory import create_closed_activity
 from tests.support.application import FakeStatisticsCapability, build_test_bridge
 from worktrace.api import export_api, project_api, statistics_api
 from worktrace.api.application_capabilities import RulesApplicationService
+from worktrace.api.external_project_identity import LocalProjectIdentityCapability
 from worktrace.services import (
     export_service,
     project_service,
@@ -71,7 +72,11 @@ def test_rules_application_service_routes_to_lightweight_catalog(temp_db):
 
     project_service.create_project("Client B")
     with patch.object(project_api, "list_project_bindings", return_value=[]) as mock:
-        RulesApplicationService.list_project_bindings(RulesApplicationService())
+        identity = LocalProjectIdentityCapability(
+            create_project=project_api.create_project_for_rules,
+            update_project=project_api.update_project_for_rules,
+        )
+        RulesApplicationService(identity).list_project_bindings()
         mock.assert_called_once()
 
 

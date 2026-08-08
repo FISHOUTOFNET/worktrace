@@ -76,6 +76,66 @@ class _FDWork:
         result["fd_work_binding"] = {"bound": True, "verified": True}
         return result
 
+    def list_project_identities(self, projects):
+        return [
+            {
+                **dict(project),
+                "external_identity_bound": project["id"] in self.bound_ids,
+            }
+            for project in projects
+        ]
+
+    def create_project(self, name, description, language, proof):
+        if self.enabled and proof is None:
+            return {"ok": False, "error": "case_selection_required"}
+        if proof is not None:
+            try:
+                result = self.create_bound_project(name, description, language, proof)
+            except FDWorkEntryError as exc:
+                return {"ok": False, "error": exc.code}
+        else:
+            result = application_capabilities.project_api.create_project_for_rules(
+                name, description, language
+            )
+            if result.get("ok") is True:
+                result["external_identity_binding"] = {"bound": False}
+            return result
+        if "fd_work_binding" in result:
+            result["external_identity_binding"] = result.pop("fd_work_binding")
+        return result
+
+    def update_project(self, project_id, name, description, language, proof):
+        current = application_capabilities.project_api.get_project(project_id)
+        changed = bool(current) and current["name"] != name.strip()
+        if self.enabled and changed and proof is None:
+            return {"ok": False, "error": "case_selection_required"}
+        if proof is not None:
+            try:
+                result = self.rebind_project(
+                    project_id, name, description, language, proof
+                )
+            except FDWorkEntryError as exc:
+                return {"ok": False, "error": exc.code}
+            if "fd_work_binding" in result:
+                result["external_identity_binding"] = result.pop("fd_work_binding")
+            return result
+        result = application_capabilities.project_api.update_project_for_rules(
+            project_id, name, description, language
+        )
+        if result.get("ok") is True:
+            result["external_identity_binding"] = {
+                "bound": project_id in self.bound_ids
+            }
+        return result
+
+    def clear_project_identity(self, project_id):
+        self.clear_project_binding(project_id)
+        return {"ok": True, "external_identity_binding": {"bound": False}}
+
+    def after_project_deleted(self, project_id):
+        self.clear_project_binding(project_id)
+        return {"bound": False}
+
 
 def _project_result(project_id, name):
     return {"ok": True, "project": {"id": project_id, "name": name}}
@@ -89,7 +149,7 @@ def test_enabled_create_requires_picker_token_and_selected_case_binds(monkeypatc
         lambda *args: writes.append(args) or _project_result(len(writes), args[0]),
     )
     fd_work = _FDWork()
-    service = RulesApplicationService(fd_work=fd_work)
+    service = RulesApplicationService(project_identity=fd_work)
 
     plain = service.create_project_for_rules("Ordinary", "", "中文")
     selected = service.create_project_for_rules("typed fragment", "", "中文", "token-a")
@@ -97,7 +157,7 @@ def test_enabled_create_requires_picker_token_and_selected_case_binds(monkeypatc
     assert plain == {"ok": False, "error": "case_selection_required"}
     assert selected["ok"] is True
     assert selected["project"]["name"] == "CASE A"
-    assert selected["fd_work_binding"] == {"bound": True, "verified": True}
+    assert selected["external_identity_binding"] == {"bound": True, "verified": True}
     assert writes == [("CASE A", "", "中文")]
     assert fd_work.bound == [(1, "CASE A")]
     assert fd_work.discarded == ["token-a"]
@@ -115,17 +175,17 @@ def test_bound_update_preserves_name_or_requires_reselection_for_rename(monkeypa
 
     monkeypatch.setattr(application_capabilities.project_api, "update_project_for_rules", update)
     fd_work = _FDWork()
-    service = RulesApplicationService(fd_work=fd_work)
+    service = RulesApplicationService(project_identity=fd_work)
 
     unchanged = service.update_project_for_rules(7, "CASE A", "new description", "中文")
     renamed = service.update_project_for_rules(7, "Manual", "new description", "中文")
     rebound = service.update_project_for_rules(7, "ignored", "new description", "中文", "token-b")
 
-    assert unchanged["fd_work_binding"]["bound"] is True
+    assert unchanged["external_identity_binding"]["bound"] is True
     assert renamed == {"ok": False, "error": "case_selection_required"}
     assert fd_work.cleared == []
     assert rebound["project"]["name"] == "CASE B"
-    assert rebound["fd_work_binding"] == {"bound": True, "verified": True}
+    assert rebound["external_identity_binding"] == {"bound": True, "verified": True}
     assert fd_work.bound == [(7, "CASE B")]
 
 
@@ -136,12 +196,12 @@ def test_disabled_plugin_keeps_local_free_text_creation(monkeypatch):
         "create_project_for_rules",
         lambda *args: writes.append(args) or _project_result(1, args[0]),
     )
-    service = RulesApplicationService(fd_work=_FDWork(enabled=False))
+    service = RulesApplicationService(project_identity=_FDWork(enabled=False))
 
     result = service.create_project_for_rules("Ordinary", "", "中文")
 
     assert result["ok"] is True
-    assert result["fd_work_binding"] == {"bound": False}
+    assert result["external_identity_binding"] == {"bound": False}
     assert writes == [("Ordinary", "", "中文")]
 
 
@@ -160,7 +220,7 @@ def test_historical_unbound_project_can_edit_non_name_fields_when_plugin_enabled
     )
     fd_work = _FDWork(enabled=True)
     fd_work.bound_ids.clear()
-    service = RulesApplicationService(fd_work=fd_work)
+    service = RulesApplicationService(project_identity=fd_work)
 
     unchanged = service.update_project_for_rules(
         8, "Legacy local", "new description", "English"
@@ -184,7 +244,7 @@ def test_invalid_selection_never_writes_or_binds(monkeypatch, token):
     )
     fd_work = _FDWork()
 
-    result = RulesApplicationService(fd_work=fd_work).create_project_for_rules(
+    result = RulesApplicationService(project_identity=fd_work).create_project_for_rules(
         "typed", "", "中文", token
     )
 
@@ -201,7 +261,7 @@ def test_sidecar_failure_never_reports_partial_success(monkeypatch):
     )
     fd_work = _FDWork(fail_bind=True)
 
-    result = RulesApplicationService(fd_work=fd_work).create_project_for_rules(
+    result = RulesApplicationService(project_identity=fd_work).create_project_for_rules(
         "typed", "", "中文", "token-a"
     )
 
@@ -218,7 +278,7 @@ def test_delete_clears_binding_only_after_project_delete_succeeds(monkeypatch):
         lambda project_id: _project_result(project_id, "CASE A"),
     )
 
-    result = RulesApplicationService(fd_work=fd_work).delete_project_for_rules(7)
+    result = RulesApplicationService(project_identity=fd_work).delete_project_for_rules(7)
 
     assert result["ok"] is True
     assert fd_work.cleared == [7]
@@ -229,10 +289,10 @@ def test_project_list_attaches_bindings_in_one_bulk_read(monkeypatch):
     monkeypatch.setattr(application_capabilities.project_api, "list_project_bindings", lambda: projects)
     fd_work = _FDWork()
 
-    result = RulesApplicationService(fd_work=fd_work).list_project_bindings()
+    result = RulesApplicationService(project_identity=fd_work).list_project_bindings()
 
     assert result == [
-        {"id": 7, "name": "CASE A", "fd_work_bound": True},
-        {"id": 8, "name": "Ordinary", "fd_work_bound": False},
+        {"id": 7, "name": "CASE A", "external_identity_bound": True},
+        {"id": 8, "name": "Ordinary", "external_identity_bound": False},
     ]
     assert result is not projects

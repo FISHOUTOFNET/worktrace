@@ -1609,6 +1609,7 @@ function rulesPanelHarness() {
       return Promise.resolve({ ok: true, project: { id: projectId, name, description, language } });
     },
   };
+  loadJs(context, "fd_work_v5.js");
   loadJs(context, "rules_create_panel_v5.js");
   return { App, element, bridgeCalls };
 }

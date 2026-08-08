@@ -174,4 +174,9 @@
     App.showRecent = function (payload) {
         renderRecent((payload && payload.recent) || []);
     };
+    App.overview = Object.freeze({
+        resetGeneration: function () {
+            App.overviewRequestToken = (App.overviewRequestToken || 0) + 1;
+        }
+    });
 })();

@@ -8,6 +8,7 @@ from worktrace.api.application_capabilities import (
     BackupApplicationService,
     SettingsApplicationService,
 )
+from worktrace.api.application_lifecycle import ApplicationDataLifecycle
 from worktrace.db import CURRENT_SCHEMA_VERSION
 from worktrace.services.secure_backup_service import PAYLOAD_VERSION
 from worktrace.runtime.application_services import build_application_services
@@ -31,10 +32,18 @@ class _FDWork:
     def get_settings_status(self):
         return {"enabled": False}
 
+    def after_local_data_cleared(self):
+        self.clear_all_bindings(delete_database=True)
+
+    def after_database_replaced(self):
+        self.clear_all_bindings(delete_database=False)
+
 
 def test_clear_all_local_data_deletes_sidecar_only_after_main_clear_succeeds(monkeypatch):
     fd_work = _FDWork()
-    service = SettingsApplicationService(fd_work=fd_work)
+    service = SettingsApplicationService(
+        data_lifecycle=ApplicationDataLifecycle((fd_work,))
+    )
     monkeypatch.setattr(
         application_capabilities.settings_api,
         "clear_all_local_data_for_webview",
@@ -49,7 +58,9 @@ def test_clear_all_local_data_deletes_sidecar_only_after_main_clear_succeeds(mon
 
 def test_failed_main_clear_does_not_touch_sidecar(monkeypatch):
     fd_work = _FDWork()
-    service = SettingsApplicationService(fd_work=fd_work)
+    service = SettingsApplicationService(
+        data_lifecycle=ApplicationDataLifecycle((fd_work,))
+    )
     monkeypatch.setattr(
         application_capabilities.settings_api,
         "clear_all_local_data_for_webview",
@@ -63,7 +74,7 @@ def test_failed_main_clear_does_not_touch_sidecar(monkeypatch):
 
 def test_successful_database_replacement_clears_bindings_but_export_does_not(monkeypatch):
     fd_work = _FDWork()
-    service = BackupApplicationService(fd_work=fd_work)
+    service = BackupApplicationService(ApplicationDataLifecycle((fd_work,)))
     monkeypatch.setattr(
         application_capabilities.settings_api,
         "export_encrypted_backup_for_webview",

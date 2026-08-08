@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from worktrace.api.application_capabilities import SettingsApplicationService
+from worktrace.api.application_lifecycle import ApplicationDataLifecycle
 from worktrace.platforms.windows_startup import WindowsStartupRegistration
 
 pytestmark = [pytest.mark.integration, pytest.mark.db, pytest.mark.contract]
@@ -32,7 +33,9 @@ def _service(registry: FakeRegistry) -> SettingsApplicationService:
         executable_path=Path(r"C:\Program Files With Spaces\WorkTrace.exe"),
         registry=registry,
     )
-    return SettingsApplicationService(registration)
+    return SettingsApplicationService(
+        registration, data_lifecycle=ApplicationDataLifecycle(())
+    )
 
 
 def test_settings_status_contains_authoritative_launch_at_login(temp_db) -> None:

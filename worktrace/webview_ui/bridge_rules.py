@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
-from ..integrations.fd_work.limits import FD_WORK_SELECTION_TOKEN_MAX_LENGTH
 from .bridge_fd_work import fd_work_message
 
 from .project_rules_presenter import (
@@ -33,6 +32,7 @@ from .project_rules_presenter import (
 )
 
 logger = logging.getLogger(__name__)
+_EXTERNAL_IDENTITY_PROOF_MAX_LENGTH = 256
 
 
 def _valid_id(value: object) -> bool:
@@ -45,7 +45,7 @@ def _valid_rule_type(value: object) -> bool:
 
 def _valid_selection_token(value: object) -> bool:
     return value is None or (
-        type(value) is str and 0 < len(value) <= FD_WORK_SELECTION_TOKEN_MAX_LENGTH
+        type(value) is str and 0 < len(value) <= _EXTERNAL_IDENTITY_PROOF_MAX_LENGTH
     )
 
 
@@ -416,8 +416,10 @@ class ProjectRulesBridgeMixin:
                     "ok": True,
                     "project": _project_lifecycle_summary(result.get("project") or {}),
                 }
-                if isinstance(result.get("fd_work_binding"), dict):
-                    response["fd_work_binding"] = dict(result["fd_work_binding"])
+                if isinstance(result.get("external_identity_binding"), dict):
+                    response["fd_work_binding"] = dict(
+                        result["external_identity_binding"]
+                    )
                 return response
             return {
                 "ok": False,
@@ -432,10 +434,17 @@ class ProjectRulesBridgeMixin:
             return {"ok": False, "error": "操作无效"}
         try:
             result = dict(
-                self._services.rules.clear_fd_work_binding_for_rules(project_id)
+                self._services.rules.clear_external_project_identity_for_rules(
+                    project_id
+                )
             )
             if result.get("ok") is True:
-                return result
+                return {
+                    "ok": True,
+                    "fd_work_binding": dict(
+                        result.get("external_identity_binding") or {"bound": False}
+                    ),
+                }
             return {
                 "ok": False,
                 "error": fd_work_message(
@@ -476,8 +485,10 @@ class ProjectRulesBridgeMixin:
                     "ok": True,
                     "project": _project_lifecycle_summary(result.get("project") or {}),
                 }
-                if isinstance(result.get("fd_work_binding"), dict):
-                    response["fd_work_binding"] = dict(result["fd_work_binding"])
+                if isinstance(result.get("external_identity_binding"), dict):
+                    response["fd_work_binding"] = dict(
+                        result["external_identity_binding"]
+                    )
                 return response
             return {
                 "ok": False,

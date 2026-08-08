@@ -24,8 +24,10 @@ locator, `get_runtime()`/`set_runtime()`, string service lookup or dynamic
 registry.
 
 `PostPrivacyStartupCoordinator` is the single post-consent startup entry for the
-Collector and optional FD Work runtime. Before authoritative consent, enabling
-the plugin persists preference only and creates or navigates no helper window.
+Collector and a fixed tuple of narrow `PostPrivacyParticipant` capabilities.
+The composition root supplies that tuple explicitly; there is no discovery or
+registry. Before authoritative consent, enabling an optional integration
+persists preference only and creates or navigates no helper window.
 
 Bridge code performs transport validation, stable error translation and explicit
 service calls only. It does not own business invariants, transactions, runtime
@@ -53,11 +55,14 @@ state or database facts.
 | Row runtime overlay | `ActivityRowOverlay` |
 | Exact live-time DTO | `activity_live_clock` |
 | Application composition | `ApplicationServices` |
+| External project identity use-case boundary | `ProjectIdentityIntegrationCapability` |
+| Post-commit external-state invalidation | `ApplicationDataLifecycle` fixed participant tuple |
 | FD Work plugin/privacy/token/binding policy | `FDWorkIntegrationService` |
 | FD Work interaction owner and operation lifetime | `FDWorkInteractionCoordinator` |
 | FD Work helper lifetime/page phase/window mutations | `FDWorkWindowController` |
 | FD Work URL/selectors/picker/fill DOM contract | `FDWorkPageAdapter` / adapter v5 |
 | FD Work helper callback surface | `FDWorkHelperBridge` |
+| Main-window FD Work callback serialization | `FDWorkMainWindowSink` |
 | Frontend exact clock validation/ticking | shared clock functions in `core.js` |
 | Accepted runtime-envelope state and refresh coordination | single store in `init.js` |
 
@@ -231,6 +236,16 @@ project bindings use a lazily-created, independently versioned SQLite sidecar at
 clear-local-data operations invalidate or remove these bindings fail-closed;
 ordinary backup export never includes them.
 
+Core project CRUD remains owned by `project_service`. Project Rules sees only the
+use-case-level `ProjectIdentityIntegrationCapability` and opaque external
+identity proof/binding results; it does not know selection nonce, navigation,
+adapter or picker concepts. The composition root injects the concrete integration
+with core CRUD callbacks, so dependencies are one-way from the integration to the
+application port. Shipping `fd_work_*` DTO names exist only at WebView transport
+compatibility boundaries. Settings and Backup trigger a fixed
+`ApplicationDataLifecycle` participant tuple after successful main-data commits;
+they do not import or instantiate an integration.
+
 FD Work case selection has one interaction owner. With the plugin disabled,
 Project Rules keeps the ordinary editable local project-name field and does not
 create or show the helper. With the plugin enabled, new projects use the FD Work
@@ -263,6 +278,14 @@ Frontend scripts are local classic scripts. `core.js` owns the shared exact cloc
 validator and ticker helpers. `init.js` owns accepted runtime envelope state and
 page refresh coordination. Page modules render backend DTOs and row-owned clocks
 only. They must not infer database business facts or search aliases.
+
+`window.WorkTraceApp` remains the public classic-script namespace, not a shared
+mutable-state owner. Timeline, Statistics, Rules, Settings, Overview and FD Work
+own their transient generation state and expose fixed `resetGeneration` methods.
+The central generation reset bumps the runtime generation, resets the runtime
+store, and invokes those static lifecycle hooks without reading page-private
+fields. FD Work owns picker request, selection-proof and binding-editor state;
+Project Rules calls only the narrow `projectIdentity` editor interface.
 
 Overview, Timeline, Details, Statistics and Export use the same canonical report
 facts. Natural live-second growth is DOM-local and does not trigger heavy page

@@ -42,7 +42,6 @@ from worktrace.services.secure_backup_service import (
     SecureBackupError,
 )
 from worktrace.services.settings_service import set_setting, set_settings
-from worktrace.api.application_capabilities import SettingsApplicationService
 from worktrace.integrations.fd_work.integration_service import FDWorkIntegrationService
 from worktrace.write_gate import DATABASE_RECOVERY_ERROR
 
@@ -358,13 +357,13 @@ def test_bridge_accept_first_run_notice_exception_fallback_keeps_six_field_dto(
     json.loads(json.dumps(result))
 
 
-def test_settings_application_service_delegates_fd_work_enable_and_returns_authority(temp_db):
+def test_settings_bridge_delegates_fd_work_enable_and_returns_authority(temp_db):
     fd_work = FDWorkIntegrationService()
-    service = SettingsApplicationService(fd_work=fd_work)
+    bridge = build_test_bridge(fd_work=fd_work)
 
-    enabled = service.set_fd_work_enabled(True)
+    enabled = bridge.set_fd_work_enabled(True)
     persisted_enabled = FDWorkIntegrationService().get_settings_status()
-    disabled = service.set_fd_work_enabled(False)
+    disabled = bridge.set_fd_work_enabled(False)
 
     assert enabled["ok"] is True
     assert enabled["status"]["fd_work"] == _fd_status(True)

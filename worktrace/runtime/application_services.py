@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from ..api.app_api import ApplicationControlService
+from ..api.application_lifecycle import ApplicationDataLifecycle
 from ..api.application_capabilities import (
     BackupApplicationService,
     OverviewApplicationService,
@@ -26,7 +27,6 @@ def build_application_services(
     runtime: AppRuntime,
     *,
     fd_work_interaction_coordinator=None,
-    fd_work_window_controller=None,
     paths=None,
 ) -> ApplicationServices:
     maintenance = database_maintenance_service.MAINTENANCE_COORDINATOR
@@ -43,22 +43,26 @@ def build_application_services(
     fd_work = FDWorkIntegrationService(
         draft_builder=FDWorkEntryDraftBuilder(binding_verifier=binding_service),
         binding_service=binding_service,
-        interaction_coordinator=(
-            fd_work_interaction_coordinator or fd_work_window_controller
-        ),
+        interaction_coordinator=fd_work_interaction_coordinator,
+        project_creator=project_api.create_project_for_rules,
+        project_updater=project_api.update_project_for_rules,
+        project_reader=project_api.get_project,
     )
+    data_lifecycle = ApplicationDataLifecycle((fd_work,))
     base_app_control = ApplicationControlService(runtime, maintenance)
-    app_control = PostPrivacyStartupCoordinator(base_app_control, fd_work)
+    app_control = PostPrivacyStartupCoordinator(
+        base_app_control, participants=(fd_work,)
+    )
     return ApplicationServices(
         app_control=app_control,
         runtime_view=runtime,
         overview=OverviewApplicationService(),
-        settings=SettingsApplicationService(fd_work=fd_work),
-        backup=BackupApplicationService(fd_work=fd_work),
+        settings=SettingsApplicationService(data_lifecycle=data_lifecycle),
+        backup=BackupApplicationService(data_lifecycle),
         statistics=StatisticsApplicationService(),
         timeline=TimelineApplicationService(),
         fd_work=fd_work,
-        rules=RulesApplicationService(fd_work=fd_work),
+        rules=RulesApplicationService(project_identity=fd_work),
     )
 
 

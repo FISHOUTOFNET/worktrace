@@ -49,8 +49,11 @@ def test_edge_runner_is_hard_failure_and_windows_node_scope_runs_it() -> None:
     assert "process.exitCode = 1" in runner
     assert "worktrace-fdwork-edge-" in runner
     assert "--allow-file-access-from-files" in runner
-    assert "--dump-dom" in runner
-    assert "status: resultCaptured ? 0 : status" in runner
+    assert "--remote-debugging-port=0" in runner
+    assert "DevToolsActivePort" in runner
+    assert '"Runtime.evaluate"' in runner
+    assert "MutationObserver" in runner
+    assert "--dump-dom" not in runner
     assert "existsSync(resolvedProfile)" in runner
     assert "skip" not in runner.casefold()
     assert "node scripts/run_fd_work_edge_fixture.mjs" in workflow

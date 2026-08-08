@@ -117,14 +117,30 @@ function harness() {
     },
   };
   vm.createContext(context);
-  for (const file of ["core.js", "init_fd_work_v5.js"]) {
-    vm.runInContext(
-      fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", file), "utf8"),
-      context,
-      { filename: file }
-    );
-  }
+  vm.runInContext(
+    fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/core.js"), "utf8"),
+    context,
+    { filename: "core.js" }
+  );
   const App = context.window.WorkTraceApp;
+  const noOpLifecycle = { resetGeneration() {} };
+  App.overview = noOpLifecycle;
+  App.timeline = {
+    resetGeneration() {
+      App.timelineLoaded = false;
+      App.selectedTimelineAnchorActivityId = null;
+      App.selectedTimelineWasInProgress = false;
+    },
+  };
+  App.statistics = noOpLifecycle;
+  App.rules = noOpLifecycle;
+  App.settings = noOpLifecycle;
+  App.fdWork = noOpLifecycle;
+  vm.runInContext(
+    fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/init_fd_work_v5.js"), "utf8"),
+    context,
+    { filename: "init_fd_work_v5.js" }
+  );
   Object.assign(App, {
     requestCoordinator: {
       bumpDataEpoch() {},

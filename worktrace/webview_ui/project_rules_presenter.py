@@ -207,7 +207,7 @@ def _project_rules_project_payload(project: dict[str, Any]) -> dict[str, Any]:
         "is_excluded": is_excluded,
         "is_system": is_system,
         "fd_work_bound": _project_rules_bool(
-            project.get("fd_work_bound"), default=False
+            project.get("external_identity_bound"), default=False
         ),
         "editable": editable,
         "can_toggle": can_toggle,

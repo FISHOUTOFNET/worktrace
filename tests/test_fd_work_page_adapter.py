@@ -15,7 +15,12 @@ from worktrace.integrations.fd_work.window_executor import (
 )
 
 
-pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.collector_runtime,
+    pytest.mark.contract,
+    pytest.mark.parallel_safe,
+]
 
 
 def _operation(**overrides):

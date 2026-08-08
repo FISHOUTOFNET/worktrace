@@ -44,23 +44,18 @@ class _FDWork:
     def set_privacy_authorized(self, authorized):
         self.authorizations.append(authorized)
 
-    def get_settings_status(self):
-        return {"enabled": self.enabled}
-
-    def prepare_session(self, show_login_if_required=True):
-        self.prepare_calls.append(("runtime", show_login_if_required))
-        return {"ok": True}
-
-    def prepare_window_before_start(self, show_login_if_required=True):
-        self.prepare_calls.append(("prestart", show_login_if_required))
-        return {"ok": True}
+    def prepare_after_privacy(self, *, pre_start):
+        if self.enabled:
+            self.prepare_calls.append(
+                ("prestart" if pre_start else "runtime", False)
+            )
 
 
 def test_unaccepted_privacy_never_authorizes_or_prepares_fd_work():
     app_control = _AppControl(False)
     fd_work = _FDWork()
     coordinator = PostPrivacyStartupCoordinator(
-        app_control, fd_work, privacy_authorized_reader=lambda: False
+        app_control, participants=(fd_work,), privacy_authorized_reader=lambda: False
     )
 
     result = coordinator.start_if_authorized(pre_start=True)
@@ -74,7 +69,7 @@ def test_authorized_start_is_idempotent_and_selects_prestart_or_runtime_path():
     app_control = _AppControl(True)
     fd_work = _FDWork()
     coordinator = PostPrivacyStartupCoordinator(
-        app_control, fd_work, privacy_authorized_reader=lambda: True
+        app_control, participants=(fd_work,), privacy_authorized_reader=lambda: True
     )
 
     first = coordinator.start_if_authorized(pre_start=True)
@@ -90,7 +85,7 @@ def test_accepted_privacy_authorizes_fd_work_even_if_collector_start_fails():
     app_control = _AppControl(False)
     fd_work = _FDWork()
     coordinator = PostPrivacyStartupCoordinator(
-        app_control, fd_work, privacy_authorized_reader=lambda: True
+        app_control, participants=(fd_work,), privacy_authorized_reader=lambda: True
     )
 
     result = coordinator.accept_privacy_notice_and_start()

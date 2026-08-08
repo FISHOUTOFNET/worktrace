@@ -210,4 +210,20 @@
         banner.textContent = message || "加载项目规则失败";
     };
     App.clearRulesError = function () { App.showRulesError(""); };
+
+    function resetRulesGeneration() {
+        App.rulesLoaded = false;
+        App.lastProjectRulesData = null;
+        App.rulesLoadPromise = null;
+        App.projectsCache = null;
+        App.editingProjectsCache = null;
+        App.filterProjectsCache = null;
+        App.projectsLoading = false;
+        App.projectsLoadPromise = null;
+        App.rulesRequestToken = (App.rulesRequestToken || 0) + 1;
+        if (typeof App.resetRulesTransientUi === "function") {
+            App.resetRulesTransientUi({ restoreFocus: false });
+        }
+    }
+    App.rules = Object.freeze({ resetGeneration: resetRulesGeneration });
 })();

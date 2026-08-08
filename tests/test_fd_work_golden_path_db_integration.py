@@ -85,6 +85,9 @@ def _integration(state_path):
         enabled_reader=lambda: True,
         enabled_writer=lambda _enabled: None,
         picker_result_callback=delivered.append,
+        project_creator=project_api.create_project_for_rules,
+        project_updater=project_api.update_project_for_rules,
+        project_reader=project_api.get_project,
     )
     service.set_privacy_authorized(True)
     return service, coordinator, delivered
@@ -111,14 +114,14 @@ def test_real_picker_to_project_binding_golden_path_survives_restart_and_deletes
         request_id="drawer-golden",
         label="TEST MATTER A",
     )
-    rules = RulesApplicationService(fd_work=integration)
+    rules = RulesApplicationService(project_identity=integration)
 
     created = rules.create_project_for_rules(
         "TEST MATTER A", "test description", "中文", token
     )
 
     assert created["ok"] is True
-    assert created["fd_work_binding"] == {"bound": True, "verified": True}
+    assert created["external_identity_binding"] == {"bound": True, "verified": True}
     project_id = created["project"]["id"]
     project = project_api.get_project(project_id)
     binding = integration._binding_service.repository.get_binding(project_id)
@@ -132,7 +135,7 @@ def test_real_picker_to_project_binding_golden_path_survives_restart_and_deletes
     listed = rules.list_project_bindings()
     readback = next(item for item in listed if item["id"] == project_id)
     assert readback["name"] == "TEST MATTER A"
-    assert readback["fd_work_bound"] is True
+    assert readback["external_identity_bound"] is True
 
     reused = rules.create_project_for_rules(
         "TEST MATTER A", "duplicate", "中文", token
@@ -144,11 +147,14 @@ def test_real_picker_to_project_binding_golden_path_survives_restart_and_deletes
         binding_service=_binding_service(state_path),
         enabled_reader=lambda: True,
         enabled_writer=lambda _enabled: None,
+        project_creator=project_api.create_project_for_rules,
+        project_updater=project_api.update_project_for_rules,
+        project_reader=project_api.get_project,
     )
-    restarted_rules = RulesApplicationService(fd_work=restarted_integration)
+    restarted_rules = RulesApplicationService(project_identity=restarted_integration)
     restarted = restarted_rules.list_project_bindings()
     restart_readback = next(item for item in restarted if item["id"] == project_id)
-    assert restart_readback["fd_work_bound"] is True
+    assert restart_readback["external_identity_bound"] is True
 
     deleted = restarted_rules.delete_project_for_rules(project_id)
     assert deleted["ok"] is True
@@ -181,7 +187,7 @@ def test_real_sidecar_binding_failure_never_returns_project_success(temp_db, tmp
             """
         )
 
-    result = RulesApplicationService(fd_work=integration).create_project_for_rules(
+    result = RulesApplicationService(project_identity=integration).create_project_for_rules(
         "TEST MATTER B", "", "中文", token
     )
 
@@ -208,9 +214,12 @@ def test_real_sidecar_binding_failure_never_returns_project_success(temp_db, tmp
         binding_service=restarted_bindings,
         enabled_reader=lambda: True,
         enabled_writer=lambda _enabled: None,
+        project_creator=project_api.create_project_for_rules,
+        project_updater=project_api.update_project_for_rules,
+        project_reader=project_api.get_project,
     )
     deleted = RulesApplicationService(
-        fd_work=restarted_integration
+        project_identity=restarted_integration
     ).delete_project_for_rules(project["id"])
     assert deleted["ok"] is True
     assert restarted_bindings.repository.get_binding(project["id"]) is None

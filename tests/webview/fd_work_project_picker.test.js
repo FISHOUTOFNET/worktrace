@@ -11,6 +11,10 @@ const initSource = fs.readFileSync(
   path.join(__dirname, "../../worktrace/webview_ui/js/init_fd_work_v5.js"),
   "utf8"
 );
+const fdWorkSource = fs.readFileSync(
+  path.join(__dirname, "../../worktrace/webview_ui/js/fd_work_v5.js"),
+  "utf8"
+);
 const html = fs.readFileSync(
   path.join(__dirname, "../../worktrace/webview_ui/index_fd_work_v5.html"),
   "utf8"
@@ -26,13 +30,14 @@ test("project Drawer contains an explicit readonly FD Work picker and no local l
 test("main bridge exports picker open and removes inline case search", () => {
   assert.match(initSource, /openFDWorkCasePicker:\s*fixedBridgeMethod\("open_fd_work_case_picker"\)/);
   assert.doesNotMatch(initSource, /searchFDWorkCases/);
-  assert.match(rulesSource, /receiveFDWorkCasePickerResult/);
-  assert.match(rulesSource, /openFDWorkCasePicker/);
+  assert.match(fdWorkSource, /receiveFDWorkCasePickerResult/);
+  assert.match(fdWorkSource, /openFDWorkCasePicker/);
+  assert.match(rulesSource, /App\.projectIdentity/);
 });
 
 test("picker UI consumes operation status and never the ambiguous status field", () => {
-  assert.match(rulesSource, /result\.operation_status\s*===\s*["']authentication_required["']/);
-  assert.doesNotMatch(rulesSource, /result\.status\s*===\s*["']authentication_required["']/);
+  assert.match(fdWorkSource, /result\.operation_status\s*===\s*["']authentication_required["']/);
+  assert.doesNotMatch(fdWorkSource, /result\.status\s*===\s*["']authentication_required["']/);
 });
 
 test("project name focus click input never invoke FD Work helper operations", () => {
@@ -49,17 +54,18 @@ test("project name focus click input never invoke FD Work helper operations", ()
   assert.doesNotMatch(rulesSource, /project-name[\s\S]{0,500}showFDWorkLogin/);
 });
 
-test("picker state is bound to request id and current Drawer session", () => {
-  assert.match(rulesSource, /rulesFDWorkPickerRequestId/);
-  assert.match(rulesSource, /rulesFDWorkPickerPending/);
-  assert.match(rulesSource, /rulesPanelSessionToken/);
-  const receiver = rulesSource.slice(
-    rulesSource.indexOf("receiveFDWorkCasePickerResult"),
-    rulesSource.indexOf("receiveFDWorkCasePickerResult") + 1800
+test("picker state is private and bound to request id and current Drawer session", () => {
+  assert.doesNotMatch(rulesSource, /rulesFDWorkPickerRequestId|rulesFDWorkPickerPending/);
+  assert.match(fdWorkSource, /pickerRequestId/);
+  assert.match(fdWorkSource, /pickerPending/);
+  assert.match(fdWorkSource, /rulesPanelSessionToken/);
+  const receiver = fdWorkSource.slice(
+    fdWorkSource.indexOf("receiveIdentityPickerResult"),
+    fdWorkSource.indexOf("receiveIdentityPickerResult") + 1800
   );
   assert.match(receiver, /request_id/);
-  assert.match(receiver, /rulesFDWorkPickerRequestId/);
-  assert.match(receiver, /rulesFDWorkPickerDrawerSession/);
+  assert.match(receiver, /pickerRequestId/);
+  assert.match(receiver, /pickerDrawerSession/);
 });
 
 test("save is fail closed without a picker proof and detects label tampering", () => {
@@ -67,15 +73,15 @@ test("save is fail closed without a picker proof and detects label tampering", (
     rulesSource.indexOf("function savePanelProject"),
     rulesSource.indexOf("function savePanelRule")
   );
-  assert.match(saveBody, /case_selection_required|请先选择 FD Work 案件/);
-  assert.match(saveBody, /rulesFDWorkSelectionToken/);
-  assert.match(saveBody, /rulesFDWorkSelectedLabel/);
-  assert.match(saveBody, /selectedLabel[^\n]*!==|!==[^\n]*selectedLabel/);
+  assert.match(saveBody, /projectIdentity\.buildSavePayload/);
+  assert.doesNotMatch(saveBody, /fdWorkEnabled|rulesFDWorkSelectionToken/);
+  assert.match(fdWorkSource, /请先选择 FD Work 案件/);
+  assert.match(fdWorkSource, /displayedLabel[^\n]*!==|!==[^\n]*displayedLabel/);
 });
 
 test("picker pending disables the explicit button and cancel restores local UI state", () => {
-  assert.match(rulesSource, /rulesFDWorkPickerPending/);
-  assert.match(rulesSource, /rules-panel-fd-work-pick/);
-  assert.match(rulesSource, /picker_canceled/);
-  assert.match(rulesSource, /取消关联/);
+  assert.match(fdWorkSource, /pickerPending/);
+  assert.match(fdWorkSource, /rules-panel-fd-work-pick/);
+  assert.match(fdWorkSource, /picker_canceled/);
+  assert.match(fdWorkSource, /取消关联/);
 });

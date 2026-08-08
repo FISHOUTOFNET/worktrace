@@ -4,8 +4,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from worktrace.api import export_api, statistics_api
+from worktrace.api import export_api, project_api, statistics_api
 from worktrace.api.app_api import ApplicationControlService
+from worktrace.api.application_lifecycle import ApplicationDataLifecycle
 from worktrace.api.application_capabilities import (
     BackupApplicationService,
     OverviewApplicationService,
@@ -15,6 +16,7 @@ from worktrace.api.application_capabilities import (
     TimelineApplicationService,
 )
 from worktrace.api.application_services import ApplicationServices
+from worktrace.api.external_project_identity import LocalProjectIdentityCapability
 from worktrace.runtime.contracts import RuntimeStartResult
 from worktrace.webview_ui.bridge import WebViewBridge
 
@@ -665,7 +667,18 @@ class FakeFDWorkCapability:
         self.shutdown_calls = 0
 
     def get_settings_status(self):
-        return {"supported": True, "enabled": self.enabled}
+        return {
+            "supported": True,
+            "enabled": self.enabled,
+            "session_state": "disabled",
+            "page_phase": "none",
+            "operation": "none",
+            "interaction_owner": "none",
+            "ready": False,
+            "login_required": False,
+            "error_code": None,
+            "navigation_generation": 0,
+        }
 
     def set_enabled(self, enabled):
         self.enabled = bool(enabled)
@@ -704,6 +717,11 @@ def build_test_application_services(
 ) -> ApplicationServices:
     runtime_capability = runtime if runtime is not None else TestRuntime()
     maintenance_capability = maintenance if maintenance is not None else TestMaintenance()
+    data_lifecycle = ApplicationDataLifecycle(())
+    local_identity = LocalProjectIdentityCapability(
+        create_project=project_api.create_project_for_rules,
+        update_project=project_api.update_project_for_rules,
+    )
     return ApplicationServices(
         app_control=ApplicationControlService(
             runtime_capability,
@@ -711,12 +729,20 @@ def build_test_application_services(
         ),
         runtime_view=runtime_capability,
         overview=overview if overview is not None else OverviewApplicationService(),
-        settings=settings if settings is not None else SettingsApplicationService(),
-        backup=backup if backup is not None else BackupApplicationService(),
+        settings=(
+            settings
+            if settings is not None
+            else SettingsApplicationService(data_lifecycle=data_lifecycle)
+        ),
+        backup=backup if backup is not None else BackupApplicationService(data_lifecycle),
         statistics=statistics if statistics is not None else StatisticsApplicationService(),
         timeline=timeline if timeline is not None else TimelineApplicationService(),
         fd_work=fd_work if fd_work is not None else FakeFDWorkCapability(),
-        rules=rules if rules is not None else RulesApplicationService(),
+        rules=(
+            rules
+            if rules is not None
+            else RulesApplicationService(project_identity=local_identity)
+        ),
     )
 
 

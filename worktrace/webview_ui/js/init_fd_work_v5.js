@@ -234,57 +234,14 @@
     };
 
     function resetClientGeneration(reason) {
-        if (App.timelineAutosaveTimer) window.clearTimeout(App.timelineAutosaveTimer);
-        App.timelineAutosaveTimer = null;
-        App.timelineAutosaveQueued = false;
         if (App.requestCoordinator) App.requestCoordinator.bumpDataEpoch();
-        App.timelineLoaded = false;
-        App.statisticsLoaded = false;
-        App.rulesLoaded = false;
-        App.settingsLoaded = false;
-        App.currentSessions = [];
-        App.selectedProjectionInstanceKey = null;
-        App.selectedProjectionRevision = null;
-        App.selectedTimelineAnchorActivityId = null;
-        App.selectedTimelineWasInProgress = false;
-        App.editingSession = null;
-        // Discard any in-flight draft snapshot and queued context change:
-        // a generation reset (database replacement / clear) invalidates the
-        // old baseline, so the old draft must not be re-submitted against
-        // the new generation.
-        App.submittedDraft = null;
-        App.pendingContextChange = null;
-        App.editSaving = false;
-        App.timelineCompositionActive = false;
-        App.timelineDurationDraftTouched = false;
-        App.detailsOwner = null;
-        App.timelineOwner = null;
-        App.mutationOwner = null;
-        App.mutationState = "idle";
-        App.detailsInFlight = {};
-        App.projectsCache = null;
-        App.projectsLoading = false;
-        App.projectsLoadPromise = null;
-        App.lastTimelineData = null;
-        App.lastProjectRulesData = null;
-        App.lastSessionDetailsViewModel = null;
-        App.lastSessionActivitySummaryViewModel = null;
+        if (App.overview && App.overview.resetGeneration) App.overview.resetGeneration();
+        if (App.timeline && App.timeline.resetGeneration) App.timeline.resetGeneration();
+        if (App.statistics && App.statistics.resetGeneration) App.statistics.resetGeneration();
+        if (App.rules && App.rules.resetGeneration) App.rules.resetGeneration();
+        if (App.settings && App.settings.resetGeneration) App.settings.resetGeneration();
+        if (App.fdWork && App.fdWork.resetGeneration) App.fdWork.resetGeneration();
         App.lastRefreshState = null;
-        App.statisticsAcceptedPayload = null;
-        App.statisticsSnapshotRevision = "";
-        App.statisticsSelection = null;
-        App.statisticsDraftSelection = null;
-        App.statisticsDraftDirty = false;
-        App.statisticsSelectionInitialized = false;
-        if (App.statisticsQueryTimer) window.clearTimeout(App.statisticsQueryTimer);
-        App.statisticsQueryTimer = null;
-        if (typeof App.clearStatisticsPresentation === "function") {
-            App.clearStatisticsPresentation();
-        }
-        if (typeof App.setStatisticsLoading === "function") {
-            App.setStatisticsLoading(false);
-        }
-        App.rulesLoadPromise = null;
         App.activePageRefreshInFlight = false;
         App.activePageRefreshPromise = null;
         App.activePageRefreshPending = null;
@@ -292,15 +249,8 @@
         App.liveClockContractRefreshRequested = false;
         App.liveClockContractViolation = null;
         App.liveClockViolationKeys = {};
-        App.firstRunNoticeLoaded = false;
-        App.firstRunNoticeLoading = false;
         liveRuntimeStore.reset();
         App._monotonicRenderState = {};
-        App.overviewRequestToken = (App.overviewRequestToken || 0) + 1;
-        App.timelineRequestToken = (App.timelineRequestToken || 0) + 1;
-        App.statisticsRequestToken = (App.statisticsRequestToken || 0) + 1;
-        App.rulesRequestToken = (App.rulesRequestToken || 0) + 1;
-        App.settingsRequestToken = (App.settingsRequestToken || 0) + 1;
         App.lastClientGenerationResetReason = String(reason || "data_generation_changed");
     }
     App.resetClientGeneration = resetClientGeneration;

@@ -3,23 +3,29 @@
 from __future__ import annotations
 
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 from ..services import privacy_gate_service
+
+
+class PostPrivacyParticipant(Protocol):
+    def set_privacy_authorized(self, authorized: bool) -> None: ...
+
+    def prepare_after_privacy(self, *, pre_start: bool) -> None: ...
 
 
 class PostPrivacyStartupCoordinator:
     def __init__(
         self,
         app_control,
-        fd_work,
+        participants: tuple[PostPrivacyParticipant, ...],
         *,
         privacy_authorized_reader: Callable[[], bool] = (
             privacy_gate_service.is_sensitive_runtime_allowed
         ),
     ) -> None:
         self._app_control = app_control
-        self._fd_work = fd_work
+        self._participants = participants
         self._lock = threading.RLock()
         self._privacy_authorized_reader = privacy_authorized_reader
         self._started = False
@@ -32,11 +38,11 @@ class PostPrivacyStartupCoordinator:
             result = dict(self._app_control.start_collection_after_privacy_gate())
             authorized = self._privacy_authorized()
             if not authorized:
-                self._fd_work.set_privacy_authorized(False)
+                self._set_participants_authorized(False)
                 self._result = result
                 return result
-            self._fd_work.set_privacy_authorized(True)
-            self._safe_prepare_fd_work(pre_start=pre_start)
+            self._set_participants_authorized(True)
+            self._prepare_participants(pre_start=pre_start)
             self._started = True
             self._result = result
             return dict(result)
@@ -47,10 +53,10 @@ class PostPrivacyStartupCoordinator:
                 return dict(self._result)
             result = dict(self._app_control.accept_privacy_notice_and_start())
             if result.get("accepted") is not True:
-                self._fd_work.set_privacy_authorized(False)
+                self._set_participants_authorized(False)
                 return result
-            self._fd_work.set_privacy_authorized(True)
-            self._safe_prepare_fd_work(pre_start=False)
+            self._set_participants_authorized(True)
+            self._prepare_participants(pre_start=False)
             self._started = True
             self._result = dict(result)
             return result
@@ -61,19 +67,19 @@ class PostPrivacyStartupCoordinator:
         except Exception:
             return False
 
-    def _prepare_fd_work(self, *, pre_start: bool) -> None:
-        if self._fd_work.get_settings_status().get("enabled") is not True:
-            return
-        if pre_start:
-            self._fd_work.prepare_window_before_start(show_login_if_required=False)
-        else:
-            self._fd_work.prepare_session(show_login_if_required=False)
+    def _set_participants_authorized(self, authorized: bool) -> None:
+        for participant in self._participants:
+            try:
+                participant.set_privacy_authorized(authorized)
+            except Exception:
+                continue
 
-    def _safe_prepare_fd_work(self, *, pre_start: bool) -> None:
-        try:
-            self._prepare_fd_work(pre_start=pre_start)
-        except Exception:
-            return
+    def _prepare_participants(self, *, pre_start: bool) -> None:
+        for participant in self._participants:
+            try:
+                participant.prepare_after_privacy(pre_start=pre_start)
+            except Exception:
+                continue
 
     def get_collection_status(self):
         return self._app_control.get_collection_status()
@@ -88,4 +94,4 @@ class PostPrivacyStartupCoordinator:
         self._app_control.request_shutdown()
 
 
-__all__ = ["PostPrivacyStartupCoordinator"]
+__all__ = ["PostPrivacyParticipant", "PostPrivacyStartupCoordinator"]

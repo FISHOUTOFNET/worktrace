@@ -1988,4 +1988,33 @@
             });
         }, "切换日期");
     };
+
+    function resetTimelineGeneration() {
+        if (App.timelineAutosaveTimer) window.clearTimeout(App.timelineAutosaveTimer);
+        App.timelineAutosaveTimer = null;
+        App.timelineAutosaveQueued = false;
+        App.timelineLoaded = false;
+        App.currentSessions = [];
+        App.selectedProjectionInstanceKey = null;
+        App.selectedProjectionRevision = null;
+        App.selectedTimelineAnchorActivityId = null;
+        App.selectedTimelineWasInProgress = false;
+        App.editingSession = null;
+        App.submittedDraft = null;
+        App.pendingContextChange = null;
+        App.editSaving = false;
+        App.timelineCompositionActive = false;
+        App.timelineDurationDraftTouched = false;
+        App.detailsOwner = null;
+        App.timelineOwner = null;
+        App.mutationOwner = null;
+        App.mutationState = "idle";
+        App.detailsInFlight = {};
+        App.lastTimelineData = null;
+        App.lastSessionDetailsViewModel = null;
+        App.lastSessionActivitySummaryViewModel = null;
+        App.timelineRequestToken = (App.timelineRequestToken || 0) + 1;
+        resetTimelineTransientUi();
+    }
+    App.timeline = Object.freeze({ resetGeneration: resetTimelineGeneration });
 })();

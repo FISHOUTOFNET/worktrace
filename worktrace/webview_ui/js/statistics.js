@@ -465,4 +465,21 @@
         }).finally(function () { setStatisticsExportSaving(false); });
     }
     App.exportStatisticsCsv = exportStatisticsCsv;
+
+    function resetStatisticsGeneration() {
+        App.statisticsLoaded = false;
+        App.statisticsAcceptedPayload = null;
+        App.statisticsSnapshotRevision = "";
+        App.statisticsSelection = null;
+        App.statisticsDraftSelection = null;
+        App.statisticsDraftDirty = false;
+        App.statisticsSelectionInitialized = false;
+        App.statisticsRequestToken = (App.statisticsRequestToken || 0) + 1;
+        if (App.statisticsQueryTimer) window.clearTimeout(App.statisticsQueryTimer);
+        App.statisticsQueryTimer = null;
+        clearStatisticsPresentation();
+        setStatisticsLoading(false);
+        setStatisticsExportStatus("", "");
+    }
+    App.statistics = Object.freeze({ resetGeneration: resetStatisticsGeneration });
 })();

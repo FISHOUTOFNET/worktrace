@@ -8,7 +8,8 @@ from __future__ import annotations
 from typing import Any, Protocol, runtime_checkable, TYPE_CHECKING
 
 from ..platforms.windows_startup import WindowsStartupRegistration
-from ..integrations.fd_work.contracts import FDWorkEntryError
+from .application_lifecycle import ApplicationDataLifecycle
+from .external_project_identity import ProjectIdentityIntegrationCapability
 
 from . import (
     export_api,
@@ -38,7 +39,6 @@ class SettingsCapability(Protocol):
     def recover_database_maintenance_for_webview(self) -> dict[str, Any]: ...
     def clear_all_local_data_for_webview(self, confirm_text) -> dict[str, Any]: ...
     def set_launch_at_login(self, enabled) -> dict[str, Any]: ...
-    def set_fd_work_enabled(self, enabled) -> dict[str, Any]: ...
 
 
 @runtime_checkable
@@ -111,7 +111,7 @@ class RulesCapability(Protocol):
     def list_project_bindings(self) -> list[dict[str, Any]]: ...
     def create_project_for_rules(self, name, description, language, selection_token=None) -> dict[str, Any]: ...
     def update_project_for_rules(self, project_id, name, description, language, selection_token=None) -> dict[str, Any]: ...
-    def clear_fd_work_binding_for_rules(self, project_id) -> dict[str, Any]: ...
+    def clear_external_project_identity_for_rules(self, project_id) -> dict[str, Any]: ...
     def set_project_enabled_for_rules(self, project_id, enabled) -> dict[str, Any]: ...
     def set_excluded_rules_enabled(self, enabled) -> dict[str, Any]: ...
     def archive_project_for_rules(self, project_id) -> dict[str, Any]: ...
@@ -153,18 +153,15 @@ class SettingsApplicationService:
     def __init__(
         self,
         startup_registration: WindowsStartupRegistration | None = None,
-        fd_work: FDWorkCapability | None = None,
+        *,
+        data_lifecycle: ApplicationDataLifecycle,
     ) -> None:
+        self._data_lifecycle = data_lifecycle
         self._startup_registration = (
             startup_registration
             if startup_registration is not None
             else WindowsStartupRegistration()
         )
-        if fd_work is None:
-            from ..integrations.fd_work.integration_service import FDWorkIntegrationService
-
-            fd_work = FDWorkIntegrationService()
-        self._fd_work = fd_work
 
     def get_first_run_notice_for_webview(self):
         return settings_api.get_first_run_notice_for_webview()
@@ -175,7 +172,6 @@ class SettingsApplicationService:
             return result
         status = dict(result["status"])
         status["launch_at_login"] = self._launch_at_login_status()
-        status["fd_work"] = self._fd_work.get_settings_status()
         return {"ok": True, "status": status}
 
     def recover_database_maintenance_for_webview(self):
@@ -183,11 +179,11 @@ class SettingsApplicationService:
 
     def clear_all_local_data_for_webview(self, confirm_text):
         result = settings_api.clear_all_local_data_for_webview(confirm_text)
-        if result.get("ok") is True:
-            try:
-                self._fd_work.clear_all_bindings(delete_database=True)
-            except Exception:
-                result["fd_work_binding_warning"] = "FD Work 关联清理失败，当前会话已停止使用旧关联"
+        if (
+            result.get("ok") is True
+            and not self._data_lifecycle.after_local_data_cleared()
+        ):
+            result["external_state_warning"] = "外部项目关联清理失败，旧关联已在当前会话失效"
         return result
 
     def set_launch_at_login(self, enabled):
@@ -226,29 +222,6 @@ class SettingsApplicationService:
             }
         return {"ok": True, "status": status}
 
-    def set_fd_work_enabled(self, enabled):
-        if enabled is not True and enabled is not False:
-            return {
-                "ok": False,
-                "error": "请选择有效的 FD Work 插件状态",
-                "status": self.get_settings_privacy_status().get("status"),
-            }
-        error = None
-        try:
-            self._fd_work.set_enabled(enabled)
-        except Exception:
-            error = "设置 FD Work 插件失败"
-        status_result = self.get_settings_privacy_status()
-        status = status_result.get("status")
-        actual = bool(
-            isinstance(status, dict)
-            and isinstance(status.get("fd_work"), dict)
-            and status["fd_work"].get("enabled") is True
-        )
-        if error is not None or actual is not enabled:
-            return {"ok": False, "error": error or "FD Work 插件状态未能保存", "status": status}
-        return {"ok": True, "status": status}
-
     def _launch_at_login_status(self) -> dict[str, bool]:
         supported = self._startup_registration.supported
         return {
@@ -262,8 +235,8 @@ class SettingsApplicationService:
 class BackupApplicationService:
     """Concrete backup capability delegating to settings_api backup functions."""
 
-    def __init__(self, fd_work: FDWorkCapability | None = None) -> None:
-        self._fd_work = fd_work
+    def __init__(self, data_lifecycle: ApplicationDataLifecycle) -> None:
+        self._data_lifecycle = data_lifecycle
 
     def export_encrypted_backup_for_webview(self, output_path, passphrase, confirm_passphrase):
         return settings_api.export_encrypted_backup_for_webview(
@@ -277,11 +250,11 @@ class BackupApplicationService:
         result = settings_api.import_encrypted_backup_for_webview(
             input_path, passphrase, confirm_text
         )
-        if result.get("ok") is True and self._fd_work is not None:
-            try:
-                self._fd_work.clear_all_bindings(delete_database=False)
-            except Exception:
-                result["fd_work_binding_warning"] = "数据库已替换，但 FD Work 关联清理失败，当前会话已停止使用旧关联"
+        if (
+            result.get("ok") is True
+            and not self._data_lifecycle.after_database_replaced()
+        ):
+            result["external_state_warning"] = "数据库已替换，旧外部项目关联已在当前会话失效"
         return result
 
 
@@ -412,105 +385,36 @@ class TimelineApplicationService:
 class RulesApplicationService:
     """Concrete rules capability delegating to project_api, rule_api, rule_history_api."""
 
-    def __init__(self, fd_work: FDWorkCapability | None = None) -> None:
-        if fd_work is None:
-            from ..integrations.fd_work.integration_service import FDWorkIntegrationService
-
-            fd_work = FDWorkIntegrationService()
-        self._fd_work = fd_work
+    def __init__(
+        self, project_identity: ProjectIdentityIntegrationCapability
+    ) -> None:
+        self._project_identity = project_identity
 
     def list_project_bindings(self):
-        projects = [dict(project) for project in project_api.list_project_bindings()]
-        try:
-            status = self._fd_work.get_settings_status()
-        except Exception:
-            status = {}
-        if status.get("enabled") is not True:
-            return projects
-        try:
-            bound_ids = self._fd_work.list_bound_project_ids()
-        except Exception:
-            bound_ids = set()
-        for project in projects:
-            project["fd_work_bound"] = int(project.get("id") or 0) in bound_ids
-        return projects
+        return self._project_identity.list_project_identities(
+            project_api.list_project_bindings()
+        )
 
-    def create_project_for_rules(self, name, description, language, selection_token=None):
-        enabled = self._fd_work_enabled()
-        if enabled and selection_token is None:
-            return {"ok": False, "error": "case_selection_required"}
-        if selection_token is not None:
-            try:
-                return self._fd_work.create_bound_project(
-                    name, description, language, selection_token
-                )
-            except FDWorkEntryError as exc:
-                return {"ok": False, "error": exc.code}
-            except Exception:
-                return {"ok": False, "error": "fd_work_persistence_unconfirmed"}
-        result = project_api.create_project_for_rules(name, description, language)
-        if result.get("ok") is True:
-            result["fd_work_binding"] = {"bound": False}
-        return result
+    def create_project_for_rules(
+        self, name, description, language, external_identity_proof=None
+    ):
+        return self._project_identity.create_project(
+            name, description, language, external_identity_proof
+        )
 
     def update_project_for_rules(
-        self, project_id, name, description, language, selection_token=None
+        self, project_id, name, description, language, external_identity_proof=None
     ):
-        canonical_name = name
-        current = project_api.get_project(project_id)
-        name_changed = bool(current) and str(current.get("name") or "") != str(name).strip()
-        enabled = self._fd_work_enabled()
-        if enabled and name_changed and selection_token is None:
-            return {"ok": False, "error": "case_selection_required"}
-        if selection_token is not None:
-            try:
-                return self._fd_work.rebind_project(
-                    int(project_id), name, description, language, selection_token
-                )
-            except FDWorkEntryError as exc:
-                return {"ok": False, "error": exc.code}
-            except Exception:
-                return {"ok": False, "error": "fd_work_persistence_unconfirmed"}
-        result = project_api.update_project_for_rules(
-            project_id, canonical_name, description, language
+        return self._project_identity.update_project(
+            int(project_id),
+            name,
+            description,
+            language,
+            external_identity_proof,
         )
-        if result.get("ok") is True:
-            if name_changed and not enabled:
-                result["fd_work_binding"] = self._clear_saved_project_binding(
-                    project_id
-                )
-            else:
-                try:
-                    bound = int(project_id) in self._fd_work.list_bound_project_ids()
-                except Exception:
-                    bound = False
-                result["fd_work_binding"] = {"bound": bound}
-        return result
 
-    def _fd_work_enabled(self) -> bool:
-        try:
-            return self._fd_work.get_settings_status().get("enabled") is True
-        except Exception:
-            return False
-
-    def clear_fd_work_binding_for_rules(self, project_id):
-        try:
-            self._fd_work.clear_project_binding(int(project_id))
-            return {"ok": True, "fd_work_binding": {"bound": False}}
-        except FDWorkEntryError as exc:
-            return {"ok": False, "error": exc.code}
-        except Exception:
-            return {"ok": False, "error": "binding_store_unavailable"}
-
-    def _clear_saved_project_binding(self, project_id):
-        try:
-            self._fd_work.clear_project_binding(int(project_id))
-            return {"bound": False}
-        except Exception:
-            return {
-                "bound": False,
-                "warning": "项目已保存，但关联 FD Work 失败，请重新关联",
-            }
+    def clear_external_project_identity_for_rules(self, project_id):
+        return self._project_identity.clear_project_identity(int(project_id))
 
     def set_project_enabled_for_rules(self, project_id, enabled):
         return project_api.set_project_enabled_for_rules(project_id, enabled)
@@ -524,7 +428,9 @@ class RulesApplicationService:
     def delete_project_for_rules(self, project_id):
         result = project_api.delete_project_for_rules(project_id)
         if result.get("ok") is True:
-            result["fd_work_binding"] = self._clear_saved_project_binding(project_id)
+            result["external_identity_binding"] = (
+                self._project_identity.after_project_deleted(int(project_id))
+            )
         return result
 
     def set_project_rule_enabled(self, rule_type, rule_id, enabled):

@@ -241,6 +241,30 @@ def test_corrupt_sidecar_and_write_failure_fail_closed(tmp_path, monkeypatch):
     assert healthy.is_project_bound(7, "CASE A", "2026-08-02 10:00:00") is False
 
 
+def test_failed_clear_all_keeps_every_binding_fail_closed(tmp_path, monkeypatch):
+    project = _project()
+    repository = FDWorkBindingRepository(tmp_path / "state.db")
+    service = FDWorkBindingService(
+        repository,
+        project_reader=lambda _project_id: project,
+        project_list_reader=lambda: [project],
+    )
+    service.bind_project(7, "CASE A", adapter_contract_version=3)
+    assert service.is_project_bound(7, "CASE A", project["created_at"]) is True
+
+    def fail_clear_all():
+        raise FDWorkBindingStoreError("binding_store_busy")
+
+    monkeypatch.setattr(repository, "clear_all", fail_clear_all)
+
+    with pytest.raises(Exception) as raised:
+        service.clear_all_bindings()
+
+    assert getattr(raised.value, "code", "") == "binding_store_busy"
+    assert service.is_project_bound(7, "CASE A", project["created_at"]) is False
+    assert service.list_bound_project_ids() == set()
+
+
 def test_locked_sidecar_returns_stable_busy_error(tmp_path, monkeypatch):
     path = tmp_path / "state.db"
     repository = FDWorkBindingRepository(path)
