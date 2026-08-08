@@ -238,9 +238,30 @@ test("a stale transaction cannot overwrite a newer fill transaction", async () =
   assert.match(element("fd-work-status").textContent, /正在填入/);
   assert.doesNotMatch(element("fd-work-status").textContent, /页面暂时不可用/);
 
-  secondOpening.resolve({ ok: true, operation_status: "save_completed" });
+  App.receiveFDWorkStatus({
+    supported: true,
+    enabled: true,
+    session_state: "ready",
+    operation: "none",
+    interaction_owner: "none",
+    ready: true,
+    login_required: false,
+    error_code: null,
+    operation_status: "save_completed",
+    operation_result_owner: "automation_fill",
+    operation_generation: 4,
+    navigation_generation: 3,
+  });
+  assert.match(element("fd-work-status").textContent, /已保存到 FD Work/);
+
+  secondOpening.resolve({
+    ok: false,
+    error: "fd_work_page_unavailable",
+    message: "FD Work 页面暂时不可用",
+  });
   assert.equal(await second, true);
   assert.match(element("fd-work-status").textContent, /已保存到 FD Work/);
+  assert.doesNotMatch(element("fd-work-status").textContent, /页面暂时不可用/);
 });
 
 test("authoritative save-completed status wins over a late bridge failure", async () => {
