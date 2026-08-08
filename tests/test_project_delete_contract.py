@@ -65,9 +65,9 @@ def test_delete_project_physically_removes_identity_rules_and_releases_assignmen
     )
     assert assignment == {
         "project_id": uncategorized_id,
-        "confidence": 0,
-        "source": "uncategorized",
-        "is_manual": 0,
+        "confidence": 100,
+        "source": "manual",
+        "is_manual": 1,
         "suggested_project_name": None,
         "source_rule_type": None,
         "source_rule_id": None,
@@ -197,12 +197,21 @@ def test_delete_project_preserves_reported_time_as_uncategorized(temp_db):
     retained = project_service.create_project("Retained")
     deleted = project_service.create_project("Deleted")
     _activity(retained, "09:00:00", "09:30:00", "Retained.docx")
-    _activity(deleted, "09:30:00", "10:00:00", "Deleted.docx")
+    deleted_activity = _activity(deleted, "09:30:00", "10:00:00", "Deleted.docx")
 
     before = statistics_service.get_summary(DATE, DATE)
     assert project_api.delete_project_for_rules(deleted)["ok"] is True
     after = statistics_service.get_summary(DATE, DATE)
+    released = fetch_one(
+        "SELECT project_id, source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
+        (deleted_activity,),
+    )
 
+    assert released == {
+        "project_id": system_project_service.require_uncategorized_project_id(),
+        "source": "manual",
+        "is_manual": 1,
+    }
     assert before["total_duration"] == 3600
     assert after["total_duration"] == 3600
     assert after["effective_duration"] == 3600
