@@ -514,11 +514,18 @@ class FDWorkPageAdapter:
 
     def _entry_contract(self, operation: Mapping[str, Any]) -> dict[str, Any]:
         payload = self._picker_contract(operation)
+        operation_deadline_ms = int(payload["operation_deadline_ms"])
+        fill_deadline_ms = int(
+            operation.get("fill_deadline_ms") or operation_deadline_ms
+        )
+        save_timeout_ms = max(1, int(operation.get("save_timeout_ms") or 5000))
         payload.update(
             {
                 "page_context": self.page_context_contract,
                 "entry_fields": self.entry_field_contract,
                 "max_date_steps": 366,
+                "fill_deadline_ms": fill_deadline_ms,
+                "save_timeout_ms": save_timeout_ms,
                 "native_actions": ("提交", "保存", "关闭"),
                 "save_action_label": "保存",
                 "save_action_selector": (
@@ -704,6 +711,7 @@ class FDWorkPageAdapter:
                 "save_loading_observed",
                 "save_success_message",
                 "form_reinitialized",
+                "entry_closed_after_save",
             ):
                 if type(value.get(key)) is bool:
                     safe[key] = value[key]
@@ -846,6 +854,10 @@ class FDWorkPageAdapter:
                 "option_connected_after_action",
                 "popup_replaced",
                 "live_option_reacquired",
+                "save_loading_observed",
+                "save_success_message",
+                "form_reinitialized",
+                "entry_closed_after_save",
             ):
                 if type(value.get(key)) is bool:
                     diagnostic[key] = value[key]
