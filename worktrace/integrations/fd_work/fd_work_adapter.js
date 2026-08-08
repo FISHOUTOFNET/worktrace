@@ -203,7 +203,6 @@
             await requestFrame();
         }
         var finalState = entryEditorState(contract);
-        removeFillBlockingLayer();
         return result(false, "entry_editor_not_rendered", {
             editor_exists: !!finalState.form,
             input_exists: !!finalState.input,
@@ -219,6 +218,13 @@
         ) || node && (node.innerText || node.textContent || node.value));
     }
 
+    function createEntryActions() {
+        return Array.prototype.filter.call(
+            document.querySelectorAll("button, [role='button'], input[type='button']"),
+            function (node) { return visible(node) && createEntryActionText(node) === "创建工时"; }
+        );
+    }
+
     async function ensureEntryEditor(contract) {
         var generation = Number(contract && contract.operation_generation) || activeGeneration;
         if (activeMode === "none" && generation > activeGeneration) activeGeneration = generation;
@@ -230,62 +236,85 @@
             create_action_count: 0, create_click_count: 0
         });
 
-        if (state.form || state.input || state.wrapper) {
+        var ownsPreparationBlocker = activeMode !== "fill";
+        var blockerInstalled = false;
+        var createClickCount = 0;
+        var lastCreateCount = 0;
+        var sawDisabledCreate = false;
+        var deadline = deadlineAt(contract);
+
+        function installPreparationBlocker() {
             installFillBlockingLayer();
+            blockerInstalled = true;
             setFillBlockingMessage("正在准备 FD Work，请勿操作");
-            var rendering = await awaitStableEntryEditor(contract);
-            if (!rendering.ok) return result(false,
-                rendering.error === "lookup_superseded"
-                    ? rendering.error : "entry_editor_not_rendered",
-                {
-                    create_action_count: 0,
-                    create_click_count: 0,
-                    editor_exists: !!entryEditorState(contract).form
-                }
-            );
-            return result(true, "", {
+        }
+
+        function fail(error, extra) {
+            if (ownsPreparationBlocker && blockerInstalled) removeFillBlockingLayer();
+            return result(false, error, extra || {});
+        }
+
+        installPreparationBlocker();
+        while (Date.now() <= deadline) {
+            if (canceled(generation)) return fail("lookup_superseded", {
+                create_action_count: lastCreateCount,
+                create_click_count: createClickCount
+            });
+            state = entryEditorState(contract);
+            if (state.ready) return result(true, "", {
                 status: "entry_editor_ready", editor_exists: true,
-                create_action_count: 0, create_click_count: 0
+                create_action_count: lastCreateCount,
+                create_click_count: createClickCount
             });
+            if (state.form || state.input || state.wrapper) {
+                await requestFrame();
+                continue;
+            }
+
+            var matches = createEntryActions();
+            lastCreateCount = matches.length;
+            if (matches.length > 1) return fail("entry_create_action_ambiguous", {
+                create_action_count: matches.length,
+                create_click_count: createClickCount
+            });
+            if (matches.length === 1) {
+                var action = matches[0];
+                if (action.disabled || (action.getAttribute && action.getAttribute("aria-disabled") === "true")) {
+                    sawDisabledCreate = true;
+                    await requestFrame();
+                    continue;
+                }
+                if (createClickCount === 0) {
+                    try {
+                        if (typeof action.click !== "function") throw new Error("not_interactive");
+                        action.click();
+                        createClickCount = 1;
+                    } catch (_error) {
+                        return fail("entry_create_action_disabled", {
+                            create_action_count: 1,
+                            create_click_count: createClickCount
+                        });
+                    }
+                }
+            }
+            await requestFrame();
         }
 
-        var expected = "创建工时";
-        var matches = Array.prototype.filter.call(
-            document.querySelectorAll("button, [role='button'], input[type='button']"),
-            function (node) { return visible(node) && createEntryActionText(node) === expected; }
-        );
-        if (!matches.length) return result(false, "entry_create_action_missing", {
-            create_action_count: 0, create_click_count: 0
-        });
-        if (matches.length !== 1) return result(false, "entry_create_action_ambiguous", {
-            create_action_count: matches.length, create_click_count: 0
-        });
-        var action = matches[0];
-        if (action.disabled || (action.getAttribute && action.getAttribute("aria-disabled") === "true")) {
-            return result(false, "entry_create_action_disabled", {
-                create_action_count: 1, create_click_count: 0
+        var finalState = entryEditorState(contract);
+        if (finalState.form || finalState.input || finalState.wrapper || createClickCount > 0) {
+            return fail("entry_editor_not_rendered", {
+                create_action_count: lastCreateCount,
+                create_click_count: createClickCount,
+                editor_exists: !!finalState.form
             });
         }
-
-        installFillBlockingLayer();
-        setFillBlockingMessage("正在准备 FD Work，请勿操作");
-        try {
-            if (typeof action.click !== "function") throw new Error("not_interactive");
-            action.click();
-        } catch (_error) {
-            removeFillBlockingLayer();
-            return result(false, "entry_create_action_disabled", {
-                create_action_count: 1, create_click_count: 0
-            });
-        }
-        var reconciled = await awaitStableEntryEditor(contract);
-        if (!reconciled.ok) return result(false,
-            reconciled.error === "lookup_superseded" ? reconciled.error : "entry_editor_not_rendered",
-            { create_action_count: 1, create_click_count: 1, editor_exists: false }
-        );
-        return result(true, "", {
-            status: "entry_editor_ready", editor_exists: true,
-            create_action_count: 1, create_click_count: 1
+        if (lastCreateCount === 1 && sawDisabledCreate) return fail("entry_create_action_disabled", {
+            create_action_count: 1,
+            create_click_count: createClickCount
+        });
+        return fail("entry_create_action_missing", {
+            create_action_count: lastCreateCount,
+            create_click_count: createClickCount
         });
     }
 
@@ -1096,7 +1125,6 @@
             "case_query", "case_popup_not_interactive"
         );
         var beforePopup = popup;
-        var before = optionLabels(popup).map(function (item) { return item.label; }).join("\u0000");
         var applied = setSearchValue(input, searchQuery);
         if (!applied.ok) return stageResult(applied, "case_query");
         var deadline = deadlineAt(contract);
@@ -1111,6 +1139,7 @@
             await requestFrame();
         }
         if (!queryAccepted) return stageFailure("case_query", "case_query_not_applied");
+        await requestFrame();
         var optionCount = 0;
         var commitResult = null;
         while (Date.now() <= deadline) {
@@ -1123,10 +1152,7 @@
                     popup_replaced: live.popup !== beforePopup
                 })
             );
-            var signature = live.popup
-                ? optionLabels(live.popup).map(function (item) { return item.label; }).join("\u0000")
-                : "";
-            if (live.ok && (live.popup !== beforePopup || signature !== before)) {
+            if (live.ok) {
                 commitResult = commitExactCaseOption(expectedLabel, contract, {
                     option_count: optionCount,
                     popup_replaced: live.popup !== beforePopup,
@@ -1169,6 +1195,17 @@
         );
     }
 
+    async function awaitInteractiveEntryField(name, contract, generation) {
+        var deadline = deadlineAt(contract);
+        while (Date.now() <= deadline) {
+            if (canceled(generation)) return null;
+            var input = entryField(contract, name);
+            if (input && visible(input) && !input.disabled && !input.readOnly) return input;
+            await requestFrame();
+        }
+        return null;
+    }
+
     async function awaitStableEntryValue(name, expected, contract, generation) {
         var deadline = deadlineAt(contract);
         var stableFrames = 0;
@@ -1188,10 +1225,8 @@
     }
 
     async function fillDuration(value, contract, generation) {
-        var input = entryField(contract, "duration_hours");
-        if (!input || !visible(input) || input.disabled || input.readOnly) {
-            return stageFailure("duration_write", "dom_contract_changed");
-        }
+        var input = await awaitInteractiveEntryField("duration_hours", contract, generation);
+        if (!input) return stageFailure("duration_write", "dom_contract_changed");
         if (typeof input.focus === "function") input.focus();
         var written = nativeSet(input, value);
         if (!written.ok) return stageResult(written, "duration_write");
@@ -1206,10 +1241,8 @@
     }
 
     async function fillNarrative(value, contract, generation) {
-        var input = entryField(contract, "narrative");
-        if (!input || !visible(input) || input.disabled || input.readOnly) {
-            return stageFailure("narrative_write", "dom_contract_changed");
-        }
+        var input = await awaitInteractiveEntryField("narrative", contract, generation);
+        if (!input) return stageFailure("narrative_write", "dom_contract_changed");
         if (typeof input.focus === "function") input.focus();
         var written = nativeSet(input, value);
         if (!written.ok) return stageResult(written, "narrative_write");
@@ -1319,9 +1352,7 @@
 
     function formReinitializedAfterSave(baseline, contract) {
         var currentForm = document.querySelector(String(contract.form_selector || "form#basic"));
-        if (!baseline.form || baseline.form.isConnected === false || currentForm !== baseline.form) {
-            return true;
-        }
+        if (!currentForm || !visible(currentForm)) return false;
         var duration = entryField(contract, "duration_hours");
         var narrative = entryField(contract, "narrative");
         var selected = readSelectedCase(contract);
@@ -1347,7 +1378,7 @@
             var reinitialized = formReinitializedAfterSave(baseline, contract);
             var busy = saveActionBusy(baseline.node, contract);
             loadingObserved = loadingObserved || busy;
-            if (successMessage || reinitialized || (loadingObserved && !busy)) {
+            if (successMessage || reinitialized) {
                 return result(true, "", {
                     stage: "save_completed",
                     save_loading_observed: loadingObserved,
@@ -1409,16 +1440,21 @@
         lastContract = contract;
         installFillBlockingLayer();
         setFillBlockingMessage("正在填入，请勿操作");
-        var currentStage = "page_stable";
+        var currentStage = "date_read";
         try {
-            var stable = await awaitStableEntryEditor(contract);
-            if (!stable.ok) return stageResult(stable, "page_stable");
-            currentStage = "date_read";
             var dated = await ensureEntryDate(payload.work_date, contract, generation);
             if (!dated.ok) return dated;
-            currentStage = "page_stable";
-            var stableAfterDate = await awaitStableEntryEditor(contract);
-            if (!stableAfterDate.ok) return stageResult(stableAfterDate, "page_stable");
+            currentStage = "work_page_ready";
+            setFillBlockingMessage("正在准备目标日期，请勿操作");
+            var workStable = await awaitStableWorkPage(contract);
+            if (!workStable.ok) return stageResult(workStable, "work_page_ready");
+            currentStage = "entry_editor_open";
+            var editor = await ensureEntryEditor(contract);
+            if (!editor.ok) return stageResult(editor, "entry_editor_open");
+            currentStage = "entry_editor_ready";
+            var stable = await awaitStableEntryEditor(contract);
+            if (!stable.ok) return stageResult(stable, "entry_editor_ready");
+            setFillBlockingMessage("正在填入，请勿操作");
             currentStage = "case_open";
             var prepared = await prepareCaseCombobox(contract, generation);
             if (!prepared.ok) return prepared;
@@ -1482,9 +1518,9 @@
         }
         [
             "viewport_available", "input_exists", "input_interactive",
-            "editor_exists",
-            "option_connected_before_action", "option_connected_after_action",
-            "popup_replaced", "live_option_reacquired"
+            "editor_exists", "save_loading_observed", "save_success_message",
+            "form_reinitialized", "option_connected_before_action",
+            "option_connected_after_action", "popup_replaced", "live_option_reacquired"
         ].forEach(function (key) {
             if (typeof value[key] === "boolean") safe[key] = value[key];
         });
