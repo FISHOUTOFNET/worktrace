@@ -194,6 +194,7 @@ async function readFixtureResult(profile) {
   try {
     const command = commandClient(socket);
     await command("Runtime.enable");
+    await command("Page.bringToFront");
     const evaluation = await command("Runtime.evaluate", {
       awaitPromise: true,
       returnByValue: true,

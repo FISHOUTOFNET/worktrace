@@ -69,6 +69,8 @@ def test_edge_runner_is_hard_failure_and_windows_node_scope_runs_it() -> None:
     assert "--allow-file-access-from-files" in runner
     assert "--remote-debugging-port=0" in runner
     assert "DevToolsActivePort" in runner
+    assert 'command("Page.bringToFront")' in runner
+    assert runner.index('command("Page.bringToFront")') < runner.index('"Runtime.evaluate"')
     assert '"Runtime.evaluate"' in runner
     assert "MutationObserver" in runner
     assert "--dump-dom" not in runner
