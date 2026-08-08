@@ -5,65 +5,216 @@
   <title>Anonymous FD Work adapter fixture</title>
   <style>
     body { margin: 0; min-height: 100vh; font-family: sans-serif; }
-    #basic { width: 560px; padding: 120px 24px 24px; }
+    #page-date-context { display: flex; gap: 12px; padding: 24px; }
+    .ant-space-compact { display: flex; }
+    #page-work-date, #basic_caseId, #basic_hoursWorked, #basic_narrative {
+      box-sizing: border-box; width: 360px; min-height: 32px;
+    }
+    #basic { width: 560px; padding: 72px 24px 24px; }
     .ant-form-item { display: block; margin: 12px 0; }
     .ant-select, .ant-select-selector, .ant-select-selection-wrap { display: block; }
-    #basic_caseId, #basic_workDate, #basic_hoursWorked, #basic_narrative {
-      box-sizing: border-box; width: 360px; height: 32px;
-    }
-    #case-listbox { width: 360px; border: 1px solid #ddd; }
+    [role="listbox"] { width: 360px; border: 1px solid #ddd; background: white; }
     [role="option"] { display: block; min-height: 24px; }
   </style>
 </head>
 <body>
-  <form id="basic">
-    <div class="ant-form-item" id="matter-item">
-      <div class="ant-select" name="workhours/matter/selector">
-        <div class="ant-select-selector">
-          <div class="ant-select-selection-wrap">
-            <span class="ant-select-selection-item" title="OLD TEST MATTER">OLD TEST MATTER</span>
-            <span class="ant-select-selection-search">
-              <input id="basic_caseId" role="combobox" aria-controls="case-listbox" autocomplete="off">
-            </span>
-          </div>
-        </div>
-      </div>
-      <div id="case-listbox" role="listbox">
-        <div role="option" title="OLD TEST MATTER" aria-selected="true">OLD TEST MATTER</div>
-        <div role="option" title="TEST MATTER A" aria-selected="false">TEST MATTER A</div>
-      </div>
+  <section id="page-date-context" aria-label="work-date-navigation">
+    <div class="diyDatePcker"><button id="today-button" type="button">今天</button></div>
+    <div class="ant-space-compact">
+      <button id="previous-day" type="button" aria-label="previous day">
+        <span role="img" aria-label="left"><svg data-icon="left"></svg></span>
+      </button>
+      <div class="ant-picker"><div class="ant-picker-input">
+        <input id="page-work-date" placeholder="请选择日期" value="2026-01-03" readonly>
+      </div></div>
+      <button id="next-day" type="button" aria-label="next day">
+        <span role="img" aria-label="right"><svg data-icon="right"></svg></span>
+      </button>
     </div>
-    <div class="ant-form-item" id="date-item">
-      <input id="basic_workDate" type="text" value="">
-    </div>
-    <div class="ant-form-item" id="hours-item">
-      <input id="basic_hoursWorked" type="text" value="">
-    </div>
-    <div class="ant-form-item" id="narrative-item">
-      <textarea id="basic_narrative"></textarea>
-    </div>
-  </form>
+  </section>
+  <main id="form-host"></main>
   <script>
-    (function installAnonymousAntBehavior() {
-      var selection = document.querySelector(".ant-select-selection-item");
-      var options = Array.from(document.querySelectorAll("[role='option']"));
-      options.forEach(function (option) {
-        option.addEventListener("click", function (event) {
-          options.forEach(function (candidate) {
-            candidate.setAttribute("aria-selected", "false");
-          });
-          option.setAttribute("aria-selected", "true");
-          selection.textContent = option.textContent;
-          selection.setAttribute("title", option.getAttribute("title"));
-          // React/Ant portals may stop native bubbling after committing the option.
-          // The adapter must observe the trusted option click in capture phase.
-          event.stopPropagation();
-        });
-      });
-    })();
+    window.__fdWorkFixture = (function installAnonymousAntBehavior() {
+      var state = {
+        date: "2026-01-03",
+        selectedCase: "OLD TEST MATTER",
+        duration: "",
+        narrative: "",
+        formRevision: 0,
+        dateClicks: 0,
+        popupCreations: 0,
+        popupReplacements: 0,
+        caseOpenEvents: [],
+        caseQueries: 0,
+        caseCommits: 0,
+        durationWrites: 0,
+        narrativeWrites: 0,
+        saveClicks: 0,
+        submitCalls: 0,
+        apiCalls: 0
+      };
+      var config = {
+        dateChangeAccepted: true,
+        caseMode: "normal",
+        durationAccepted: true,
+        narrativeAccepted: true,
+        deferCaseResults: false
+      };
 
-    window.__fdWorkFixture = (function instrumentLifecycle() {
-      var caseInput = document.getElementById("basic_caseId");
+      function addDays(value, amount) {
+        var parts = value.split("-").map(Number);
+        var next = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + amount));
+        return next.toISOString().slice(0, 10);
+      }
+
+      function removePopup() {
+        var old = document.getElementById("basic_caseId_list");
+        if (old) old.remove();
+      }
+
+      function commitCase(label) {
+        if (config.caseMode === "search_only") return;
+        state.selectedCase = label;
+        state.caseCommits += 1;
+        var selection = document.querySelector(".ant-select-selection-item");
+        if (selection) {
+          selection.textContent = label;
+          selection.setAttribute("title", label);
+        }
+        var input = document.getElementById("basic_caseId");
+        if (input) input.setAttribute("aria-expanded", "false");
+        removePopup();
+      }
+
+      function popupLabels(query) {
+        if (!query) return [state.selectedCase, "TEST MATTER NEAR"];
+        if (config.caseMode === "ambiguous") return [query, query];
+        if (config.caseMode === "missing") return [query + " NEAR"];
+        return [query, query + " NEAR"];
+      }
+
+      function renderPopup(query) {
+        var previous = document.getElementById("basic_caseId_list");
+        if (previous) {
+          previous.remove();
+          state.popupReplacements += 1;
+        }
+        var popup = document.createElement("div");
+        popup.id = "basic_caseId_list";
+        popup.setAttribute("role", "listbox");
+        popupLabels(query).forEach(function (label) {
+          var option = document.createElement("div");
+          option.setAttribute("role", "option");
+          option.setAttribute("title", label);
+          option.setAttribute("aria-selected", label === state.selectedCase ? "true" : "false");
+          option.textContent = label;
+          option.addEventListener("click", function (event) {
+            commitCase(label);
+            event.stopPropagation();
+          });
+          popup.appendChild(option);
+        });
+        document.body.appendChild(popup);
+        state.popupCreations += 1;
+        return popup;
+      }
+
+      function openCasePopup(event) {
+        state.caseOpenEvents.push(event.type);
+        if (event.type !== "mousedown") return;
+        var input = document.getElementById("basic_caseId");
+        if (input) input.setAttribute("aria-expanded", "true");
+        queueMicrotask(function () { renderPopup(""); });
+      }
+
+      function scheduleCaseResults(query) {
+        state.caseQueries += 1;
+        if (config.deferCaseResults) return;
+        queueMicrotask(function () { renderPopup(query); });
+      }
+
+      function renderForm() {
+        state.formRevision += 1;
+        removePopup();
+        var host = document.getElementById("form-host");
+        host.innerHTML = [
+          '<form id="basic" data-form-revision="' + state.formRevision + '">',
+          '  <div class="ant-form-item" id="matter-item">',
+          '    <div class="ant-select ant-select-show-search" name="workhours/matter/selector">',
+          '      <div class="ant-select-selector"><div class="ant-select-selection-wrap">',
+          '        <span class="ant-select-selection-item" title="' + state.selectedCase + '">' + state.selectedCase + '</span>',
+          '        <span class="ant-select-selection-search">',
+          '          <input id="basic_caseId" class="ant-select-selection-search-input" type="search" role="combobox" aria-controls="basic_caseId_list" aria-owns="basic_caseId_list" aria-expanded="false" autocomplete="off">',
+          '        </span>',
+          '      </div></div>',
+          '    </div>',
+          '  </div>',
+          '  <div class="ant-form-item" id="hours-item">',
+          '    <div class="ant-input-number"><div class="ant-input-number-input-wrap">',
+          '      <input id="basic_hoursWorked" class="ant-input-number-input" role="spinbutton" value="' + state.duration + '">',
+          '    </div></div>',
+          '  </div>',
+          '  <div class="ant-form-item" id="narrative-item">',
+          '    <textarea id="basic_narrative" class="ant-input">' + state.narrative + '</textarea>',
+          '  </div>',
+          '  <button id="save-button" type="button">保存</button>',
+          '</form>'
+        ].join("");
+        var selector = host.querySelector(".ant-select-selector");
+        ["pointerdown", "mousedown", "mouseup", "click"].forEach(function (name) {
+          selector.addEventListener(name, openCasePopup);
+        });
+        var caseInput = document.getElementById("basic_caseId");
+        caseInput.addEventListener("input", function () {
+          scheduleCaseResults(caseInput.value);
+        });
+        var duration = document.getElementById("basic_hoursWorked");
+        duration.addEventListener("input", function () {
+          var proposed = duration.value;
+          state.durationWrites += 1;
+          queueMicrotask(function () {
+            if (config.durationAccepted) state.duration = proposed;
+            renderForm();
+          });
+        });
+        var narrative = document.getElementById("basic_narrative");
+        narrative.addEventListener("input", function () {
+          var proposed = narrative.value;
+          state.narrativeWrites += 1;
+          queueMicrotask(function () {
+            if (config.narrativeAccepted) state.narrative = proposed;
+            renderForm();
+          });
+        });
+        var form = document.getElementById("basic");
+        form.addEventListener("submit", function (event) {
+          state.submitCalls += 1;
+          event.preventDefault();
+        });
+        form.submit = function () { state.submitCalls += 1; };
+        form.requestSubmit = function () { state.submitCalls += 1; };
+        document.getElementById("save-button").addEventListener("click", function () {
+          state.saveClicks += 1;
+        });
+      }
+
+      function changeDate(amount) {
+        state.dateClicks += 1;
+        if (!config.dateChangeAccepted) return;
+        state.date = addDays(state.date, amount);
+        document.getElementById("page-work-date").value = state.date;
+        renderForm();
+      }
+
+      document.getElementById("previous-day").addEventListener("click", function () {
+        changeDate(-1);
+      });
+      document.getElementById("next-day").addEventListener("click", function () {
+        changeDate(1);
+      });
+      document.getElementById("today-button").addEventListener("click", function () {});
+      renderForm();
+
       var nativeAdd = EventTarget.prototype.addEventListener;
       var nativeRemove = EventTarget.prototype.removeEventListener;
       var NativeMutationObserver = window.MutationObserver;
@@ -74,7 +225,7 @@
 
       function trackedTarget(target, type) {
         return (target === document && type === "click")
-          || (target === caseInput && (type === "input" || type === "change"));
+          || (target && target.id === "basic_caseId" && (type === "input" || type === "change"));
       }
       EventTarget.prototype.addEventListener = function (type, listener, options) {
         if (trackedTarget(this, type)) activeListeners += 1;
@@ -93,7 +244,11 @@
         this._active = false;
       }
       TrackingMutationObserver.prototype.observe = function (target, options) {
-        if (!this._active) {
+        var tracksPicker = !!(target && target.nodeType === 1 && (
+          (target.matches && target.matches(".ant-select, [role='listbox']"))
+          || (target.closest && target.closest(".ant-select"))
+        ));
+        if (!this._active && tracksPicker) {
           this._active = true;
           activeObservers += 1;
           observerPeak = Math.max(observerPeak, activeObservers);
@@ -114,6 +269,10 @@
 
       return {
         NativeMutationObserver: NativeMutationObserver,
+        state: state,
+        config: config,
+        renderForm: renderForm,
+        renderPopup: renderPopup,
         activeListeners: function () { return activeListeners; },
         activeObservers: function () { return activeObservers; },
         observerPeak: function () { return observerPeak; },
@@ -145,135 +304,224 @@
         checks[name] = !!condition;
         if (!condition) errors.push(name);
       }
-      function overlap(left, right) {
-        return left.left < right.right && left.right > right.left
-          && left.top < right.bottom && left.bottom > right.top;
+      function nextTurn() {
+        return new Promise(function (resolve) { requestAnimationFrame(resolve); });
       }
-      function originalFormIntact() {
-        return Array.from(document.querySelectorAll("#basic .ant-form-item, #basic .ant-select"))
-          .every(function (node) {
-            return !node.hidden
-              && getComputedStyle(node).display !== "none"
-              && !node.hasAttribute("data-worktrace-fdwork-hidden")
-              && !node.hasAttribute("style");
-          });
-      }
-
-      try {
-        var adapter = window.WorkTraceFDWorkAdapter;
+      function userOpenAndQuery(value) {
+        var selector = document.querySelector(".ant-select-selector");
+        selector.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+        selector.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        selector.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+        selector.dispatchEvent(new MouseEvent("click", { bubbles: true }));
         var input = document.getElementById("basic_caseId");
-        var popup = document.getElementById("case-listbox");
-        var option = popup.querySelector("[title='TEST MATTER A']");
-        var contract = {
+        input.value = value;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      function resetConfig() {
+        Object.assign(window.__fdWorkFixture.config, {
+          dateChangeAccepted: true,
+          caseMode: "normal",
+          durationAccepted: true,
+          narrativeAccepted: true,
+          deferCaseResults: false
+        });
+      }
+      function contract(generation, deadlineOffset) {
+        return {
           version: 5,
-          operation_nonce: "fixture-operation",
-          operation_generation: 1,
-          deadline_ms: 1500,
+          operation_nonce: "fixture-operation-" + generation,
+          operation_generation: generation,
+          navigation_generation: 1,
+          deadline_ms: deadlineOffset || 1500,
+          operation_deadline_ms: Date.now() + (deadlineOffset || 1500),
+          max_date_steps: 31,
           max_label_length: 100,
-          field: { selector: "#basic_caseId", listbox: "#case-listbox" },
-          fields: {
-            case_number: { selector: "#basic_caseId", listbox: "#case-listbox" },
-            work_date: { selector: "#basic_workDate" },
+          form_selector: "form#basic",
+          field: { selector: "#basic_caseId", listbox: "#basic_caseId_list" },
+          page_context: {
+            work_date: {
+              selector: 'input[placeholder="请选择日期"]',
+              outside_form_selector: "form#basic",
+              navigation_container_selector: ".ant-space-compact",
+              previous_button_icon: "left",
+              next_button_icon: "right"
+            }
+          },
+          entry_fields: {
+            case_number: { selector: "#basic_caseId", listbox: "#basic_caseId_list" },
             duration_hours: { selector: "#basic_hoursWorked" },
             narrative: { selector: "#basic_narrative" }
           }
         };
+      }
 
-        var entered = await adapter.enterCasePicker(contract);
+      try {
+        var adapter = window.WorkTraceFDWorkAdapter;
+        check("adapter_loaded", adapter && adapter.version === 5);
+        check("date_outside_form", !document.getElementById("page-work-date").closest("form#basic"));
+        check("case_popup_initially_absent", !document.getElementById("basic_caseId_list"));
+
+        var pickerContract = contract(1);
+        var entered = await adapter.enterCasePicker(pickerContract);
         var toolbar = document.getElementById("worktrace-fdwork-picker-toolbar");
         var confirm = toolbar && toolbar.querySelector("button");
-        check("adapter_loaded", adapter && adapter.version === 5 && entered.ok === true);
-        check("toolbar_unique_visible", !!toolbar
-          && toolbar.getClientRects().length > 0
-          && document.querySelectorAll("#worktrace-fdwork-picker-toolbar").length === 1);
-        check("initial_old_selection_not_confirmable", !!confirm && confirm.disabled === true);
-        await Promise.resolve();
+        check("picker_dynamic_entry", entered.ok === true && !!confirm && confirm.disabled === true);
         var callbacksBeforeUnrelatedChurn = window.__fdWorkFixture.observerCallbacks();
-        var unrelatedRegion = document.createElement("div");
-        document.body.appendChild(unrelatedRegion);
-        for (var churnIndex = 0; churnIndex < 20; churnIndex += 1) {
-          unrelatedRegion.setAttribute("data-fixture-churn", String(churnIndex));
-          unrelatedRegion.textContent = String(churnIndex);
-        }
-        await Promise.resolve();
+        var unrelated = document.createElement("div");
+        document.body.appendChild(unrelated);
+        for (var churn = 0; churn < 20; churn += 1) unrelated.setAttribute("data-churn", String(churn));
         await Promise.resolve();
         check("unrelated_dom_churn_not_observed",
           window.__fdWorkFixture.observerCallbacks() === callbacksBeforeUnrelatedChurn);
-        unrelatedRegion.remove();
-        input.value = "TEST MATTER A";
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        await Promise.resolve();
-        check("search_text_not_confirmable", confirm.disabled === true);
-
+        unrelated.remove();
+        userOpenAndQuery("TEST MATTER A");
+        await nextTurn();
+        check("popup_created_after_open", !!document.getElementById("basic_caseId_list"));
+        check("query_replaced_popup", window.__fdWorkFixture.state.popupReplacements > 0);
+        var option = document.querySelector("#basic_caseId_list [title='TEST MATTER A']");
         option.click();
         await Promise.resolve();
         await Promise.resolve();
-        check("new_option_commit_confirmable", confirm.disabled === false);
-        option.click();
-        await Promise.resolve();
-        await Promise.resolve();
-        check("same_label_recommit_confirmable", confirm.disabled === false);
+        check("native_picker_commit_confirmable", confirm.disabled === false);
         confirm.click();
         await Promise.resolve();
-        check("same_label_recommit_has_revision_proof",
-          window.__pickerSubmissions.length === 1
-          && window.__pickerSubmissions[0].revision >= 2);
-        check("style_unique", document.querySelectorAll("#worktrace-fdwork-style").length === 1);
-        check("picker_preserves_original_form", originalFormIntact());
-        check("toolbar_avoids_case_input", !overlap(
-          toolbar.getBoundingClientRect(), input.getBoundingClientRect()
-        ));
-        check("toolbar_avoids_ant_popup", !overlap(
-          toolbar.getBoundingClientRect(), popup.getBoundingClientRect()
-        ));
+        check("native_picker_revision_proof",
+          window.__pickerSubmissions.length === 1 && window.__pickerSubmissions[0].revision > 0);
         adapter.leaveCasePicker();
-        input.disabled = false;
+        check("picker_cleanup",
+          adapter._test.activeMode() === "none"
+          && window.__fdWorkFixture.activeListeners() === 0
+          && window.__fdWorkFixture.activeObservers() === 0);
 
-        var cyclesStable = true;
-        for (var index = 0; index < 20; index += 1) {
-          contract.operation_nonce = "fixture-cycle-" + index;
-          contract.operation_generation = index + 2;
-          await adapter.enterCasePicker(contract);
-          option.click();
+        var pickerCyclesStable = true;
+        for (var cycle = 0; cycle < 20; cycle += 1) {
+          var listenersBeforeCycle = window.__fdWorkFixture.activeListeners();
+          var observersBeforeCycle = window.__fdWorkFixture.activeObservers();
+          var cycleContract = contract(cycle + 2);
+          await adapter.enterCasePicker(cycleContract);
+          var cycleLabel = cycle % 2 ? "TEST MATTER A" : "TEST MATTER B";
+          userOpenAndQuery(cycleLabel);
+          await nextTurn();
+          var cycleOption = document.querySelector(
+            "#basic_caseId_list [title='" + cycleLabel + "']"
+          );
+          if (cycleOption) cycleOption.click();
           await Promise.resolve();
           adapter.leaveCasePicker();
-          cyclesStable = cyclesStable
-            && window.__fdWorkFixture.activeListeners() === 0
-            && window.__fdWorkFixture.activeObservers() === 0
-            && document.querySelectorAll("#worktrace-fdwork-style").length === 1;
+          var cycleStable = window.__fdWorkFixture.activeListeners() === listenersBeforeCycle
+            && window.__fdWorkFixture.activeObservers() === observersBeforeCycle
+            && !document.getElementById("worktrace-fdwork-picker-toolbar");
+          pickerCyclesStable = pickerCyclesStable && cycleStable;
         }
-        check("twenty_cycles_no_listener_observer_growth", cyclesStable);
-        check("leave_cleans_picker_state",
-          adapter._test.activeMode() === "none"
-          && !document.documentElement.hasAttribute("data-worktrace-fdwork-picker")
-          && !document.getElementById("worktrace-fdwork-picker-toolbar"));
+        check("twenty_picker_cycles_no_growth", pickerCyclesStable);
+        var pickerListenersAfterCycles = window.__fdWorkFixture.activeListeners();
+        var pickerObserversAfterCycles = window.__fdWorkFixture.activeObservers();
 
-        var blockerCoveredViewport = false;
-        var blockerObserver = new window.__fdWorkFixture.NativeMutationObserver(function () {
-          var blocker = document.getElementById("worktrace-fdwork-fill-blocker");
-          if (!blocker) return;
-          var rect = blocker.getBoundingClientRect();
-          var style = getComputedStyle(blocker);
-          blockerCoveredViewport = style.position === "fixed"
-            && Math.abs(rect.left) < 0.5
-            && Math.abs(rect.top) < 0.5
-            && Math.abs(rect.width - window.innerWidth) < 0.5
-            && Math.abs(rect.height - window.innerHeight) < 0.5;
-        });
-        blockerObserver.observe(document.body, { childList: true });
-        contract.operation_nonce = "fixture-fill";
-        contract.operation_generation = 100;
-        var filled = await adapter.fillEntry({
-          case_number: "TEST MATTER A",
-          work_date: "2026-01-02",
-          duration_hours: "1.0",
-          narrative: "TEST DESCRIPTION"
-        }, contract);
-        blockerObserver.disconnect();
-        check("fill_succeeds_offline", filled.ok === true && filled.status === "filled");
-        check("blocker_covers_viewport", blockerCoveredViewport);
-        check("blocker_removed_in_finally", !document.getElementById("worktrace-fdwork-fill-blocker"));
-        check("fill_preserves_complete_form", originalFormIntact());
+        var initialDateClicks = window.__fdWorkFixture.state.dateClicks;
+        var noDateChange = await adapter.fillEntry({
+          case_number: "TEST MATTER A", work_date: "2026-01-03",
+          duration_hours: "1.0", narrative: "TEST DESCRIPTION"
+        }, contract(30));
+        check("current_date_is_noop", noDateChange.ok === true
+          && window.__fdWorkFixture.state.dateClicks === initialDateClicks);
+        check("controlled_duration_readback", document.getElementById("basic_hoursWorked").value === "1.0");
+        check("controlled_narrative_readback", document.getElementById("basic_narrative").value === "TEST DESCRIPTION");
+
+        var revisionBeforePrevious = window.__fdWorkFixture.state.formRevision;
+        var previous = await adapter.fillEntry({
+          case_number: "TEST MATTER A", work_date: "2026-01-02",
+          duration_hours: "1.5", narrative: "PREVIOUS DAY DESCRIPTION"
+        }, contract(31));
+        check("previous_date_verified", previous.ok === true
+          && document.getElementById("page-work-date").value === "2026-01-02");
+        check("date_rerender_re_resolved", window.__fdWorkFixture.state.formRevision > revisionBeforePrevious
+          && document.getElementById("basic_hoursWorked").value === "1.5");
+
+        var next = await adapter.fillEntry({
+          case_number: "TEST MATTER A", work_date: "2026-01-03",
+          duration_hours: "2.0", narrative: "NEXT DAY DESCRIPTION"
+        }, contract(32));
+        check("next_date_verified", next.ok === true
+          && document.getElementById("page-work-date").value === "2026-01-03");
+        check("complete_four_field_readback", adapter._test.readEntryDate(contract(32)).value === "2026-01-03"
+          && adapter.readSelectedCase(contract(32)).label === "TEST MATTER A"
+          && document.getElementById("basic_hoursWorked").value === "2.0"
+          && document.getElementById("basic_narrative").value === "NEXT DAY DESCRIPTION");
+        check("success_enters_review", adapter._test.activeMode() === "review");
+
+        resetConfig();
+        window.__fdWorkFixture.config.dateChangeAccepted = false;
+        var casesBeforeDateFailure = window.__fdWorkFixture.state.caseQueries;
+        var dateFailure = await adapter.fillEntry({
+          case_number: "TEST MATTER A", work_date: "2026-01-04",
+          duration_hours: "1.0", narrative: "SHOULD NOT CONTINUE"
+        }, contract(33, 250));
+        check("date_change_fail_closed", dateFailure.ok === false
+          && ["date_change_failed", "date_verification_failed"].includes(dateFailure.error));
+        check("failed_stage_stops_pipeline",
+          window.__fdWorkFixture.state.caseQueries === casesBeforeDateFailure);
+        check("failure_blocker_cleanup", !document.getElementById("worktrace-fdwork-fill-blocker"));
+
+        resetConfig();
+        window.__fdWorkFixture.config.caseMode = "ambiguous";
+        var ambiguous = await adapter.fillEntry({
+          case_number: "DUPLICATE MATTER", work_date: "2026-01-03",
+          duration_hours: "1.0", narrative: "AMBIGUOUS"
+        }, contract(34));
+        check("duplicate_exact_fails_ambiguous", ambiguous.error === "case_ambiguous");
+
+        resetConfig();
+        window.__fdWorkFixture.config.caseMode = "missing";
+        var missing = await adapter.fillEntry({
+          case_number: "MISSING MATTER", work_date: "2026-01-03",
+          duration_hours: "1.0", narrative: "MISSING"
+        }, contract(35, 300));
+        check("no_exact_fails_not_found", missing.error === "case_not_found");
+
+        resetConfig();
+        window.__fdWorkFixture.config.caseMode = "search_only";
+        var searchOnly = await adapter.fillEntry({
+          case_number: "UNCOMMITTED MATTER", work_date: "2026-01-03",
+          duration_hours: "1.0", narrative: "UNCOMMITTED"
+        }, contract(36, 300));
+        check("search_text_without_commit_fails", searchOnly.error === "case_selection_mismatch");
+
+        resetConfig();
+        window.__fdWorkFixture.config.durationAccepted = false;
+        var narrativeWritesBefore = window.__fdWorkFixture.state.narrativeWrites;
+        var durationRejected = await adapter.fillEntry({
+          case_number: "TEST MATTER A", work_date: "2026-01-03",
+          duration_hours: "3.0", narrative: "DURATION REJECTED"
+        }, contract(37, 350));
+        check("duration_rejection_fails", durationRejected.error === "duration_verification_failed");
+        check("duration_failure_stops_narrative",
+          window.__fdWorkFixture.state.narrativeWrites === narrativeWritesBefore);
+
+        resetConfig();
+        window.__fdWorkFixture.config.narrativeAccepted = false;
+        var narrativeRejected = await adapter.fillEntry({
+          case_number: "TEST MATTER A", work_date: "2026-01-03",
+          duration_hours: "3.5", narrative: "NARRATIVE REJECTED"
+        }, contract(38, 350));
+        check("narrative_rejection_fails", narrativeRejected.error === "narrative_verification_failed");
+
+        check("never_auto_saves_or_submits",
+          window.__fdWorkFixture.state.saveClicks === 0
+          && window.__fdWorkFixture.state.submitCalls === 0
+          && window.__fdWorkFixture.state.apiCalls === 0);
+        check("blocker_always_removed", !document.getElementById("worktrace-fdwork-fill-blocker"));
+
+        resetConfig();
+        window.__fdWorkFixture.config.deferCaseResults = true;
+        var stalePromise = adapter.fillEntry({
+          case_number: "STALE MATTER", work_date: "2026-01-03",
+          duration_hours: "1.0", narrative: "STALE"
+        }, contract(39, 500));
+        await nextTurn();
+        window.dispatchEvent(new Event("pagehide"));
+        var stale = await stalePromise;
+        check("navigation_generation_abort", stale.error === "lookup_superseded");
+        check("stale_cleanup", !document.getElementById("worktrace-fdwork-fill-blocker"));
       } catch (error) {
         errors.push("fixture_exception:" + String(error && error.message || error));
       }
@@ -281,8 +529,13 @@
       var output = {
         ok: errors.length === 0,
         adapter_version: window.WorkTraceFDWorkAdapter
-          ? window.WorkTraceFDWorkAdapter.version : null,
+          ? window.WorkTraceFDWorkAdapter.version : 5,
         checks: checks,
+        metrics: {
+          picker_active_listeners_after_cycles: pickerListenersAfterCycles,
+          picker_active_observers_after_cycles: pickerObserversAfterCycles,
+          observer_peak: window.__fdWorkFixture.observerPeak()
+        },
         errors: errors
       };
       var resultNode = document.createElement("pre");

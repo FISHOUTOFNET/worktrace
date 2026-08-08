@@ -42,13 +42,15 @@
         return typeof element.getClientRects !== "function" || element.getClientRects().length > 0;
     }
 
-    function field(contract, name) {
-        var item = contract && contract.fields && contract.fields[name];
+    function entryField(contract, name) {
+        var item = contract && contract.entry_fields && contract.entry_fields[name];
         return item && item.selector ? document.querySelector(item.selector) : null;
     }
 
     function caseInput(contract) {
-        var item = contract && (contract.field || (contract.fields && contract.fields.case_number));
+        var item = contract && (
+            contract.field || (contract.entry_fields && contract.entry_fields.case_number)
+        );
         return item && item.selector ? document.querySelector(item.selector) : null;
     }
 
@@ -77,12 +79,20 @@
 
     function popupForInput(input, contract) {
         if (!input) return null;
-        var controls = normalizeExactText(input.getAttribute && input.getAttribute("aria-controls"));
-        var configured = contract && (contract.field || (contract.fields && contract.fields.case_number));
+        var controls = normalizeExactText(input.getAttribute && (
+            input.getAttribute("aria-controls") || input.getAttribute("aria-owns")
+        ));
+        var configured = contract && (
+            contract.field || (contract.entry_fields && contract.entry_fields.case_number)
+        );
         var configuredSelector = configured && configured.listbox;
         if (controls && document.getElementById) {
-            var controlled = document.getElementById(controls);
-            if (controlled) return controlled;
+            var ids = controls.split(/\s+/).filter(Boolean);
+            for (var index = 0; index < ids.length; index += 1) {
+                var controlled = document.getElementById(ids[index]);
+                if (controlled) return controlled;
+            }
+            return null;
         }
         return configuredSelector ? document.querySelector(configuredSelector) : null;
     }
@@ -107,7 +117,7 @@
 
     function deadlineAt(contract) {
         var existing = Number(contract && contract.operation_deadline_ms);
-        if (existing > Date.now()) return existing;
+        if (Number.isFinite(existing) && existing > 0) return existing;
         return Date.now() + Math.max(1, Number(contract && contract.deadline_ms) || 5000);
     }
 
@@ -138,13 +148,18 @@
                 && !blockingOverlayVisible()
             );
             if (visibilityReady && viewportReady && interactive) {
-                var first = input.getBoundingClientRect ? input.getBoundingClientRect() : null;
+                var firstInput = input;
+                var first = firstInput.getBoundingClientRect ? firstInput.getBoundingClientRect() : null;
                 await requestFrame();
                 if (canceled(generation)) return result(false, "lookup_superseded");
-                var second = input.getBoundingClientRect ? input.getBoundingClientRect() : null;
+                var secondInput = caseInput(contract);
+                if (secondInput !== firstInput) continue;
+                var second = secondInput.getBoundingClientRect ? secondInput.getBoundingClientRect() : null;
                 await requestFrame();
                 if (canceled(generation)) return result(false, "lookup_superseded");
-                var third = input.getBoundingClientRect ? input.getBoundingClientRect() : null;
+                var thirdInput = caseInput(contract);
+                if (thirdInput !== firstInput) continue;
+                var third = thirdInput.getBoundingClientRect ? thirdInput.getBoundingClientRect() : null;
                 if (sameRect(first, second) && sameRect(second, third)) {
                     return result(true, "", {
                         status: "stable",
@@ -567,12 +582,7 @@
         var descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
         if (!descriptor || typeof descriptor.set !== "function") return result(false, "dom_contract_changed");
         descriptor.set.call(element, String(value));
-        ["input", "change", "blur"].forEach(function (name) {
-            element.dispatchEvent(new Event(name, { bubbles: true }));
-        });
-        return String(element.value) === String(value)
-            ? result(true)
-            : result(false, "dom_contract_changed");
+        return result(true);
     }
 
     function setSearchValue(input, value) {
@@ -585,22 +595,188 @@
         return result(true);
     }
 
+    function stageFailure(stage, error, extra) {
+        return result(false, error, Object.assign({
+            stage: stage,
+            internal_error_kind: error
+        }, extra || {}));
+    }
+
+    function stageResult(value, stage) {
+        if (value && value.ok) return value;
+        var error = value && value.error ? value.error : "dom_contract_changed";
+        return stageFailure(stage, error, value || {});
+    }
+
+    function strictDateValue(value) {
+        var text = String(value == null ? "" : value);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+        var parts = text.split("-").map(Number);
+        var timestamp = Date.UTC(parts[0], parts[1] - 1, parts[2]);
+        var parsed = new Date(timestamp);
+        if (
+            parsed.getUTCFullYear() !== parts[0]
+            || parsed.getUTCMonth() !== parts[1] - 1
+            || parsed.getUTCDate() !== parts[2]
+        ) return null;
+        return { text: text, timestamp: timestamp };
+    }
+
+    function dateTextFromTimestamp(timestamp) {
+        return new Date(timestamp).toISOString().slice(0, 10);
+    }
+
+    function pageDateInput(contract) {
+        var item = contract && contract.page_context && contract.page_context.work_date;
+        if (!item || !item.selector || !document.querySelectorAll) return null;
+        var excluded = item.outside_form_selector
+            ? document.querySelector(item.outside_form_selector) : null;
+        var matches = Array.prototype.filter.call(
+            document.querySelectorAll(item.selector),
+            function (candidate) {
+                return visible(candidate) && !(excluded && excluded.contains(candidate));
+            }
+        );
+        return matches.length === 1 ? matches[0] : null;
+    }
+
+    function readEntryDate(contract) {
+        var input = pageDateInput(contract);
+        if (!input) return stageFailure("date_read", "date_control_missing");
+        var parsed = strictDateValue(input.value);
+        if (!parsed) return stageFailure("date_read", "date_verification_failed");
+        return result(true, "", { value: parsed.text, timestamp: parsed.timestamp });
+    }
+
+    function dateNavigationButton(input, contract, direction) {
+        var item = contract && contract.page_context && contract.page_context.work_date;
+        if (!input || !item || typeof input.closest !== "function") return null;
+        var root = input.closest(item.navigation_container_selector || ".ant-space-compact");
+        if (!root || typeof root.querySelector !== "function") return null;
+        var iconName = direction < 0 ? item.previous_button_icon : item.next_button_icon;
+        if (iconName !== "left" && iconName !== "right") return null;
+        var icon = root.querySelector(
+            "[aria-label='" + iconName + "'], [data-icon='" + iconName + "']"
+        );
+        return icon && typeof icon.closest === "function" ? icon.closest("button") : null;
+    }
+
+    function dispatchDomEvent(node, type, pointer) {
+        if (!node || typeof node.dispatchEvent !== "function") return false;
+        var Constructor = pointer && typeof PointerEvent === "function"
+            ? PointerEvent : (typeof MouseEvent === "function" ? MouseEvent : Event);
+        try {
+            return node.dispatchEvent(new Constructor(type, {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                button: 0,
+                buttons: type === "mousedown" || type === "pointerdown" ? 1 : 0,
+                pointerType: pointer ? "mouse" : undefined
+            }));
+        } catch (_error) {
+            return false;
+        }
+    }
+
+    function dispatchPointerMouseSequence(node, focusTarget) {
+        if (!node) return false;
+        dispatchDomEvent(node, "pointerdown", true);
+        dispatchDomEvent(node, "mousedown", false);
+        if (focusTarget && typeof focusTarget.focus === "function") {
+            try { focusTarget.focus({ preventScroll: true }); }
+            catch (_error) { try { focusTarget.focus(); } catch (_ignored) {} }
+        }
+        dispatchDomEvent(node, "mouseup", false);
+        dispatchDomEvent(node, "click", false);
+        return true;
+    }
+
+    async function ensureEntryDate(targetDate, contract, generation) {
+        var target = strictDateValue(targetDate);
+        if (!target) return stageFailure("date_read", "date_verification_failed");
+        var current = readEntryDate(contract);
+        if (!current.ok) return current;
+        if (current.value === target.text) {
+            return result(true, "", { stage: "date_verified", date_step_count: 0 });
+        }
+        var totalSteps = Math.round((target.timestamp - current.timestamp) / 86400000);
+        var maxSteps = Math.max(1, Number(contract && contract.max_date_steps) || 366);
+        if (!Number.isInteger(totalSteps) || Math.abs(totalSteps) > maxSteps) {
+            return stageFailure("date_change", "date_change_failed", { date_step_count: 0 });
+        }
+        var direction = totalSteps < 0 ? -1 : 1;
+        var steps = 0;
+        var deadline = deadlineAt(contract);
+        while (current.value !== target.text && steps < Math.abs(totalSteps)) {
+            if (canceled(generation)) return stageFailure("date_change", "lookup_superseded", {
+                date_step_count: steps
+            });
+            if (Date.now() > deadline) return stageFailure("date_change", "date_change_failed", {
+                date_step_count: steps
+            });
+            var input = pageDateInput(contract);
+            var button = dateNavigationButton(input, contract, direction);
+            if (!button || !visible(button)) return stageFailure(
+                "date_change", "date_control_missing", { date_step_count: steps }
+            );
+            var before = current.value;
+            var expected = dateTextFromTimestamp(current.timestamp + direction * 86400000);
+            dispatchPointerMouseSequence(button, null);
+            var changed = null;
+            while (Date.now() <= deadline) {
+                if (canceled(generation)) return stageFailure("date_change", "lookup_superseded", {
+                    date_step_count: steps
+                });
+                var observed = readEntryDate(contract);
+                if (!observed.ok) return observed;
+                if (observed.value !== before) {
+                    changed = observed;
+                    break;
+                }
+                await requestFrame();
+            }
+            if (!changed) return stageFailure("date_change", "date_change_failed", {
+                date_step_count: steps
+            });
+            steps += 1;
+            if (changed.value !== expected) return stageFailure(
+                "date_change", "date_change_failed", { date_step_count: steps }
+            );
+            current = changed;
+        }
+        var verified = readEntryDate(contract);
+        if (!verified.ok || verified.value !== target.text) return stageFailure(
+            "date_verified", "date_verification_failed", { date_step_count: steps }
+        );
+        return result(true, "", { stage: "date_verified", date_step_count: steps });
+    }
+
     async function prepareCaseCombobox(contract, generation) {
-        if (canceled(generation)) return result(false, "lookup_superseded");
+        if (canceled(generation)) return stageFailure("case_open", "lookup_superseded");
         var input = caseInput(contract);
-        if (!input) return result(false, "case_input_missing");
-        if (!visible(input)) return result(false, "case_input_not_rendered");
-        if (input.disabled || input.readOnly) return result(false, "case_input_not_interactive");
-        input.focus();
-        input.click();
+        if (!input) return stageFailure("case_open", "case_input_missing");
+        if (!visible(input)) return stageFailure("case_open", "case_input_not_rendered");
+        if (input.disabled || input.readOnly) return stageFailure("case_open", "case_input_not_interactive");
+        var controls = normalizeExactText(input.getAttribute && (
+            input.getAttribute("aria-controls") || input.getAttribute("aria-owns")
+        ));
+        if (!controls) return stageFailure("case_open", "case_aria_controls_missing");
+        var wrapper = selectWrapperFor(input);
+        var selector = wrapper && wrapper.querySelector
+            ? wrapper.querySelector(".ant-select-selector") : null;
+        if (!selector || !dispatchPointerMouseSequence(selector, input)) {
+            return stageFailure("case_open", "case_input_not_interactive");
+        }
         var deadline = deadlineAt(contract);
         while (Date.now() <= deadline) {
-            if (canceled(generation)) return result(false, "lookup_superseded");
+            if (canceled(generation)) return stageFailure("case_open", "lookup_superseded");
+            input = caseInput(contract);
             var popup = popupForInput(input, contract);
-            if (popup && visible(popup)) return result(true, "", { input: input, popup: popup });
-            await new Promise(function (resolve) { setTimeout(resolve, 25); });
+            if (popup && visible(popup)) return result(true, "", { stage: "case_open" });
+            await requestFrame();
         }
-        return result(false, "case_popup_not_created");
+        return stageFailure("case_open", "case_popup_not_created");
     }
 
     function optionLabels(popup) {
@@ -618,34 +794,122 @@
         }).filter(function (item) { return !!item.label; });
     }
 
-    async function selectExactCase(input, popup, expected, contract, generation) {
+    async function selectExactCase(expected, contract, generation) {
+        var input = caseInput(contract);
+        var popup = popupForInput(input, contract);
+        if (!input || !popup || !visible(popup)) return stageFailure(
+            "case_query", "case_popup_not_interactive"
+        );
+        var beforePopup = popup;
         var before = optionLabels(popup).map(function (item) { return item.label; }).join("\u0000");
         var applied = setSearchValue(input, expected);
-        if (!applied.ok) return applied;
+        if (!applied.ok) return stageResult(applied, "case_query");
         var deadline = deadlineAt(contract);
+        var queryAccepted = false;
         while (Date.now() <= deadline) {
-            if (canceled(generation)) return result(false, "lookup_superseded");
-            popup = popupForInput(input, contract) || popup;
+            if (canceled(generation)) return stageFailure("case_query", "lookup_superseded");
+            input = caseInput(contract);
+            if (input && String(input.value) === String(expected)) {
+                queryAccepted = true;
+                break;
+            }
+            await requestFrame();
+        }
+        if (!queryAccepted) return stageFailure("case_query", "case_query_not_applied");
+        var match = null;
+        var optionCount = 0;
+        while (Date.now() <= deadline) {
+            if (canceled(generation)) return stageFailure("case_results", "lookup_superseded");
+            input = caseInput(contract);
+            popup = popupForInput(input, contract);
             var options = optionLabels(popup);
+            optionCount = options.length;
             var signature = options.map(function (item) { return item.label; }).join("\u0000");
             var matches = options.filter(function (item) { return item.label === expected; });
-            if ((signature !== before || matches.length) && matches.length === 1) {
-                matches[0].node.click();
-                await requestFrame();
-                var selected = readSelectedCase(contract);
-                if (selected.ok && selected.label === expected) return result(true);
-                return result(false, "case_selection_mismatch");
+            if (matches.length > 1) return stageFailure(
+                "case_results", "case_ambiguous", { option_count: optionCount }
+            );
+            if (matches.length === 1 && (popup !== beforePopup || signature !== before)) {
+                match = matches[0].node;
+                break;
             }
-            if (matches.length > 1) return result(false, "case_ambiguous");
-            await new Promise(function (resolve) { setTimeout(resolve, 25); });
+            await requestFrame();
         }
-        return result(false, "case_not_found");
+        if (!match) return stageFailure(
+            "case_results", "case_not_found", { option_count: optionCount }
+        );
+        if (!dispatchPointerMouseSequence(match, null)) return stageFailure(
+            "case_commit", "case_selection_mismatch", { option_count: optionCount }
+        );
+        while (Date.now() <= deadline) {
+            if (canceled(generation)) return stageFailure("case_commit", "lookup_superseded", {
+                option_count: optionCount
+            });
+            var selected = readSelectedCase(contract);
+            if (selected.ok && selected.label === expected) return result(true, "", {
+                stage: "case_verified", option_count: optionCount
+            });
+            await requestFrame();
+        }
+        return stageFailure("case_verified", "case_selection_mismatch", {
+            option_count: optionCount
+        });
     }
 
-    function fillAndVerify(name, value, contract) {
-        var input = field(contract, name);
-        if (!input || !visible(input)) return result(false, "dom_contract_changed");
-        return nativeSet(input, value);
+    async function awaitStableEntryValue(name, expected, contract, generation) {
+        var deadline = deadlineAt(contract);
+        var stableFrames = 0;
+        while (Date.now() <= deadline) {
+            if (canceled(generation)) return result(false, "lookup_superseded");
+            var input = entryField(contract, name);
+            if (input && visible(input) && String(input.value) === String(expected)) {
+                stableFrames += 1;
+                if (stableFrames >= 2) return result(true);
+            } else {
+                stableFrames = 0;
+            }
+            await requestFrame();
+        }
+        return result(false, name === "duration_hours"
+            ? "duration_verification_failed" : "narrative_verification_failed");
+    }
+
+    async function fillDuration(value, contract, generation) {
+        var input = entryField(contract, "duration_hours");
+        if (!input || !visible(input) || input.disabled || input.readOnly) {
+            return stageFailure("duration_write", "dom_contract_changed");
+        }
+        if (typeof input.focus === "function") input.focus();
+        var written = nativeSet(input, value);
+        if (!written.ok) return stageResult(written, "duration_write");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        if (typeof input.blur === "function") input.blur();
+        var verified = await awaitStableEntryValue(
+            "duration_hours", value, contract, generation
+        );
+        return verified.ok ? result(true, "", { stage: "duration_verified" })
+            : stageFailure("duration_verified", verified.error || "duration_verification_failed");
+    }
+
+    async function fillNarrative(value, contract, generation) {
+        var input = entryField(contract, "narrative");
+        if (!input || !visible(input) || input.disabled || input.readOnly) {
+            return stageFailure("narrative_write", "dom_contract_changed");
+        }
+        if (typeof input.focus === "function") input.focus();
+        var written = nativeSet(input, value);
+        if (!written.ok) return stageResult(written, "narrative_write");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        var verified = await awaitStableEntryValue("narrative", value, contract, generation);
+        if (!verified.ok) return stageFailure(
+            "narrative_verified", verified.error || "narrative_verification_failed"
+        );
+        input = entryField(contract, "narrative");
+        if (input && typeof input.blur === "function") input.blur();
+        verified = await awaitStableEntryValue("narrative", value, contract, generation);
+        return verified.ok ? result(true, "", { stage: "narrative_verified" })
+            : stageFailure("narrative_verified", verified.error || "narrative_verification_failed");
     }
 
     function installFillBlockingLayer() {
@@ -682,18 +946,24 @@
         return toolbar;
     }
 
-    function verifyEntry(payload, contract) {
+    async function verifyEntry(payload, contract, generation) {
+        await requestFrame();
+        if (canceled(generation)) return stageFailure("entry_verified", "lookup_superseded");
+        var date = readEntryDate(contract);
+        if (!date.ok || date.value !== String(payload.work_date)) {
+            return stageFailure("entry_verified", "date_verification_failed");
+        }
         var selected = readSelectedCase(contract);
         if (!selected.ok || selected.label !== normalizeExactText(payload.case_number)) {
-            return result(false, "case_selection_mismatch");
+            return stageFailure("entry_verified", "case_selection_mismatch");
         }
-        for (var name of ["work_date", "duration_hours", "narrative"]) {
-            var input = field(contract, name);
+        for (var name of ["duration_hours", "narrative"]) {
+            var input = entryField(contract, name);
             if (!input || String(input.value) !== String(payload[name])) {
-                return result(false, name + "_verification_failed");
+                return stageFailure("entry_verified", name + "_verification_failed");
             }
         }
-        return result(true);
+        return result(true, "", { stage: "entry_verified" });
     }
 
     async function fillEntry(payload, contract) {
@@ -709,30 +979,41 @@
         lastPayload = Object.assign({}, payload);
         lastContract = contract;
         installFillBlockingLayer();
+        var currentStage = "page_stable";
         try {
             var stable = await awaitStableWorkShell(contract);
-            if (!stable.ok) return stable;
+            if (!stable.ok) return stageResult(stable, "page_stable");
+            currentStage = "date_read";
+            var dated = await ensureEntryDate(payload.work_date, contract, generation);
+            if (!dated.ok) return dated;
+            currentStage = "page_stable";
+            var stableAfterDate = await awaitStableWorkShell(contract);
+            if (!stableAfterDate.ok) return stageResult(stableAfterDate, "page_stable");
+            currentStage = "case_open";
             var prepared = await prepareCaseCombobox(contract, generation);
             if (!prepared.ok) return prepared;
+            currentStage = "case_query";
             var chosen = await selectExactCase(
-                prepared.input,
-                prepared.popup,
                 normalizeExactText(payload.case_number),
                 contract,
                 generation
             );
             if (!chosen.ok) return chosen;
-            for (var name of ["work_date", "duration_hours", "narrative"]) {
-                var filled = fillAndVerify(name, payload[name], contract);
-                if (!filled.ok) return filled;
-            }
-            var verified = verifyEntry(payload, contract);
+            currentStage = "duration_write";
+            var duration = await fillDuration(payload.duration_hours, contract, generation);
+            if (!duration.ok) return duration;
+            currentStage = "narrative_write";
+            var narrative = await fillNarrative(payload.narrative, contract, generation);
+            if (!narrative.ok) return narrative;
+            currentStage = "entry_verified";
+            var verified = await verifyEntry(payload, contract, generation);
             if (!verified.ok) return verified;
             makeFillToolbar();
             activeMode = "review";
-            return result(true, "", { status: "filled" });
+            return result(true, "", { status: "filled", stage: "entry_verified" });
         } catch (_error) {
-            return result(false, canceled(generation) ? "lookup_superseded" : "dom_contract_changed");
+            var error = canceled(generation) ? "lookup_superseded" : "dom_contract_changed";
+            return stageFailure(currentStage, error);
         } finally {
             removeFillBlockingLayer();
             if (activeMode === "fill") activeMode = "none";
@@ -758,8 +1039,16 @@
         ["error", "status", "label", "document_visibility"].forEach(function (key) {
             if (typeof value[key] === "string") safe[key] = value[key];
         });
+        ["stage", "internal_error_kind"].forEach(function (key) {
+            if (typeof value[key] === "string") safe[key] = value[key];
+        });
         ["viewport_available", "input_exists", "input_interactive"].forEach(function (key) {
             if (typeof value[key] === "boolean") safe[key] = value[key];
+        });
+        ["option_count", "date_step_count"].forEach(function (key) {
+            if (Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= 10000) {
+                safe[key] = value[key];
+            }
         });
         return safe;
     }
@@ -813,13 +1102,14 @@
         leaveCasePicker: leaveCasePicker,
         readSelectedCase: readSelectedCase,
         fillEntry: fillEntry,
-        fillWorkDate: function (value, contract) { return fillAndVerify("work_date", value, contract); },
-        fillDuration: function (value, contract) { return fillAndVerify("duration_hours", value, contract); },
-        fillNarrative: function (value, contract) { return fillAndVerify("narrative", value, contract); },
+        ensureEntryDate: ensureEntryDate,
+        fillDuration: fillDuration,
+        fillNarrative: fillNarrative,
         _test: Object.freeze({
             normalizeExactText: normalizeExactText,
             visible: visible,
             readSelectedCase: readSelectedCase,
+            readEntryDate: readEntryDate,
             activeMode: function () { return activeMode; }
         })
     });

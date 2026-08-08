@@ -170,12 +170,12 @@ function commandClient(socket) {
     const request = pending.get(message.id);
     if (!request) return;
     pending.delete(message.id);
-    if (message.error) request.reject(new Error("devtools_command_failed"));
+    if (message.error) request.reject(new Error(`devtools_command_failed_${request.method}`));
     else request.resolve(message.result || {});
   });
   return (method, params = {}) => new Promise((resolveCommand, rejectCommand) => {
     const id = ++nextId;
-    pending.set(id, { resolve: resolveCommand, reject: rejectCommand });
+    pending.set(id, { method, resolve: resolveCommand, reject: rejectCommand });
     socket.send(JSON.stringify({ id, method, params }));
   });
 }

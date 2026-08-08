@@ -175,26 +175,31 @@ test("adapter message listener is idempotent and removed on pagehide", () => {
   assert.equal(windowListeners.has("message"), false);
 });
 
-test("date duration and narrative use native setters and verify readback", () => {
-  const { adapter, fields, Input, Textarea } = fieldHarness();
-  const date = new Input();
-  const duration = new Input();
-  const narrative = new Textarea();
-  fields.set("#date", date);
-  fields.set("#duration", duration);
-  fields.set("#narrative", narrative);
-  const contract = { fields: {
-    work_date: { selector: "#date" },
-    duration_hours: { selector: "#duration" },
-    narrative: { selector: "#narrative" },
-  } };
+test("date is a page-context state transition and never a native-set form field", () => {
+  const start = source.indexOf("function readEntryDate");
+  const end = source.indexOf("async function prepareCaseCombobox", start);
+  const body = source.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  assert.match(body, /readEntryDate/);
+  assert.match(body, /previous_button_icon/);
+  assert.match(body, /next_button_icon/);
+  assert.match(body, /date_change_failed/);
+  assert.match(body, /date_verification_failed/);
+  assert.doesNotMatch(body, /nativeSet|\.value\s*=(?!=)/);
+});
 
-  assert.equal(adapter.fillWorkDate("2026-08-03", contract).ok, true);
-  assert.equal(adapter.fillDuration("1.5", contract).ok, true);
-  assert.equal(adapter.fillNarrative("Narrative", contract).ok, true);
-  assert.deepEqual(date.events, ["input", "change", "blur"]);
-  assert.deepEqual(duration.events, ["input", "change", "blur"]);
-  assert.deepEqual(narrative.events, ["input", "change", "blur"]);
+test("duration and narrative have separate controlled-component reconciliation paths", () => {
+  const durationStart = source.indexOf("async function fillDuration");
+  const narrativeStart = source.indexOf("async function fillNarrative", durationStart);
+  const verifyStart = source.indexOf("async function verifyEntry", narrativeStart);
+  const durationBody = source.slice(durationStart, narrativeStart);
+  const narrativeBody = source.slice(narrativeStart, verifyStart);
+  assert.ok(durationStart >= 0 && narrativeStart > durationStart && verifyStart > narrativeStart);
+  assert.match(durationBody, /duration_verification_failed/);
+  assert.match(narrativeBody, /narrative_verification_failed/);
+  assert.match(durationBody, /nativeSet/);
+  assert.match(narrativeBody, /nativeSet/);
+  assert.doesNotMatch(source, /function fillAndVerify/);
 });
 
 test("adapter never submits saves reads credentials or calls an FD Work API", () => {
@@ -215,6 +220,38 @@ test("fill owns one case preparation and always removes its blocking layer", () 
   assert.match(body, /finally[\s\S]*removeFillBlockingLayer/);
   assert.doesNotMatch(body, /KeyboardEvent\([^)]*Escape/);
   assert.doesNotMatch(body, /prepared\.input\.blur|caseInput\([^)]*\)\.blur/);
+});
+
+test("fill golden path is linear date then rerender-safe case and controlled fields", () => {
+  const start = source.indexOf("async function fillEntry");
+  const end = source.indexOf("function actionHandler", start);
+  const body = source.slice(start, end);
+  const stable = body.indexOf("awaitStableWorkShell");
+  const date = body.indexOf("ensureEntryDate");
+  const stableAgain = body.indexOf("awaitStableWorkShell", stable + 1);
+  const caseControl = body.indexOf("prepareCaseCombobox");
+  const exactCase = body.indexOf("selectExactCase");
+  const duration = body.indexOf("fillDuration");
+  const narrative = body.indexOf("fillNarrative");
+  const verify = body.indexOf("verifyEntry");
+  assert.ok(stable >= 0 && date > stable && stableAgain > date);
+  assert.ok(caseControl > stableAgain && exactCase > caseControl);
+  assert.ok(duration > exactCase && narrative > duration && verify > narrative);
+});
+
+test("automatic Ant Select path validates every dynamic popup stage", () => {
+  const start = source.indexOf("async function prepareCaseCombobox");
+  const end = source.indexOf("async function fillDuration", start);
+  const body = source.slice(start, end);
+  for (const stage of [
+    "case_open", "case_query", "case_results", "case_commit", "case_verified",
+  ]) assert.match(body, new RegExp(stage));
+  assert.match(body, /aria-controls/);
+  assert.match(body, /aria-owns/);
+  assert.match(body, /dispatchPointerMouseSequence/);
+  assert.match(body, /popupForInput/);
+  assert.match(body, /readSelectedCase/);
+  assert.doesNotMatch(body, /popup\s*=\s*popupForInput\([^)]*\)\s*\|\|\s*popup/);
 });
 
 test("picker does not focus click write clear escape or blur the native case input", () => {
@@ -244,6 +281,18 @@ test("pagehide invalidates generations and removes transient picker/fill state",
   assert.match(body, /clearPickerObserver/);
   assert.match(body, /removeFillBlockingLayer/);
   assert.match(body, /activeMode = "none"/);
+});
+
+test("fill diagnostics are staged and privacy-safe", () => {
+  for (const stage of [
+    "page_stable", "date_read", "date_change", "date_verified",
+    "case_open", "case_query", "case_results", "case_commit", "case_verified",
+    "duration_write", "duration_verified", "narrative_write",
+    "narrative_verified", "entry_verified",
+  ]) assert.match(source, new RegExp(`['\"]${stage}['\"]`));
+  assert.match(source, /internal_error_kind/);
+  assert.match(source, /option_count/);
+  assert.doesNotMatch(source, /diagnostic[^\n]*(?:case_number|narrative)/i);
 });
 
 test("picker keeps the native form intact and owns one idempotent style node", () => {

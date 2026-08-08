@@ -128,6 +128,7 @@ class _Adapter:
         self.fill_started = threading.Event()
         self.fill_release = threading.Event()
         self.block_fill = False
+        self.fill_result = {"ok": True, "status": "filled"}
 
     def enter_case_picker(self, window, contract):
         self.enter_picker_calls.append((window, dict(contract)))
@@ -150,7 +151,7 @@ class _Adapter:
         self.fill_started.set()
         if self.block_fill:
             assert self.fill_release.wait(timeout=2)
-        return {"ok": True, "status": "filled"}
+        return dict(self.fill_result)
 
 
 def _coordinator(*, controller=None, adapter=None, results=None, nonces=None):
@@ -204,6 +205,29 @@ def test_picker_and_fill_are_mutually_exclusive():
     assert not worker.is_alive()
     assert outcome["result"]["ok"] is True
     assert coordinator.get_status()["interaction_owner"] == "user_review"
+
+
+def test_fill_failure_releases_owner_and_does_not_poison_next_picker():
+    coordinator, controller, adapter = _coordinator(
+        nonces=["fill-nonce", "picker-nonce"]
+    )
+    adapter.fill_result = {
+        "ok": False,
+        "error": "duration_verification_failed",
+        "stage": "duration_verified",
+    }
+
+    failed = coordinator.open_entry(_draft())
+
+    assert failed == {"ok": False, "error": "duration_verification_failed"}
+    assert coordinator.get_status()["interaction_owner"] == "none"
+    reopened = coordinator.open_case_picker("drawer-after-fill-failure")
+    assert reopened["ok"] is True
+    assert coordinator.get_status()["interaction_owner"] == "user_picker"
+    assert controller.foreground_calls == [
+        ("automation_fill", 1),
+        ("user_picker", 3),
+    ]
 
 
 def test_confirmation_submission_is_async_and_uses_adapter_proof_without_reread():

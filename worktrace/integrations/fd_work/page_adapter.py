@@ -43,11 +43,22 @@ _ACTION_ERRORS = frozenset(
         "case_input_missing",
         "case_input_not_interactive",
         "case_input_not_rendered",
+        "case_aria_controls_missing",
         "case_popup_not_created",
+        "case_popup_not_interactive",
+        "case_query_not_applied",
+        "case_results_stale",
+        "case_results_timeout",
         "case_not_found",
         "case_ambiguous",
         "case_selection_required",
         "case_selection_mismatch",
+        "date_control_missing",
+        "date_change_failed",
+        "date_verification_failed",
+        "duration_verification_failed",
+        "narrative_verification_failed",
+        "entry_verification_failed",
         "ignored_required_field_missing",
         "fd_work_busy",
         "lookup_superseded",
@@ -61,6 +72,25 @@ _ACTION_ERRORS = frozenset(
         "navigation_changed",
         "non_mapping_result",
         "window_closed",
+    }
+)
+
+_FILL_DIAGNOSTIC_STAGES = frozenset(
+    {
+        "page_stable",
+        "date_read",
+        "date_change",
+        "date_verified",
+        "case_open",
+        "case_query",
+        "case_results",
+        "case_commit",
+        "case_verified",
+        "duration_write",
+        "duration_verified",
+        "narrative_write",
+        "narrative_verified",
+        "entry_verified",
     }
 )
 
@@ -113,15 +143,21 @@ class FDWorkPageAdapter:
     adapter_version = FD_WORK_ADAPTER_CONTRACT_VERSION
     business_url = "https://work.fangdalaw.com/Works/WorkHourList?picker=day"
     allowed_navigation_hosts = frozenset({"work.fangdalaw.com"})
-    field_contract = {
+    page_context_contract = {
+        "work_date": {
+            "selector": 'input[placeholder="请选择日期"]',
+            "label": "日期",
+            "outside_form_selector": "form#basic",
+            "navigation_container_selector": ".ant-space-compact",
+            "previous_button_icon": "left",
+            "next_button_icon": "right",
+        },
+    }
+    entry_field_contract = {
         "case_number": {
             "selector": "#basic_caseId",
             "label": "案件",
             "listbox": "#basic_caseId_list",
-        },
-        "work_date": {
-            "selector": 'form#basic input[placeholder="请选择日期"]',
-            "label": "日期",
         },
         "duration_hours": {
             "selector": "#basic_hoursWorked",
@@ -420,8 +456,10 @@ class FDWorkPageAdapter:
             "deadline_ms": max(1, int(timeout_seconds * 1000)),
             "operation_deadline_ms": operation_deadline_ms,
             "form_selector": "form#basic",
-            "field": self.field_contract["case_number"],
-            "fields": {"case_number": self.field_contract["case_number"]},
+            "field": self.entry_field_contract["case_number"],
+            "entry_fields": {
+                "case_number": self.entry_field_contract["case_number"]
+            },
             "max_label_length": FD_WORK_CASE_LABEL_MAX_LENGTH,
         }
 
@@ -429,7 +467,9 @@ class FDWorkPageAdapter:
         payload = self._picker_contract(operation)
         payload.update(
             {
-                "fields": self.field_contract,
+                "page_context": self.page_context_contract,
+                "entry_fields": self.entry_field_contract,
+                "max_date_steps": 366,
                 "native_actions": ("提交", "保存", "关闭"),
             }
         )
@@ -598,6 +638,13 @@ class FDWorkPageAdapter:
             ):
                 if key in value:
                     safe[key] = value[key]
+            stage = value.get("stage")
+            if isinstance(stage, str) and stage in _FILL_DIAGNOSTIC_STAGES:
+                safe["stage"] = stage
+            for key in ("option_count", "date_step_count"):
+                metric = value.get(key)
+                if type(metric) is int and 0 <= metric <= 10_000:
+                    safe[key] = metric
             return safe
         return {"ok": False, "error": internal_error_kind or "dom_contract_changed"}
 
@@ -692,9 +739,14 @@ class FDWorkPageAdapter:
         result_type: str,
         elapsed_ms: int,
     ) -> None:
+        page_error_kind = None
+        if isinstance(value, Mapping):
+            candidate_error = value.get("internal_error_kind")
+            if isinstance(candidate_error, str) and candidate_error in _ACTION_ERRORS:
+                page_error_kind = candidate_error
         diagnostic: dict[str, Any] = {
-            "action": action,
-            "internal_error_kind": internal_error_kind or "none",
+            "action": "fill_entry" if action == "fillEntry" else action,
+            "internal_error_kind": page_error_kind or internal_error_kind or "none",
             "elapsed_ms": elapsed_ms,
             "adapter_version": self.adapter_version,
             "operation_generation": int(contract.get("operation_generation") or 0),
@@ -703,6 +755,9 @@ class FDWorkPageAdapter:
             "result_type": result_type,
         }
         if isinstance(value, Mapping):
+            stage = value.get("stage")
+            if isinstance(stage, str) and stage in _FILL_DIAGNOSTIC_STAGES:
+                diagnostic["stage"] = stage
             for key in (
                 "document_visibility",
                 "viewport_available",
@@ -713,6 +768,10 @@ class FDWorkPageAdapter:
             ):
                 if key in value and isinstance(value[key], (bool, str)):
                     diagnostic[key] = value[key]
+            for key in ("option_count", "date_step_count"):
+                metric = value.get(key)
+                if type(metric) is int and 0 <= metric <= 10_000:
+                    diagnostic[key] = metric
         try:
             self._diagnostic_callback(diagnostic)
         except Exception:

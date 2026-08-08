@@ -17,27 +17,41 @@ def test_anonymous_fixture_preserves_minimum_real_ant_contract() -> None:
     source = FIXTURE.read_text(encoding="utf-8")
 
     for fragment in (
+        'id="page-date-context"',
+        'id="previous-day"',
+        'id="next-day"',
+        'id="page-work-date" placeholder="请选择日期"',
         'form id="basic"',
         'class="ant-form-item"',
-        'class="ant-select" name="workhours/matter/selector"',
+        'name="workhours/matter/selector"',
         'class="ant-select-selector"',
         'class="ant-select-selection-wrap"',
         'class="ant-select-selection-search"',
-        'id="basic_caseId" role="combobox"',
-        'aria-controls="case-listbox"',
+        'id="basic_caseId"',
+        'role="combobox"',
+        'aria-controls="basic_caseId_list"',
+        'aria-owns="basic_caseId_list"',
         'class="ant-select-selection-item"',
-        'role="listbox"',
-        'role="option"',
-        'aria-selected=',
+        'popup.id = "basic_caseId_list"',
+        'popup.setAttribute("role", "listbox")',
+        'option.setAttribute("role", "option")',
+        'option.setAttribute("aria-selected"',
         'id="basic_hoursWorked"',
         'id="basic_narrative"',
-        'id="basic_workDate"',
+        'queueMicrotask(function () { renderPopup(query); })',
+        'if (config.durationAccepted) state.duration = proposed',
+        'if (config.narrativeAccepted) state.narrative = proposed',
         "TEST MATTER A",
     ):
         assert fragment in source
     assert "../../../worktrace/integrations/fd_work/fd_work_adapter.js" in source
-    assert "data-worktrace-fdwork-hidden" in source
+    assert "data-worktrace-fdwork-hidden" not in source
+    assert 'id="basic_workDate"' not in source
+    assert 'document.body.appendChild(popup)' in source
+    assert 'renderForm();' in source
     assert 'check("unrelated_dom_churn_not_observed"' in source
+    assert 'check("complete_four_field_readback"' in source
+    assert 'check("never_auto_saves_or_submits"' in source
     assert "worktrace-result" in source
 
 

@@ -68,9 +68,16 @@ def test_login_and_confirmation_are_distinct_and_login_url_is_derived():
 def test_adapter_v5_owns_selectors_and_cached_asset():
     adapter = FDWorkPageAdapter()
     assert adapter.adapter_version == 5
-    assert set(adapter.field_contract) == {
-        "case_number", "work_date", "duration_hours", "narrative"
+    assert set(adapter.page_context_contract) == {"work_date"}
+    assert set(adapter.entry_field_contract) == {
+        "case_number", "duration_hours", "narrative"
     }
+    date_contract = adapter.page_context_contract["work_date"]
+    assert date_contract["selector"] == 'input[placeholder="请选择日期"]'
+    assert date_contract["outside_form_selector"] == "form#basic"
+    assert date_contract["previous_button_icon"] == "left"
+    assert date_contract["next_button_icon"] == "right"
+    assert "form#basic" not in date_contract["selector"]
     assert Path(adapter.adapter_asset_path).name == "fd_work_adapter.js"
 
 
@@ -164,8 +171,43 @@ def test_fill_serializes_only_four_allowed_values_and_uses_v5_contract():
         assert key in script
     assert "fillEntry" in script
     assert 'CASE-\\\"quoted\\\"' in script
+    assert '"page_context"' in script
+    assert '"entry_fields"' in script
+    assert '"work_date"' in script
+    assert '"outside_form_selector":"form#basic"' in script
     for forbidden in ("cookie", "localStorage", "sessionStorage"):
         assert forbidden not in script
+
+
+def test_fill_diagnostics_preserve_privacy_safe_stage_without_page_values():
+    diagnostics = []
+    adapter = FDWorkPageAdapter(diagnostic_callback=diagnostics.append)
+    window = _Window(
+        adapter,
+        {
+            "ok": False,
+            "error": "case_popup_not_created",
+            "stage": "case_open",
+            "internal_error_kind": "case_popup_not_created",
+            "option_count": 0,
+        },
+    )
+
+    result = adapter.fill_entry(window, _draft(), contract=_operation())
+
+    assert result == {
+        "ok": False,
+        "error": "case_popup_not_created",
+        "stage": "case_open",
+        "option_count": 0,
+    }
+    assert diagnostics[-1]["action"] == "fill_entry"
+    assert diagnostics[-1]["stage"] == "case_open"
+    assert diagnostics[-1]["internal_error_kind"] == "case_popup_not_created"
+    assert diagnostics[-1]["option_count"] == 0
+    serialized = repr(diagnostics)
+    assert _draft().case_number not in serialized
+    assert _draft().narrative not in serialized
 
 
 def test_adapter_source_is_cached_and_actions_do_not_reinject(monkeypatch):
