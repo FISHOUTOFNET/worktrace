@@ -794,7 +794,7 @@
         }).filter(function (item) { return !!item.label; });
     }
 
-    async function selectExactCase(expected, contract, generation) {
+    async function selectExactCase(expectedLabel, searchQuery, contract, generation) {
         var input = caseInput(contract);
         var popup = popupForInput(input, contract);
         if (!input || !popup || !visible(popup)) return stageFailure(
@@ -802,14 +802,14 @@
         );
         var beforePopup = popup;
         var before = optionLabels(popup).map(function (item) { return item.label; }).join("\u0000");
-        var applied = setSearchValue(input, expected);
+        var applied = setSearchValue(input, searchQuery);
         if (!applied.ok) return stageResult(applied, "case_query");
         var deadline = deadlineAt(contract);
         var queryAccepted = false;
         while (Date.now() <= deadline) {
             if (canceled(generation)) return stageFailure("case_query", "lookup_superseded");
             input = caseInput(contract);
-            if (input && String(input.value) === String(expected)) {
+            if (input && String(input.value) === String(searchQuery)) {
                 queryAccepted = true;
                 break;
             }
@@ -825,7 +825,7 @@
             var options = optionLabels(popup);
             optionCount = options.length;
             var signature = options.map(function (item) { return item.label; }).join("\u0000");
-            var matches = options.filter(function (item) { return item.label === expected; });
+            var matches = options.filter(function (item) { return item.label === expectedLabel; });
             if (matches.length > 1) return stageFailure(
                 "case_results", "case_ambiguous", { option_count: optionCount }
             );
@@ -846,7 +846,7 @@
                 option_count: optionCount
             });
             var selected = readSelectedCase(contract);
-            if (selected.ok && selected.label === expected) return result(true, "", {
+            if (selected.ok && selected.label === expectedLabel) return result(true, "", {
                 stage: "case_verified", option_count: optionCount
             });
             await requestFrame();
@@ -954,7 +954,7 @@
             return stageFailure("entry_verified", "date_verification_failed");
         }
         var selected = readSelectedCase(contract);
-        if (!selected.ok || selected.label !== normalizeExactText(payload.case_number)) {
+        if (!selected.ok || selected.label !== normalizeExactText(payload.case_label)) {
             return stageFailure("entry_verified", "case_selection_mismatch");
         }
         for (var name of ["duration_hours", "narrative"]) {
@@ -994,7 +994,8 @@
             if (!prepared.ok) return prepared;
             currentStage = "case_query";
             var chosen = await selectExactCase(
-                normalizeExactText(payload.case_number),
+                normalizeExactText(payload.case_label),
+                normalizeExactText(payload.case_query),
                 contract,
                 generation
             );
@@ -1110,6 +1111,7 @@
             visible: visible,
             readSelectedCase: readSelectedCase,
             readEntryDate: readEntryDate,
+            selectExactCase: selectExactCase,
             activeMode: function () { return activeMode; }
         })
     });

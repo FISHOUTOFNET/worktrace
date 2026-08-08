@@ -426,7 +426,8 @@ class FDWorkPageAdapter:
     ) -> dict[str, Any]:
         payload = {
             "work_date": draft.work_date,
-            "case_number": draft.case_number,
+            "case_label": draft.case_label,
+            "case_query": draft.case_query,
             "duration_hours": draft.duration_hours,
             "narrative": draft.narrative,
         }

@@ -42,6 +42,8 @@ def test_anonymous_fixture_preserves_minimum_real_ant_contract() -> None:
         'if (config.durationAccepted) state.duration = proposed',
         'if (config.narrativeAccepted) state.narrative = proposed',
         "TEST MATTER A",
+        "#26IP0165 IPDD_Miragene",
+        'case_label: canonicalLabel, case_query: "26IP0165"',
     ):
         assert fragment in source
     assert "../../../worktrace/integrations/fd_work/fd_work_adapter.js" in source
@@ -51,6 +53,9 @@ def test_anonymous_fixture_preserves_minimum_real_ant_contract() -> None:
     assert 'renderForm();' in source
     assert 'check("unrelated_dom_churn_not_observed"' in source
     assert 'check("complete_four_field_readback"' in source
+    assert 'check("canonical_case_query_written"' in source
+    assert 'check("canonical_query_exact_full_label_selected"' in source
+    assert 'check("post_click_full_label_mismatch_fails"' in source
     assert 'check("never_auto_saves_or_submits"' in source
     assert "worktrace-result" in source
 

@@ -10,7 +10,8 @@ class FDWorkEntryDraft:
     """The only WorkTrace facts allowed to cross into the FD Work page."""
 
     work_date: str
-    case_number: str
+    case_label: str
+    case_query: str
     duration_hours: str
     narrative: str
 

@@ -81,6 +81,123 @@ function fieldHarness() {
   };
 }
 
+function exactCaseHarness({ optionLabels, committedLabel } = {}) {
+  class Input {
+    constructor() { this._value = ""; }
+    get value() { return this._value; }
+    set value(value) { this._value = String(value); }
+  }
+  class Textarea extends Input {}
+  let currentLabels = ["STALE RESULT"];
+  let selectedLabel = "";
+  const queries = [];
+  const clickedLabels = [];
+  const listeners = new Map();
+  const selectionItem = {
+    get textContent() { return selectedLabel; },
+    getAttribute(name) { return name === "title" ? selectedLabel : null; },
+    getClientRects() { return selectedLabel ? [{}] : []; },
+  };
+  const wrapper = {
+    querySelector(selector) {
+      return selector.includes("selection-item") && selectedLabel ? selectionItem : null;
+    },
+  };
+  const input = new Input();
+  Object.assign(input, {
+    disabled: false,
+    readOnly: false,
+    getAttribute(name) {
+      return name === "aria-controls" || name === "aria-owns" ? "case-list" : null;
+    },
+    getClientRects() { return [{}]; },
+    closest(selector) { return selector === ".ant-select" ? wrapper : null; },
+    dispatchEvent(event) {
+      if (event.type === "input") {
+        queries.push(this.value);
+        currentLabels = optionLabels.slice();
+      }
+      return true;
+    },
+  });
+  function option(label) {
+    return {
+      label,
+      innerText: label,
+      textContent: label,
+      getAttribute(name) {
+        if (name === "title") return label;
+        if (name === "aria-selected") return label === selectedLabel ? "true" : "false";
+        return null;
+      },
+      getClientRects() { return [{}]; },
+      dispatchEvent(event) {
+        if (event.type === "click") {
+          clickedLabels.push(label);
+          selectedLabel = committedLabel === undefined ? label : committedLabel;
+        }
+        return true;
+      },
+    };
+  }
+  const popup = {
+    getClientRects() { return [{}]; },
+    querySelectorAll(selector) {
+      const options = currentLabels.map(option);
+      return selector.includes("aria-selected='true'")
+        ? options.filter((item) => item.label === selectedLabel)
+        : options;
+    },
+  };
+  const context = {
+    Promise, Object, String, Array,
+    Event: class Event { constructor(type) { this.type = type; } },
+    MouseEvent: class MouseEvent { constructor(type) { this.type = type; } },
+    PointerEvent: class PointerEvent { constructor(type) { this.type = type; } },
+    HTMLInputElement: Input,
+    HTMLTextAreaElement: Textarea,
+    MutationObserver: class { observe() {} disconnect() {} },
+    setTimeout, clearTimeout,
+    requestAnimationFrame(callback) { return setTimeout(callback, 0); },
+    document: {
+      visibilityState: "visible",
+      documentElement: { setAttribute() {}, removeAttribute() {} },
+      body: { firstElementChild: {}, appendChild() {}, insertBefore() {} },
+      querySelector(selector) { return selector === "#case" ? input : null; },
+      querySelectorAll() { return []; },
+      getElementById(id) { return id === "case-list" ? popup : null; },
+      createElement() { return { setAttribute() {}, appendChild() {}, addEventListener() {} }; },
+    },
+    window: {
+      innerWidth: 980,
+      innerHeight: 760,
+      location: {
+        href: "https://work.fangdalaw.com/Works/WorkHourList?picker=day",
+        origin: "https://work.fangdalaw.com",
+      },
+      getComputedStyle() { return { display: "block", visibility: "visible" }; },
+      addEventListener(name, callback) { listeners.set(name, callback); },
+      removeEventListener() {},
+    },
+  };
+  context.window.top = context.window;
+  vm.createContext(context);
+  vm.runInContext(source, context, { filename: "fd_work_adapter.js" });
+  return {
+    adapter: context.window.WorkTraceFDWorkAdapter,
+    contract: {
+      version: 5,
+      operation_generation: 0,
+      operation_deadline_ms: Date.now() + 80,
+      max_label_length: 100,
+      field: { selector: "#case", listbox: "#case-list" },
+      entry_fields: { case_number: { selector: "#case", listbox: "#case-list" } },
+    },
+    queries,
+    clickedLabels,
+  };
+}
+
 test("adapter contract v5 exposes picker and fill modes without inline search handshake", () => {
   const { adapter } = fieldHarness();
   assert.equal(adapter.version, 5);
@@ -252,6 +369,112 @@ test("automatic Ant Select path validates every dynamic popup stage", () => {
   assert.match(body, /popupForInput/);
   assert.match(body, /readSelectedCase/);
   assert.doesNotMatch(body, /popup\s*=\s*popupForInput\([^)]*\)\s*\|\|\s*popup/);
+});
+
+test("automatic case selection writes canonical query but matches the full label", async () => {
+  const expectedLabel = "#26IP0165 IPDD_Miragene";
+  const h = exactCaseHarness({ optionLabels: [expectedLabel] });
+
+  const selected = await h.adapter._test.selectExactCase(
+    expectedLabel,
+    "26IP0165",
+    h.contract,
+    0
+  );
+
+  assert.equal(selected.ok, true, JSON.stringify(selected));
+  assert.deepEqual(h.queries, ["26IP0165"]);
+  assert.notEqual(h.queries[0], expectedLabel);
+  assert.deepEqual(h.clickedLabels, [expectedLabel]);
+});
+
+test("canonical query candidates are disambiguated by exact full label", async () => {
+  const expectedLabel = "#26IP0165 IPDD_Miragene";
+  const otherLabel = "#26IP0165 Another Matter";
+  const h = exactCaseHarness({ optionLabels: [expectedLabel, otherLabel] });
+
+  const selected = await h.adapter._test.selectExactCase(
+    expectedLabel,
+    "26IP0165",
+    h.contract,
+    0
+  );
+
+  assert.equal(selected.ok, true, JSON.stringify(selected));
+  assert.deepEqual(h.clickedLabels, [expectedLabel]);
+});
+
+test("duplicate exact full labels fail closed as ambiguous", async () => {
+  const expectedLabel = "#26IP0165 IPDD_Miragene";
+  const h = exactCaseHarness({ optionLabels: [expectedLabel, expectedLabel] });
+
+  const selected = await h.adapter._test.selectExactCase(
+    expectedLabel,
+    "26IP0165",
+    h.contract,
+    0
+  );
+
+  assert.equal(selected.ok, false);
+  assert.equal(selected.error, "case_ambiguous");
+  assert.deepEqual(h.clickedLabels, []);
+});
+
+test("similar canonical-query result never substitutes for expected full label", async () => {
+  const h = exactCaseHarness({ optionLabels: ["#26IP0165 Another Matter"] });
+
+  const selected = await h.adapter._test.selectExactCase(
+    "#26IP0165 IPDD_Miragene",
+    "26IP0165",
+    h.contract,
+    0
+  );
+
+  assert.equal(selected.ok, false);
+  assert.equal(selected.error, "case_not_found");
+  assert.deepEqual(h.clickedLabels, []);
+});
+
+test("post-click selected full-label mismatch fails closed", async () => {
+  const expectedLabel = "#26IP0165 IPDD_Miragene";
+  const h = exactCaseHarness({
+    optionLabels: [expectedLabel],
+    committedLabel: "#21IP0201 Other Matter",
+  });
+
+  const selected = await h.adapter._test.selectExactCase(
+    expectedLabel,
+    "26IP0165",
+    h.contract,
+    0
+  );
+
+  assert.equal(selected.ok, false);
+  assert.equal(selected.error, "case_selection_mismatch");
+  assert.deepEqual(h.clickedLabels, [expectedLabel]);
+});
+
+test("anonymous CASE A fixture remains supported when label and query are equal", async () => {
+  const h = exactCaseHarness({ optionLabels: ["CASE A"] });
+
+  const selected = await h.adapter._test.selectExactCase(
+    "CASE A",
+    "CASE A",
+    h.contract,
+    0
+  );
+
+  assert.equal(selected.ok, true, JSON.stringify(selected));
+  assert.deepEqual(h.queries, ["CASE A"]);
+  assert.deepEqual(h.clickedLabels, ["CASE A"]);
+});
+
+test("verifyEntry validates the selected full label and never the search query", () => {
+  const start = source.indexOf("async function verifyEntry");
+  const end = source.indexOf("async function fillEntry", start);
+  const body = source.slice(start, end);
+  assert.match(body, /payload\.case_label/);
+  assert.doesNotMatch(body, /payload\.case_query/);
 });
 
 test("picker does not focus click write clear escape or blur the native case input", () => {

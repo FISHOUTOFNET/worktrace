@@ -14,7 +14,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
 @dataclass
 class _DraftBuilder:
     draft: FDWorkEntryDraft = FDWorkEntryDraft(
-        "2026-08-03", "CASE LABEL", "1.0", "Narrative"
+        "2026-08-03", "CASE LABEL", "CASE LABEL", "1.0", "Narrative"
     )
 
     def __post_init__(self):

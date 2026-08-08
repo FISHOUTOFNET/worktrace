@@ -89,7 +89,7 @@ def _builder(projection, *, bound=True):
     ), calls, verifier
 
 
-def test_authoritative_projection_builds_only_the_four_field_draft():
+def test_authoritative_projection_separates_full_label_from_search_query():
     builder, calls, verifier = _builder(_projection(_entry()))
 
     draft = builder.build_draft(_request())
@@ -98,16 +98,31 @@ def test_authoritative_projection_builds_only_the_four_field_draft():
     assert verifier.calls == [(17, "MATTER-2026-001")]
     assert draft == FDWorkEntryDraft(
         work_date=DATE,
-        case_number="MATTER-2026-001",
+        case_label="MATTER-2026-001",
+        case_query="MATTER-2026-001",
         duration_hours="1.4",
         narrative="Prepared filing summary.",
     )
     assert set(vars(draft)) == {
         "work_date",
-        "case_number",
+        "case_label",
+        "case_query",
         "duration_hours",
         "narrative",
     }
+
+
+def test_fd_work_case_label_keeps_binding_identity_and_derives_canonical_query():
+    label = "#26IP0165 IPDD_Miragene"
+    builder, _calls, verifier = _builder(
+        _projection(_entry(project_name=f"\u3000{label}\u00a0"))
+    )
+
+    draft = builder.build_draft(_request())
+
+    assert verifier.calls == [(17, label)]
+    assert draft.case_label == label
+    assert draft.case_query == "26IP0165"
 
 
 @pytest.mark.parametrize(
@@ -135,7 +150,8 @@ def test_convenience_build_uses_identity_only_and_rebuilds_authoritatively():
     draft = builder.build(DATE, KEY, REVISION)
 
     assert calls == [DATE]
-    assert draft.case_number == "MATTER-2026-001"
+    assert draft.case_label == "MATTER-2026-001"
+    assert draft.case_query == "MATTER-2026-001"
 
 
 @pytest.mark.parametrize(

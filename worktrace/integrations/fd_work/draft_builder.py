@@ -7,6 +7,7 @@ from typing import Any, Callable, Mapping
 
 from ...constants import UNCATEGORIZED_PROJECT
 from ...services.report_projection_provider import get_day_projection
+from .case_identity import case_search_query, normalize_case_label
 from .contracts import FDWorkEntryDraft, FDWorkEntryError, FDWorkEntryRequest
 
 _SECONDS_PER_HOUR = Decimal(3600)
@@ -26,7 +27,7 @@ def format_duration_hours(duration_seconds: int) -> str:
 
 
 class FDWorkEntryDraftBuilder:
-    """Read the canonical projection and construct only the four allowed facts."""
+    """Read the canonical projection and construct only page-safe entry facts."""
 
     def __init__(
         self,
@@ -63,13 +64,14 @@ class FDWorkEntryDraftBuilder:
             raise FDWorkEntryError("stale_selection")
 
         self._validate_project_session(entry)
-        case_number = str(entry.get("project_name") or "").strip()
-        if not case_number:
+        case_label = normalize_case_label(entry.get("project_name"))
+        if not case_label:
             raise FDWorkEntryError("empty_project_name")
         project_id = int(entry.get("project_id") or 0)
         if project_id <= 0 or self._binding_verifier is None:
             raise FDWorkEntryError("project_not_fd_work_bound")
-        self._binding_verifier.require_project_binding(project_id, case_number)
+        self._binding_verifier.require_project_binding(project_id, case_label)
+        case_query = case_search_query(case_label)
 
         narrative = str(entry.get("session_note") or "").strip()
         if not narrative:
@@ -91,7 +93,8 @@ class FDWorkEntryDraftBuilder:
 
         return FDWorkEntryDraft(
             work_date=request.report_date,
-            case_number=case_number,
+            case_label=case_label,
+            case_query=case_query,
             duration_hours=duration_hours,
             narrative=narrative,
         )

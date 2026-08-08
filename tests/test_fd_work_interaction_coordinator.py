@@ -168,7 +168,9 @@ def _coordinator(*, controller=None, adapter=None, results=None, nonces=None):
 
 
 def _draft():
-    return FDWorkEntryDraft("2026-08-03", "CASE A", "1.5", "Narrative")
+    return FDWorkEntryDraft(
+        "2026-08-03", "CASE A", "CASE A", "1.5", "Narrative"
+    )
 
 
 def test_explicit_picker_foregrounds_once_and_enters_user_owned_mode():

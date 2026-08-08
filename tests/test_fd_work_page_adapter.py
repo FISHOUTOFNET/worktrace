@@ -36,7 +36,13 @@ def _operation(**overrides):
 
 
 def _draft():
-    return FDWorkEntryDraft("2026-08-03", 'CASE-"quoted"', "1.5", "Narrative")
+    return FDWorkEntryDraft(
+        work_date="2026-08-03",
+        case_label='#26IP0165 CASE-"quoted"',
+        case_query="26IP0165",
+        duration_hours="1.5",
+        narrative="Narrative",
+    )
 
 
 @pytest.mark.parametrize(
@@ -159,7 +165,7 @@ def test_picker_and_stable_actions_fail_closed(method, remote_result, expected_e
     assert value["error"] == expected_error
 
 
-def test_fill_serializes_only_four_allowed_values_and_uses_v5_contract():
+def test_fill_serializes_separate_case_label_and_query_with_v5_contract():
     adapter = FDWorkPageAdapter()
     window = _Window(adapter, {"ok": True, "status": "filled"})
 
@@ -167,10 +173,11 @@ def test_fill_serializes_only_four_allowed_values_and_uses_v5_contract():
 
     assert result == {"ok": True, "status": "filled"}
     script = window.calls[-1][0]
-    for key in ("work_date", "case_number", "duration_hours", "narrative"):
+    for key in ("work_date", "case_label", "case_query", "duration_hours", "narrative"):
         assert key in script
     assert "fillEntry" in script
-    assert 'CASE-\\\"quoted\\\"' in script
+    assert '#26IP0165 CASE-\\\"quoted\\\"' in script
+    assert '"case_query":"26IP0165"' in script
     assert '"page_context"' in script
     assert '"entry_fields"' in script
     assert '"work_date"' in script
@@ -206,7 +213,8 @@ def test_fill_diagnostics_preserve_privacy_safe_stage_without_page_values():
     assert diagnostics[-1]["internal_error_kind"] == "case_popup_not_created"
     assert diagnostics[-1]["option_count"] == 0
     serialized = repr(diagnostics)
-    assert _draft().case_number not in serialized
+    assert _draft().case_label not in serialized
+    assert _draft().case_query not in serialized
     assert _draft().narrative not in serialized
 
 
