@@ -218,10 +218,10 @@
         ) || node && (node.innerText || node.textContent || node.value));
     }
 
-    function createEntryActions() {
+    function createEntryActions(expected) {
         return Array.prototype.filter.call(
             document.querySelectorAll("button, [role='button'], input[type='button']"),
-            function (node) { return visible(node) && createEntryActionText(node) === "创建工时"; }
+            function (node) { return visible(node) && createEntryActionText(node) === expected; }
         );
     }
 
@@ -240,6 +240,7 @@
             });
         }
 
+        var expected = "创建工时";
         var ownsPreparationBlocker = activeMode !== "fill";
         var blockerInstalled = false;
         var createClickCount = 0;
@@ -283,7 +284,7 @@
                 continue;
             }
 
-            var matches = createEntryActions();
+            var matches = createEntryActions(expected);
             lastCreateCount = matches.length;
             if (matches.length > 1) return fail("entry_create_action_ambiguous", {
                 create_action_count: matches.length,
