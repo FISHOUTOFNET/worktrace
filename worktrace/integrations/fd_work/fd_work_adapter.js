@@ -203,8 +203,9 @@
             await requestFrame();
         }
         var finalState = entryEditorState(contract);
+        removeFillBlockingLayer();
         return result(false, "entry_editor_not_rendered", {
-            editor_exists: finalState.ready,
+            editor_exists: !!finalState.form,
             input_exists: !!finalState.input,
             input_interactive: !!(
                 finalState.input && !finalState.input.disabled && !finalState.input.readOnly
@@ -222,10 +223,32 @@
         var generation = Number(contract && contract.operation_generation) || activeGeneration;
         if (activeMode === "none" && generation > activeGeneration) activeGeneration = generation;
         if (canceled(generation)) return result(false, "lookup_superseded");
-        if (entryEditorState(contract).ready) return result(true, "", {
+
+        var state = entryEditorState(contract);
+        if (state.ready) return result(true, "", {
             status: "entry_editor_ready", editor_exists: true,
             create_action_count: 0, create_click_count: 0
         });
+
+        if (state.form || state.input || state.wrapper) {
+            installFillBlockingLayer();
+            setFillBlockingMessage("正在准备 FD Work，请勿操作");
+            var rendering = await awaitStableEntryEditor(contract);
+            if (!rendering.ok) return result(false,
+                rendering.error === "lookup_superseded"
+                    ? rendering.error : "entry_editor_not_rendered",
+                {
+                    create_action_count: 0,
+                    create_click_count: 0,
+                    editor_exists: !!entryEditorState(contract).form
+                }
+            );
+            return result(true, "", {
+                status: "entry_editor_ready", editor_exists: true,
+                create_action_count: 0, create_click_count: 0
+            });
+        }
+
         var expected = "创建工时";
         var matches = Array.prototype.filter.call(
             document.querySelectorAll("button, [role='button'], input[type='button']"),
@@ -243,10 +266,14 @@
                 create_action_count: 1, create_click_count: 0
             });
         }
+
+        installFillBlockingLayer();
+        setFillBlockingMessage("正在准备 FD Work，请勿操作");
         try {
             if (typeof action.click !== "function") throw new Error("not_interactive");
             action.click();
         } catch (_error) {
+            removeFillBlockingLayer();
             return result(false, "entry_create_action_disabled", {
                 create_action_count: 1, create_click_count: 0
             });
@@ -700,6 +727,7 @@
             document.addEventListener("click", pickerDocumentClickListener, true);
         }
         updatePickerToolbar();
+        removeFillBlockingLayer();
         return result(true, "", { status: "picker_ready" });
     }
 
@@ -1380,6 +1408,7 @@
         lastPayload = Object.assign({}, payload);
         lastContract = contract;
         installFillBlockingLayer();
+        setFillBlockingMessage("正在填入，请勿操作");
         var currentStage = "page_stable";
         try {
             var stable = await awaitStableEntryEditor(contract);
