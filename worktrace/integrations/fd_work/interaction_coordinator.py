@@ -346,25 +346,18 @@ class FDWorkInteractionCoordinator:
                     operation_nonce,
                     operation_generation,
                 )
-            editor = dict(self._page_adapter.ensure_entry_editor(window, contract))
-            if editor.get("ok") is not True:
-                return self._finish_fill_failure(
-                    str(editor.get("error") or "entry_editor_not_rendered"),
-                    operation_nonce,
-                    operation_generation,
-                )
-            stable = dict(
-                self._page_adapter.await_stable_entry_editor(window, contract)
-            )
-            if stable.get("ok") is not True:
-                return self._finish_fill_failure(
-                    str(stable.get("error") or "entry_editor_not_rendered"),
-                    operation_nonce,
-                    operation_generation,
-                )
-            if not self._operation_is_current(
-                "automation_fill", operation_nonce, operation_generation
-            ):
+            with self._lock:
+                if not self._operation_is_current_locked(
+                    "automation_fill", operation_nonce, operation_generation
+                ):
+                    current = False
+                else:
+                    current = True
+                    self._operation_deadline_ms = None
+                    contract = self._operation_contract_locked(
+                        self._fill_timeout_seconds
+                    )
+            if not current:
                 return {"ok": False, "error": "lookup_superseded"}
             filled = dict(self._page_adapter.fill_entry(window, draft, contract=contract))
         except Exception:
@@ -810,17 +803,35 @@ class FDWorkInteractionCoordinator:
         operation_nonce: str,
         operation_generation: int,
     ) -> dict[str, Any]:
+        canceled_error = error in {
+            "window_closed",
+            "lookup_superseded",
+            "navigation_changed",
+        }
+        with self._lock:
+            if not self._operation_is_current_locked(
+                "automation_fill", operation_nonce, operation_generation
+            ):
+                return {"ok": False, "error": error}
+            navigation_generation = self._operation_navigation_generation
+        if not canceled_error and navigation_generation is not None:
+            try:
+                self._controller.hide_and_restore_main(
+                    navigation_generation,
+                    operation_generation,
+                    lambda: self._operation_is_current(
+                        "automation_fill", operation_nonce, operation_generation
+                    ),
+                )
+            except Exception:
+                pass
         with self._lock:
             if not self._operation_is_current_locked(
                 "automation_fill", operation_nonce, operation_generation
             ):
                 return {"ok": False, "error": error}
             self._clear_operation_locked()
-            operation_status = (
-                "operation_canceled"
-                if error in {"window_closed", "lookup_superseded", "navigation_changed"}
-                else "failed"
-            )
+            operation_status = "operation_canceled" if canceled_error else "failed"
             public_status = self._status_locked(
                 error_code=error,
                 operation_status=operation_status,
