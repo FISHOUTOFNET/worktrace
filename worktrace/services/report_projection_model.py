@@ -258,7 +258,7 @@ class OperationDiagnostic:
             "reason": self.reason,
             "source_instance_key": self.source_instance_key,
             "target_instance_key": self.target_instance_key,
-            "undo_operation_id": self.undo_of_operation_id,
+            "undo_operation_id": self.undo_operation_id,
             "details": thaw_value(self.details),
         }
 
