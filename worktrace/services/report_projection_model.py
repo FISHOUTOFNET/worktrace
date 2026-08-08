@@ -258,7 +258,7 @@ class OperationDiagnostic:
             "reason": self.reason,
             "source_instance_key": self.source_instance_key,
             "target_instance_key": self.target_instance_key,
-            "undo_operation_id": self.undo_operation_id,
+            "undo_operation_id": self.undo_of_operation_id,
             "details": thaw_value(self.details),
         }
 
@@ -363,9 +363,15 @@ def project_state_from_row(
     archived = bool(value("is_archived", value("project_is_archived", False)))
     enabled = bool(value("is_enabled", value("enabled", True)))
     uncategorized = bool(value("is_report_uncategorized", False))
-    if not project_name and uncategorized_id is not None and project_id == int(uncategorized_id):
-        project_name, uncategorized = UNCATEGORIZED_PROJECT, True
-    report_project = bool(value("is_report_project", not uncategorized and project_id > 0))
+    if uncategorized_id is not None and project_id == int(uncategorized_id):
+        uncategorized = True
+        if not project_name:
+            project_name = UNCATEGORIZED_PROJECT
+    elif project_name == UNCATEGORIZED_PROJECT:
+        uncategorized = True
+    report_project = False if uncategorized else bool(
+        value("is_report_project", project_id > 0)
+    )
     project_key = str(value("project_key", "") or (f"project:{project_id}" if project_id else "project:none"))
     report_key = str(value("report_project_key", "") or "")
     if not report_key:
@@ -380,9 +386,13 @@ def project_state_from_row(
         is_system=str(value("created_by", "") or "") == "system",
         is_special=project_name in {UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT},
         is_report_project=report_project,
-        is_report_classified=bool(value("is_report_classified", report_project)),
+        is_report_classified=False if uncategorized else bool(
+            value("is_report_classified", report_project)
+        ),
         is_report_uncategorized=uncategorized,
-        is_official_project=bool(value("is_official_project", report_project)),
+        is_official_project=False if uncategorized else bool(
+            value("is_official_project", report_project)
+        ),
         report_attribution_kind=str(value("report_attribution_kind", "none") or "none"),
         project_key=project_key,
         report_project_key=report_key,
