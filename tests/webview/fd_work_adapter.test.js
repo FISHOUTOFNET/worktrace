@@ -412,11 +412,10 @@ test("duration and narrative have separate controlled-component reconciliation p
   assert.doesNotMatch(source, /function fillAndVerify/);
 });
 
-test("adapter never submits saves reads credentials or calls an FD Work API", () => {
+test("adapter never reads credentials or calls an FD Work private API", () => {
   assert.doesNotMatch(source, /\bfetch\s*\(|XMLHttpRequest|axios/i);
   assert.doesNotMatch(source, /cookie|localStorage|sessionStorage/i);
   assert.doesNotMatch(source, /querySelector\([^)]*(?:password|token)/i);
-  assert.doesNotMatch(source, /\.click\(\).*['"](?:保存|提交)['"]/s);
   assert.doesNotMatch(source, /(?:submit|requestSubmit)\s*\(/);
 });
 
@@ -444,9 +443,86 @@ test("fill golden path is linear date then rerender-safe case and controlled fie
   const duration = body.indexOf("fillDuration");
   const narrative = body.indexOf("fillNarrative");
   const verify = body.indexOf("verifyEntry");
+  const save = body.indexOf("saveEntry");
   assert.ok(stable >= 0 && date > stable && stableAgain > date);
   assert.ok(caseControl > stableAgain && exactCase > caseControl);
-  assert.ok(duration > exactCase && narrative > duration && verify > narrative);
+  assert.ok(duration > exactCase && narrative > duration && verify > narrative && save > verify);
+});
+
+test("save action is scoped to form#basic and ignores matching buttons outside it", () => {
+  const { adapter, fields } = fieldHarness();
+  const inside = {
+    textContent: "保存", disabled: false,
+    getAttribute() { return null; },
+    getClientRects() { return [{}]; },
+  };
+  const outside = {
+    textContent: "保存", disabled: false,
+    getAttribute() { return null; },
+    getClientRects() { return [{}]; },
+  };
+  const form = {
+    querySelectorAll() { return [inside]; },
+    getClientRects() { return [{}]; },
+  };
+  fields.set("form#basic", form);
+  fields.set("#outside-save", outside);
+
+  const located = adapter._test.locateSaveAction({
+    form_selector: "form#basic",
+    save_action_label: "保存",
+  });
+
+  assert.equal(located.ok, true);
+  assert.equal(located.node, inside);
+});
+
+test("save requires completion evidence, resets active mode, and can run twice", async () => {
+  const { adapter, fields, context } = fieldHarness();
+  let clicks = 0;
+  let successVisible = false;
+  const success = { textContent: "保存成功", getClientRects() { return [{}]; } };
+  const button = {
+    textContent: "保存", disabled: false, isConnected: true,
+    getAttribute() { return null; },
+    getClientRects() { return [{}]; },
+    focus() {},
+    dispatchEvent() { return true; },
+    click() { clicks += 1; successVisible = true; },
+  };
+  const form = {
+    isConnected: true,
+    querySelectorAll() { return [button]; },
+    getClientRects() { return [{}]; },
+  };
+  fields.set("form#basic", form);
+  context.document.querySelectorAll = function (selector) {
+    return successVisible && selector.includes("message-success") ? [success] : [];
+  };
+  const contract = {
+    form_selector: "form#basic",
+    save_action_label: "保存",
+    save_success_selector: ".ant-message-success",
+    operation_deadline_ms: Date.now() + 500,
+  };
+
+  const first = await adapter._test.saveEntry(contract, 0);
+  successVisible = false;
+  contract.operation_deadline_ms = Date.now() + 500;
+  const second = await adapter._test.saveEntry(contract, 0);
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.equal(clicks, 2);
+  assert.equal(adapter._test.activeMode(), "none");
+});
+
+test("fill success does not leave the adapter in review mode", () => {
+  const start = source.indexOf("async function fillEntry");
+  const end = source.indexOf("function actionHandler", start);
+  const body = source.slice(start, end);
+  assert.doesNotMatch(body, /activeMode\s*=\s*["']review["']/);
+  assert.match(body, /finally[\s\S]*activeMode\s*=\s*["']none["']/);
 });
 
 test("automatic Ant Select path validates every dynamic popup stage", () => {
@@ -734,7 +810,7 @@ test("fill diagnostics are staged and privacy-safe", () => {
     "page_stable", "date_read", "date_change", "date_verified",
     "case_open", "case_query", "case_results", "case_commit", "case_verified",
     "duration_write", "duration_verified", "narrative_write",
-    "narrative_verified", "entry_verified",
+    "narrative_verified", "entry_verified", "save_action", "save_click", "save_completed",
   ]) assert.match(source, new RegExp(`['\"]${stage}['\"]`));
   assert.match(source, /internal_error_kind/);
   assert.match(source, /option_count/);

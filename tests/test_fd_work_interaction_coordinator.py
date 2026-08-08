@@ -128,7 +128,7 @@ class _Adapter:
         self.fill_started = threading.Event()
         self.fill_release = threading.Event()
         self.block_fill = False
-        self.fill_result = {"ok": True, "status": "filled"}
+        self.fill_result = {"ok": True, "status": "saved"}
 
     def enter_case_picker(self, window, contract):
         self.enter_picker_calls.append((window, dict(contract)))
@@ -206,7 +206,7 @@ def test_picker_and_fill_are_mutually_exclusive():
     worker.join(timeout=2)
     assert not worker.is_alive()
     assert outcome["result"]["ok"] is True
-    assert coordinator.get_status()["interaction_owner"] == "user_review"
+    assert coordinator.get_status()["interaction_owner"] == "none"
 
 
 def test_fill_failure_releases_owner_and_does_not_poison_next_picker():
@@ -455,14 +455,18 @@ def test_visibility_sequence_ready_picker_foregrounds_and_hides_once_on_confirm(
     ]
 
 
-def test_visibility_sequence_fill_foregrounds_once_and_stays_for_review():
+def test_visibility_sequence_fill_saves_hides_and_restores_main():
     coordinator, controller, _adapter = _coordinator()
 
     result = coordinator.open_entry(_draft())
 
-    assert result == {"ok": True, "operation_status": "review"}
-    assert controller.window_actions == ["show", "restore", "focus"]
-    assert coordinator.get_status()["interaction_owner"] == "user_review"
+    assert result == {"ok": True, "operation_status": "saved"}
+    assert controller.window_actions == [
+        "show", "restore", "focus", "hide", "main"
+    ]
+    assert controller.hide_calls == [(4, 1)]
+    assert controller.main_focus_calls == 1
+    assert coordinator.get_status()["interaction_owner"] == "none"
 
 
 def test_explicit_standalone_auth_owns_helper_until_ready_then_restores_main():
@@ -511,4 +515,60 @@ def test_fill_awaits_stable_shell_and_has_no_interactive_handshake():
         == adapter.fill_calls[0][2]["operation_deadline_ms"]
     )
     assert not hasattr(adapter, "check_work_interactive")
-    assert coordinator.get_status()["interaction_owner"] == "user_review"
+    assert coordinator.get_status()["interaction_owner"] == "none"
+
+
+def test_five_fill_save_transactions_reuse_ready_helper_without_busy_state():
+    nonces = [f"fill-{index}" for index in range(5)]
+    coordinator, controller, adapter = _coordinator(nonces=nonces)
+
+    results = [coordinator.open_entry(_draft()) for _index in range(5)]
+
+    assert results == [{"ok": True, "operation_status": "saved"}] * 5
+    assert len(adapter.fill_calls) == 5
+    assert controller.prepare_calls == []
+    assert controller.hide_calls == [(4, generation) for generation in (1, 3, 5, 7, 9)]
+    assert coordinator.get_status()["interaction_owner"] == "none"
+    assert coordinator.get_status()["ready"] is True
+
+
+def test_closed_helper_is_prepared_and_pending_fill_resumes_when_ready():
+    class RecoveringController(_Controller):
+        def prepare_session(self, show_login_if_required=True):
+            self.prepare_calls.append(show_login_if_required)
+            self.window = object()
+            self.publish(
+                session_state="ready",
+                page_phase="work_shell",
+                ready=True,
+                login_required=False,
+                navigation_generation=5,
+            )
+            return {"ok": True, "status": self.get_status()}
+
+    controller = RecoveringController()
+    controller.window = None
+    controller.status.update({
+        "session_state": "idle",
+        "page_phase": "none",
+        "ready": False,
+        "navigation_generation": 4,
+    })
+    coordinator, _controller, adapter = _coordinator(
+        controller=controller,
+        nonces=["auth", "fill"],
+    )
+
+    opening = coordinator.open_entry(_draft())
+
+    assert opening == {"ok": True, "operation_status": "session_starting"}
+    assert controller.prepare_calls == [True]
+    assert coordinator.get_status()["interaction_owner"] == "automation_fill"
+    assert len(controller.scheduled) == 1
+
+    controller.run_scheduled()
+
+    assert len(adapter.fill_calls) == 1
+    assert controller.hide_calls == [(5, 2)]
+    assert coordinator.get_status()["interaction_owner"] == "none"
+    assert coordinator.get_status()["ready"] is True

@@ -27,6 +27,10 @@ _PAGE_ERRORS = frozenset(
         "navigation_changed",
         "non_mapping_result",
         "page_contract_changed",
+        "save_action_ambiguous",
+        "save_action_missing",
+        "save_action_not_interactive",
+        "save_completion_failed",
     }
 )
 _TIMEOUT_ERRORS = frozenset(

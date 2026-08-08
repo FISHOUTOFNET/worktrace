@@ -7,7 +7,7 @@
     App.FD_WORK_CASE_LABEL_MAX_LENGTH = 100;
 
     var sessionStates = ["disabled", "deferred_by_privacy", "idle", "probing", "login_required", "ready", "error", "shutdown"];
-    var operations = ["none", "user_auth", "user_picker", "automation_fill", "user_review"];
+    var operations = ["none", "user_auth", "user_picker", "automation_fill"];
     var pagePhases = ["none", "login_credentials", "login_confirmation", "work_shell", "unauthorized", "error", "unknown"];
 
     function validStatus(status) {
@@ -28,6 +28,7 @@
 
     App.receiveFDWorkStatus = function (status) {
         if (!validStatus(status)) return false;
+        var previousOperation = App.fdWorkStatus && App.fdWorkStatus.operation;
         var incomingGeneration = Number.isInteger(status.navigation_generation)
             ? status.navigation_generation : null;
         var currentGeneration = App.fdWorkStatus
@@ -58,6 +59,14 @@
         if (typeof App.renderFDWorkToggle === "function") App.renderFDWorkToggle(App.lastSettingsStatus);
         if (typeof App.updateFDWorkEntryButton === "function") App.updateFDWorkEntryButton();
         if (App.projectIdentity) App.projectIdentity.syncStatus();
+        if (previousOperation === "automation_fill" && status.operation === "none") {
+            if (typeof App.showFDWorkStatus === "function") {
+                App.showFDWorkStatus(
+                    status.error_code ? "保存到 FD Work 失败，请重试" : "已保存到 FD Work",
+                    !!status.error_code
+                );
+            }
+        }
         return true;
     };
 
@@ -67,8 +76,7 @@
         if (status.session_state === "deferred_by_privacy") return "等待隐私授权";
         if (status.operation === "user_auth") return "等待用户登录";
         if (status.operation === "user_picker") return "用户正在选择案件";
-        if (status.operation === "automation_fill") return "正在填入";
-        if (status.operation === "user_review") return "等待用户检查并保存";
+        if (status.operation === "automation_fill") return "正在填入 FD Work…";
         if (status.session_state === "probing") return "正在检查登录状态";
         if (status.session_state === "ready") return "已连接";
         if (status.page_phase === "login_confirmation") return "请确认登录";

@@ -54,7 +54,7 @@ class _FDWorkCapability:
         )
         return {
             "ok": True,
-            "operation_status": "review",
+            "operation_status": "saved",
             "capability_status": self.get_settings_status(),
         }
 
@@ -80,7 +80,7 @@ def test_bridge_forwards_no_remote_field_values_or_adapter_knowledge():
     )
 
     assert result["ok"] is True
-    assert result["operation_status"] == "review"
+    assert result["operation_status"] == "saved"
     assert result["capability_status"]["session_state"] == "ready"
     assert "status" not in result
     assert capability.calls == [

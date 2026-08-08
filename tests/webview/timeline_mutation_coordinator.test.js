@@ -809,6 +809,22 @@ test("FD Work area is fail-closed and one availability model renders the reason"
   assert.match(element("fd-work-status").textContent, /请先填写描述/);
 });
 
+test("closed idle helper remains actionable so the next fill can prepare it", () => {
+  const { App, element } = harness();
+  configureFDWorkSession(App, element);
+  App.receiveFDWorkStatus({
+    supported: true, enabled: true, session_state: "idle", operation: "none",
+    ready: false, login_required: false, error_code: null,
+  });
+
+  const availability = App.getFDWorkAvailability(App.editingSession);
+  App.updateFDWorkEntryButton();
+
+  assert.equal(availability.state, "ready");
+  assert.match(availability.reason, /自动连接/);
+  assert.equal(element("fd-work-entry-btn").disabled, false);
+});
+
 test("FD Work lifecycle failures have distinct actionable Chinese messages", () => {
   const { App, element } = harness();
   const cases = [

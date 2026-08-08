@@ -1400,13 +1400,13 @@
         if (capability.login_required === true) {
             return { enabled: true, state: "disabled", reason: "请先登录 FD Work" };
         }
-        if (capability.session_state === "probing" || capability.session_state === "idle") {
+        if (capability.session_state === "probing") {
             return { enabled: true, state: "busy", reason: "正在连接 FD Work…" };
         }
         if (capability.session_state === "error") {
             return { enabled: true, state: "error", reason: App.fdWorkStatusText(capability) };
         }
-        if (capability.ready !== true) {
+        if (capability.ready !== true && capability.session_state !== "idle") {
             return { enabled: true, state: "disabled", reason: "FD Work 尚未准备完成" };
         }
         if (capability.interaction_owner && capability.interaction_owner !== "none") {
@@ -1475,7 +1475,9 @@
         return {
             enabled: true,
             state: "ready",
-            reason: "将项目、日期、时长和描述填入 FD Work，不会自动保存或提交。"
+            reason: capability.session_state === "idle"
+                ? "填入时将自动连接 FD Work，并在校验后保存。"
+                : "将项目、日期、时长和描述填入并保存到 FD Work。"
         };
     }
     App.getFDWorkAvailability = getFDWorkAvailability;
@@ -1544,7 +1546,7 @@
             return Promise.resolve(false);
         }
         showFDWorkStatus(
-            isEditDirty() || App.editSaving ? "正在保存时间段…" : "正在打开 FD Work…",
+            isEditDirty() || App.editSaving ? "正在保存时间段…" : "正在填入 FD Work…",
             false
         );
         var operation = flushTimelineEditsForFDWork().then(function (saved) {
@@ -1590,9 +1592,14 @@
             showFDWorkStatus("当前时间段已变化，请重新选择", true);
             return Promise.resolve(false);
         }
-        showFDWorkStatus("正在打开 FD Work…", false);
+        showFDWorkStatus("正在填入 FD Work…", false);
         return App.bridge.openFDWorkEntry(reportDate, selectionKey, revision).then(function (result) {
-            if (result && result.ok !== false) return true;
+            if (result && result.ok !== false) {
+                if (result.operation_status === "saved") {
+                    showFDWorkStatus("已保存到 FD Work", false);
+                }
+                return true;
+            }
             if (result && result.error === "stale_selection" && allowStaleRecovery) {
                 showFDWorkStatus("时间段已更新，正在刷新…", false);
                 return App.loadTimelineReport(reportDate, {

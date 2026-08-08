@@ -167,11 +167,11 @@ def test_picker_and_stable_actions_fail_closed(method, remote_result, expected_e
 
 def test_fill_serializes_separate_case_label_and_query_with_v5_contract():
     adapter = FDWorkPageAdapter()
-    window = _Window(adapter, {"ok": True, "status": "filled"})
+    window = _Window(adapter, {"ok": True, "status": "saved"})
 
     result = adapter.fill_entry(window, _draft(), contract=_operation())
 
-    assert result == {"ok": True, "status": "filled"}
+    assert result == {"ok": True, "status": "saved"}
     script = window.calls[-1][0]
     for key in ("work_date", "case_label", "case_query", "duration_hours", "narrative"):
         assert key in script

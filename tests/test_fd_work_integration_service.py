@@ -83,7 +83,7 @@ class _Coordinator:
 
     def open_entry(self, draft):
         self.open_calls.append(draft)
-        return {"ok": True, "status": "review"}
+        return {"ok": True, "operation_status": "saved"}
 
     def enable(self):
         self.enable_calls += 1
@@ -391,7 +391,7 @@ def test_entry_uses_pure_builder_then_interaction_coordinator():
     result = service.open_entry("2026-08-03", "base:1", "revision")
 
     assert result["ok"] is True
-    assert result["operation_status"] == "review"
+    assert result["operation_status"] == "saved"
     assert result["capability_status"]["session_state"] == "ready"
     assert "status" not in result
     assert builder.calls == [("2026-08-03", "base:1", "revision")]

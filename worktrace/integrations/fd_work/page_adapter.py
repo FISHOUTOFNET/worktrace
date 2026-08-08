@@ -59,6 +59,10 @@ _ACTION_ERRORS = frozenset(
         "duration_verification_failed",
         "narrative_verification_failed",
         "entry_verification_failed",
+        "save_action_missing",
+        "save_action_ambiguous",
+        "save_action_not_interactive",
+        "save_completion_failed",
         "ignored_required_field_missing",
         "fd_work_busy",
         "lookup_superseded",
@@ -91,6 +95,9 @@ _FILL_DIAGNOSTIC_STAGES = frozenset(
         "narrative_write",
         "narrative_verified",
         "entry_verified",
+        "save_action",
+        "save_click",
+        "save_completed",
     }
 )
 
@@ -440,8 +447,8 @@ class FDWorkPageAdapter:
             payload=payload,
             respect_operation_deadline=True,
         )
-        if result_value.get("ok") is True and result_value.get("status") == "filled":
-            return {"ok": True, "status": "filled"}
+        if result_value.get("ok") is True and result_value.get("status") == "saved":
+            return {"ok": True, "status": "saved"}
         return result_value
 
     def _picker_contract(self, operation: Mapping[str, Any]) -> dict[str, Any]:
@@ -474,6 +481,18 @@ class FDWorkPageAdapter:
                 "entry_fields": self.entry_field_contract,
                 "max_date_steps": 366,
                 "native_actions": ("提交", "保存", "关闭"),
+                "save_action_label": "保存",
+                "save_action_selector": (
+                    "button, [role='button'], input[type='button'], "
+                    "input[type='submit']"
+                ),
+                "save_success_selector": (
+                    ".ant-message-success, .ant-notification-notice-success"
+                ),
+                "save_loading_selector": (
+                    ".ant-btn-loading, .anticon-loading, [aria-busy='true'], "
+                    "[data-loading='true']"
+                ),
             }
         )
         return payload
@@ -642,6 +661,9 @@ class FDWorkPageAdapter:
                 "option_connected_after_action",
                 "popup_replaced",
                 "live_option_reacquired",
+                "save_loading_observed",
+                "save_success_message",
+                "form_reinitialized",
             ):
                 if type(value.get(key)) is bool:
                     safe[key] = value[key]

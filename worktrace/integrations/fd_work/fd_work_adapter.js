@@ -6,7 +6,6 @@
     var PICKER_ROOT_ATTRIBUTE = "data-worktrace-fdwork-picker";
     var STYLE_ID = "worktrace-fdwork-style";
     var PICKER_TOOLBAR_ID = "worktrace-fdwork-picker-toolbar";
-    var FILL_TOOLBAR_ID = "worktrace-fdwork-fill-toolbar";
     var FILL_BLOCKER_ID = "worktrace-fdwork-fill-blocker";
     var ACTION_MESSAGE_CHANNEL = "worktrace-fdwork-action-v5";
     var activeMode = "none";
@@ -68,7 +67,7 @@
         var style = document.createElement("style");
         style.id = STYLE_ID;
         style.textContent = [
-            "#worktrace-fdwork-picker-toolbar,#worktrace-fdwork-fill-toolbar{position:fixed;right:24px;bottom:24px;z-index:1000;display:flex;align-items:center;gap:12px;max-width:calc(100vw - 48px);padding:12px 16px;border:1px solid #d9d9d9;border-radius:8px;background:#fff;box-shadow:0 6px 20px rgba(0,0,0,.18);font:14px/1.5 sans-serif}",
+            "#worktrace-fdwork-picker-toolbar{position:fixed;right:24px;bottom:24px;z-index:1000;display:flex;align-items:center;gap:12px;max-width:calc(100vw - 48px);padding:12px 16px;border:1px solid #d9d9d9;border-radius:8px;background:#fff;box-shadow:0 6px 20px rgba(0,0,0,.18);font:14px/1.5 sans-serif}",
             "#worktrace-fdwork-picker-toolbar button{min-width:72px;padding:4px 12px}",
             "#worktrace-fdwork-fill-blocker{position:fixed;inset:0;z-index:2147483646;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.82);font:16px/1.5 sans-serif}"
         ].join("");
@@ -208,12 +207,6 @@
         pickerOptionClickSequence = 0;
         pickerAcceptedClickSequence = 0;
         pickerInitialSelection = null;
-    }
-
-    function removeFillToolbar() {
-        var toolbar = document.getElementById && document.getElementById(FILL_TOOLBAR_ID);
-        if (toolbar && toolbar.remove) toolbar.remove();
-        return result(true);
     }
 
     function selectedCaseItem(input) {
@@ -532,7 +525,6 @@
             return result(false, "dom_contract_changed");
         }
         if (activeMode === "fill") return result(false, "fd_work_busy");
-        removeFillToolbar();
         leaveCasePicker();
         activeMode = "picker";
         activeGeneration = Number(contract.operation_generation) || (activeGeneration + 1);
@@ -1074,25 +1066,14 @@
         return blocker;
     }
 
+    function setFillBlockingMessage(message) {
+        var blocker = document.getElementById && document.getElementById(FILL_BLOCKER_ID);
+        if (blocker && blocker.textContent !== message) blocker.textContent = message;
+    }
+
     function removeFillBlockingLayer() {
         var blocker = document.getElementById && document.getElementById(FILL_BLOCKER_ID);
         if (blocker && blocker.remove) blocker.remove();
-    }
-
-    function makeFillToolbar() {
-        ensureStyle();
-        var existing = document.getElementById && document.getElementById(FILL_TOOLBAR_ID);
-        if (existing) return existing;
-        var toolbar = document.createElement("div");
-        toolbar.id = FILL_TOOLBAR_ID;
-        toolbar.setAttribute("role", "toolbar");
-        var label = document.createElement("span");
-        label.textContent = "已从 WorkTrace 填入，请检查后在 FD Work 中手工保存";
-        toolbar.appendChild(label);
-        if (document.body && typeof document.body.insertBefore === "function") {
-            document.body.insertBefore(toolbar, document.body.firstChild || null);
-        }
-        return toolbar;
     }
 
     async function verifyEntry(payload, contract, generation) {
@@ -1115,13 +1096,140 @@
         return result(true, "", { stage: "entry_verified" });
     }
 
+    function saveActionText(node) {
+        return normalizeExactText(
+            node && node.getAttribute && (
+                node.getAttribute("aria-label") || node.getAttribute("title")
+            ) || node && (node.innerText || node.textContent || node.value)
+        );
+    }
+
+    function locateSaveAction(contract) {
+        var formSelector = String(contract && contract.form_selector || "form#basic");
+        var form = document.querySelector(formSelector);
+        if (!form || !visible(form) || typeof form.querySelectorAll !== "function") {
+            return stageFailure("save_action", "save_action_missing");
+        }
+        var selector = String(contract && contract.save_action_selector
+            || "button, [role='button'], input[type='button'], input[type='submit']");
+        var expected = normalizeExactText(contract && contract.save_action_label || "保存");
+        var matches = Array.prototype.filter.call(form.querySelectorAll(selector), function (node) {
+            return visible(node) && saveActionText(node) === expected;
+        });
+        if (!matches.length) return stageFailure("save_action", "save_action_missing");
+        if (matches.length !== 1) return stageFailure("save_action", "save_action_ambiguous");
+        var node = matches[0];
+        if (node.disabled || (node.getAttribute && node.getAttribute("aria-disabled") === "true")) {
+            return stageFailure("save_action", "save_action_not_interactive");
+        }
+        return result(true, "", { stage: "save_action", form: form, node: node });
+    }
+
+    function saveActionBusy(node, contract) {
+        if (!node) return false;
+        if (node.disabled || (node.getAttribute && node.getAttribute("aria-busy") === "true")) {
+            return true;
+        }
+        if (node.classList && node.classList.contains("ant-btn-loading")) return true;
+        var selector = String(contract && contract.save_loading_selector
+            || ".ant-btn-loading, .anticon-loading, [aria-busy='true'], [data-loading='true']");
+        return !!(typeof node.querySelector === "function" && node.querySelector(selector));
+    }
+
+    function visibleSaveSuccessNodes(contract) {
+        var selector = String(contract && contract.save_success_selector
+            || ".ant-message-success, .ant-notification-notice-success");
+        return Array.prototype.filter.call(
+            document.querySelectorAll ? document.querySelectorAll(selector) : [],
+            visible
+        );
+    }
+
+    function formReinitializedAfterSave(baseline, contract) {
+        var currentForm = document.querySelector(String(contract.form_selector || "form#basic"));
+        if (!baseline.form || baseline.form.isConnected === false || currentForm !== baseline.form) {
+            return true;
+        }
+        var duration = entryField(contract, "duration_hours");
+        var narrative = entryField(contract, "narrative");
+        var selected = readSelectedCase(contract);
+        return !!(
+            duration && narrative
+            && String(duration.value || "") === ""
+            && String(narrative.value || "") === ""
+            && !selected.ok
+        );
+    }
+
+    async function verifySaveCompletion(baseline, contract, generation) {
+        var deadline = deadlineAt(contract);
+        var loadingObserved = saveActionBusy(baseline.node, contract);
+        while (Date.now() <= deadline) {
+            if (canceled(generation)) return stageFailure(
+                "save_completed", "lookup_superseded"
+            );
+            var successNodes = visibleSaveSuccessNodes(contract);
+            var successMessage = successNodes.some(function (node) {
+                return baseline.successNodes.indexOf(node) < 0;
+            });
+            var reinitialized = formReinitializedAfterSave(baseline, contract);
+            var busy = saveActionBusy(baseline.node, contract);
+            loadingObserved = loadingObserved || busy;
+            if (successMessage || reinitialized || (loadingObserved && !busy)) {
+                return result(true, "", {
+                    stage: "save_completed",
+                    save_loading_observed: loadingObserved,
+                    save_success_message: successMessage,
+                    form_reinitialized: reinitialized
+                });
+            }
+            await requestFrame();
+        }
+        return stageFailure("save_completed", "save_completion_failed", {
+            save_loading_observed: loadingObserved,
+            save_success_message: false,
+            form_reinitialized: false
+        });
+    }
+
+    function clickSave(node) {
+        if (!node || node.isConnected === false) {
+            return stageFailure("save_click", "save_action_not_interactive");
+        }
+        if (typeof node.click === "function") {
+            try {
+                node.click();
+                return result(true, "", { stage: "save_click" });
+            } catch (_error) {
+                return stageFailure("save_click", "save_action_not_interactive");
+            }
+        }
+        return dispatchPointerMouseSequence(node, node)
+            ? result(true, "", { stage: "save_click" })
+            : stageFailure("save_click", "save_action_not_interactive");
+    }
+
+    async function saveEntry(contract, generation) {
+        var located = locateSaveAction(contract);
+        if (!located.ok) return located;
+        var baseline = {
+            form: located.form,
+            node: located.node,
+            successNodes: visibleSaveSuccessNodes(contract)
+        };
+        setFillBlockingMessage("正在保存 FD Work…");
+        var clicked = clickSave(located.node);
+        if (!clicked.ok) return clicked;
+        var completed = await verifySaveCompletion(baseline, contract, generation);
+        return completed.ok ? completed : stageResult(completed, "save_completed");
+    }
+
     async function fillEntry(payload, contract) {
         if (!payload || !contract || Number(contract.version) !== VERSION) {
             return result(false, "dom_contract_changed");
         }
-        if (activeMode === "picker") return result(false, "fd_work_busy");
+        if (activeMode !== "none") return result(false, "fd_work_busy");
         leaveCasePicker();
-        removeFillToolbar();
         activeMode = "fill";
         activeGeneration = Number(contract.operation_generation) || (activeGeneration + 1);
         var generation = activeGeneration;
@@ -1158,15 +1266,16 @@
             currentStage = "entry_verified";
             var verified = await verifyEntry(payload, contract, generation);
             if (!verified.ok) return verified;
-            makeFillToolbar();
-            activeMode = "review";
-            return result(true, "", { status: "filled", stage: "entry_verified" });
+            currentStage = "save_action";
+            var saved = await saveEntry(contract, generation);
+            if (!saved.ok) return saved;
+            return result(true, "", { status: "saved", stage: "save_completed" });
         } catch (_error) {
             var error = canceled(generation) ? "lookup_superseded" : "dom_contract_changed";
             return stageFailure(currentStage, error);
         } finally {
             removeFillBlockingLayer();
-            if (activeMode === "fill") activeMode = "none";
+            activeMode = "none";
         }
     }
 
@@ -1268,6 +1377,9 @@
             readSelectedCase: readSelectedCase,
             readEntryDate: readEntryDate,
             selectExactCase: selectExactCase,
+            locateSaveAction: locateSaveAction,
+            clickSave: clickSave,
+            saveEntry: saveEntry,
             activeMode: function () { return activeMode; }
         })
     });

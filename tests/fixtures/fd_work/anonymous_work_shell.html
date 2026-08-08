@@ -55,6 +55,7 @@
         durationWrites: 0,
         narrativeWrites: 0,
         saveClicks: 0,
+        savedEntries: [],
         submitCalls: 0,
         apiCalls: 0
       };
@@ -263,6 +264,21 @@
         form.requestSubmit = function () { state.submitCalls += 1; };
         document.getElementById("save-button").addEventListener("click", function () {
           state.saveClicks += 1;
+          state.savedEntries.push({
+            date: state.date,
+            caseLabel: state.selectedCase,
+            duration: state.duration,
+            narrative: state.narrative
+          });
+          state.selectedCase = "";
+          state.duration = "";
+          state.narrative = "";
+          state.formRevision += 1;
+          renderForm();
+          var success = document.createElement("div");
+          success.className = "ant-message-success";
+          success.textContent = "保存成功";
+          document.body.appendChild(success);
         });
       }
 
@@ -520,16 +536,17 @@
           case_label: controlledLabel, case_query: "26IP0111", work_date: "2026-01-03",
           duration_hours: "0.75", narrative: "CONTROLLED REPLACEMENT"
         }, contract(29));
+        var controlledSaved = window.__fdWorkFixture.state.savedEntries.slice(-1)[0];
         check("controlled_replacement_case_commit_verified",
-          controlledCommit.ok === true && controlledCommit.stage === "entry_verified"
-          && adapter.readSelectedCase(contract(29)).label === controlledLabel);
+          controlledCommit.ok === true && controlledCommit.stage === "save_completed"
+          && controlledSaved && controlledSaved.caseLabel === controlledLabel);
         check("controlled_replacement_never_clicks_stale_option",
           window.__fdWorkFixture.state.staleOptionClicks === staleClicksBeforeAutomatedCommit);
         check("controlled_replacement_full_fill_continues_after_case_verified",
           window.__fdWorkFixture.state.durationWrites > durationWritesBeforeControlledCommit
           && window.__fdWorkFixture.state.narrativeWrites > narrativeWritesBeforeControlledCommit
-          && document.getElementById("basic_hoursWorked").value === "0.75"
-          && document.getElementById("basic_narrative").value === "CONTROLLED REPLACEMENT");
+          && controlledSaved.duration === "0.75"
+          && controlledSaved.narrative === "CONTROLLED REPLACEMENT");
 
         resetConfig();
         var canonicalLabel = "#26IP0165 IPDD_Miragene";
@@ -548,11 +565,12 @@
           && window.__fdWorkFixture.state.dateClicks === initialDateClicks);
         check("canonical_case_query_written",
           window.__fdWorkFixture.state.caseSearchValues.slice(-1)[0] === "26IP0165");
+        var canonicalSaved = window.__fdWorkFixture.state.savedEntries.slice(-1)[0];
         check("canonical_query_exact_full_label_selected",
           noDateChange.ok === true
-          && adapter.readSelectedCase(contract(30)).label === canonicalLabel);
-        check("controlled_duration_readback", document.getElementById("basic_hoursWorked").value === "1.0");
-        check("controlled_narrative_readback", document.getElementById("basic_narrative").value === "TEST DESCRIPTION");
+          && canonicalSaved && canonicalSaved.caseLabel === canonicalLabel);
+        check("controlled_duration_readback", canonicalSaved && canonicalSaved.duration === "1.0");
+        check("controlled_narrative_readback", canonicalSaved && canonicalSaved.narrative === "TEST DESCRIPTION");
 
         resetConfig();
         var delayedLabel = "#26IP0111 长飞光纤IP问题分析";
@@ -568,27 +586,18 @@
           case_label: delayedLabel, case_query: "26IP0111", work_date: "2026-01-03",
           duration_hours: "1.25", narrative: "DELAYED CONTROLLED FILL"
         }, contract(301, 2000));
-        var delayedCaseInput = document.getElementById("basic_caseId");
-        var delayedSelection = document.querySelector(".ant-select-selection-item");
-        var delayedToolbar = document.getElementById("worktrace-fdwork-fill-toolbar");
+        var delayedSaved = window.__fdWorkFixture.state.savedEntries.slice(-1)[0];
         check("delayed_results_complete_actual_fill",
-          delayedFill.ok === true && delayedFill.stage === "entry_verified"
-          && delayedSelection && delayedSelection.getAttribute("title") === delayedLabel
-          && delayedSelection.textContent === delayedLabel
-          && delayedCaseInput && delayedCaseInput.value === ""
-          && delayedCaseInput.getAttribute("aria-expanded") === "false"
-          && !document.getElementById("basic_caseId_dropdown")
-          && !document.getElementById("basic_caseId_list")
-          && document.getElementById("basic_hoursWorked").value === "1.25"
-          && document.getElementById("basic_narrative").value === "DELAYED CONTROLLED FILL"
-          && delayedToolbar
-          && delayedToolbar.textContent.indexOf("请检查后") >= 0
-          && adapter._test.activeMode() === "review");
+          delayedFill.ok === true && delayedFill.stage === "save_completed"
+          && delayedSaved && delayedSaved.caseLabel === delayedLabel
+          && delayedSaved.duration === "1.25"
+          && delayedSaved.narrative === "DELAYED CONTROLLED FILL"
+          && adapter._test.activeMode() === "none");
         check("delayed_results_were_awaited_before_commit",
           window.__fdWorkFixture.state.caseResultFrames - framesBeforeDelayedFill >= 8
           && window.__fdWorkFixture.state.accessibilityMirrorClicks === 0);
-        check("delayed_fill_never_saves_or_submits",
-          window.__fdWorkFixture.state.saveClicks === savesBeforeDelayedFill
+        check("delayed_fill_saves_once_without_form_submit",
+          window.__fdWorkFixture.state.saveClicks === savesBeforeDelayedFill + 1
           && window.__fdWorkFixture.state.submitCalls === submitsBeforeDelayedFill
           && window.__fdWorkFixture.state.apiCalls === 0);
 
@@ -601,7 +610,7 @@
         check("previous_date_verified", previous.ok === true
           && document.getElementById("page-work-date").value === "2026-01-02");
         check("date_rerender_re_resolved", window.__fdWorkFixture.state.formRevision > revisionBeforePrevious
-          && document.getElementById("basic_hoursWorked").value === "1.5");
+          && window.__fdWorkFixture.state.savedEntries.slice(-1)[0].duration === "1.5");
 
         var next = await adapter.fillEntry({
           case_label: "TEST MATTER A", case_query: "TEST MATTER A", work_date: "2026-01-03",
@@ -609,11 +618,26 @@
         }, contract(32));
         check("next_date_verified", next.ok === true
           && document.getElementById("page-work-date").value === "2026-01-03");
-        check("complete_four_field_readback", adapter._test.readEntryDate(contract(32)).value === "2026-01-03"
-          && adapter.readSelectedCase(contract(32)).label === "TEST MATTER A"
-          && document.getElementById("basic_hoursWorked").value === "2.0"
-          && document.getElementById("basic_narrative").value === "NEXT DAY DESCRIPTION");
-        check("success_enters_review", adapter._test.activeMode() === "review");
+        var nextSaved = window.__fdWorkFixture.state.savedEntries.slice(-1)[0];
+        check("complete_four_field_readback", nextSaved.date === "2026-01-03"
+          && nextSaved.caseLabel === "TEST MATTER A"
+          && nextSaved.duration === "2.0"
+          && nextSaved.narrative === "NEXT DAY DESCRIPTION");
+        check("success_releases_fill_mode", adapter._test.activeMode() === "none");
+
+        var savesBeforeSequence = window.__fdWorkFixture.state.saveClicks;
+        var sequenceSucceeded = true;
+        for (var sequenceIndex = 0; sequenceIndex < 5; sequenceIndex += 1) {
+          var sequential = await adapter.fillEntry({
+            case_label: "TEST MATTER A", case_query: "TEST MATTER A", work_date: "2026-01-03",
+            duration_hours: "1.0", narrative: "SEQUENTIAL " + sequenceIndex
+          }, contract(320 + sequenceIndex));
+          sequenceSucceeded = sequenceSucceeded && sequential.ok === true
+            && adapter._test.activeMode() === "none";
+        }
+        check("five_consecutive_fill_save_transactions",
+          sequenceSucceeded
+          && window.__fdWorkFixture.state.saveClicks === savesBeforeSequence + 5);
 
         resetConfig();
         window.__fdWorkFixture.config.dateChangeAccepted = false;
@@ -677,8 +701,9 @@
         }, contract(38, 350));
         check("narrative_rejection_fails", narrativeRejected.error === "narrative_verification_failed");
 
-        check("never_auto_saves_or_submits",
-          window.__fdWorkFixture.state.saveClicks === 0
+        check("auto_save_uses_button_without_form_submit_or_private_api",
+          window.__fdWorkFixture.state.saveClicks === window.__fdWorkFixture.state.savedEntries.length
+          && window.__fdWorkFixture.state.saveClicks >= 4
           && window.__fdWorkFixture.state.submitCalls === 0
           && window.__fdWorkFixture.state.apiCalls === 0);
         check("blocker_always_removed", !document.getElementById("worktrace-fdwork-fill-blocker"));

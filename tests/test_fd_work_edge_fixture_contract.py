@@ -61,8 +61,10 @@ def test_anonymous_fixture_preserves_minimum_real_ant_contract() -> None:
     assert 'check("canonical_query_exact_full_label_selected"' in source
     assert 'check("delayed_results_complete_actual_fill"' in source
     assert 'check("delayed_results_were_awaited_before_commit"' in source
-    assert 'check("delayed_fill_never_saves_or_submits"' in source
-    assert 'check("never_auto_saves_or_submits"' in source
+    assert 'check("delayed_fill_saves_once_without_form_submit"' in source
+    assert 'check("auto_save_uses_button_without_form_submit_or_private_api"' in source
+    assert 'check("success_releases_fill_mode"' in source
+    assert 'check("five_consecutive_fill_save_transactions"' in source
     assert "worktrace-result" in source
 
 
