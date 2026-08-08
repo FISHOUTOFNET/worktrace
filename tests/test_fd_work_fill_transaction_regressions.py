@@ -155,7 +155,32 @@ def test_non_cancellation_fill_failure_restores_main_before_terminalizing():
     assert statuses[-1]["error_code"] == "entry_editor_not_rendered"
 
 
-def test_fill_deadline_is_refreshed_after_read_only_work_page_preflight(monkeypatch):
+def test_save_completion_failure_after_click_becomes_unknown_and_keeps_helper_visible():
+    controller = _Controller()
+    adapter = _Adapter(fill_result={
+        "ok": False,
+        "error": "save_completion_failed",
+        "stage": "save_completed",
+    })
+    statuses = []
+    coordinator = FDWorkInteractionCoordinator(
+        window_controller=controller,
+        page_adapter=adapter,
+        nonce_factory=lambda: "fill-nonce",
+        status_callback=statuses.append,
+    )
+
+    result = coordinator.open_entry(_draft())
+
+    assert result == {"ok": False, "error": "save_outcome_unknown"}
+    assert controller.hide_calls == []
+    assert controller.visible is True
+    assert statuses[-1]["operation_status"] == "failed"
+    assert statuses[-1]["operation_result_owner"] == "automation_fill"
+    assert statuses[-1]["error_code"] == "save_outcome_unknown"
+
+
+def test_fill_deadline_is_refreshed_and_save_has_separate_budget(monkeypatch):
     clock = [1000.0]
     monkeypatch.setattr(
         "worktrace.integrations.fd_work.interaction_coordinator.time.time",
@@ -168,11 +193,14 @@ def test_fill_deadline_is_refreshed_after_read_only_work_page_preflight(monkeypa
         page_adapter=adapter,
         nonce_factory=lambda: "fill-nonce",
         fill_timeout_seconds=15.0,
+        save_timeout_seconds=5.0,
     )
 
     result = coordinator.open_entry(_draft())
 
     assert result["ok"] is True
     preflight_deadline = adapter.work_page_calls[0][1]["operation_deadline_ms"]
-    fill_deadline = adapter.fill_calls[0][2]["operation_deadline_ms"]
-    assert fill_deadline - preflight_deadline == 5000
+    fill_contract = adapter.fill_calls[0][2]
+    assert fill_contract["fill_deadline_ms"] - preflight_deadline == 5000
+    assert fill_contract["operation_deadline_ms"] - fill_contract["fill_deadline_ms"] == 5000
+    assert fill_contract["save_timeout_ms"] == 5000
