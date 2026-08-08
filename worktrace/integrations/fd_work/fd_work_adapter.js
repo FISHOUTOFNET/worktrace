@@ -231,10 +231,14 @@
         if (canceled(generation)) return result(false, "lookup_superseded");
 
         var state = entryEditorState(contract);
-        if (state.ready) return result(true, "", {
-            status: "entry_editor_ready", editor_exists: true,
-            create_action_count: 0, create_click_count: 0
-        });
+        if (state.ready) {
+            var initiallyStable = await awaitStableEntryEditor(contract);
+            if (!initiallyStable.ok) return initiallyStable;
+            return result(true, "", {
+                status: "entry_editor_ready", editor_exists: true,
+                create_action_count: 0, create_click_count: 0
+            });
+        }
 
         var ownsPreparationBlocker = activeMode !== "fill";
         var blockerInstalled = false;
@@ -261,11 +265,19 @@
                 create_click_count: createClickCount
             });
             state = entryEditorState(contract);
-            if (state.ready) return result(true, "", {
-                status: "entry_editor_ready", editor_exists: true,
-                create_action_count: lastCreateCount,
-                create_click_count: createClickCount
-            });
+            if (state.ready) {
+                var stable = await awaitStableEntryEditor(contract);
+                if (!stable.ok) return fail(stable.error || "entry_editor_not_rendered", {
+                    create_action_count: lastCreateCount,
+                    create_click_count: createClickCount,
+                    editor_exists: true
+                });
+                return result(true, "", {
+                    status: "entry_editor_ready", editor_exists: true,
+                    create_action_count: lastCreateCount,
+                    create_click_count: createClickCount
+                });
+            }
             if (state.form || state.input || state.wrapper) {
                 await requestFrame();
                 continue;
@@ -1440,8 +1452,18 @@
         lastContract = contract;
         installFillBlockingLayer();
         setFillBlockingMessage("正在填入，请勿操作");
-        var currentStage = "date_read";
+        var currentStage = "page_stable";
         try {
+            var initialDate = readEntryDate(contract);
+            if (!initialDate.ok) return initialDate;
+            if (
+                initialDate.value === String(payload.work_date)
+                && entryEditorState(contract).ready
+            ) {
+                var initialStable = await awaitStableEntryEditor(contract);
+                if (!initialStable.ok) return stageResult(initialStable, "page_stable");
+            }
+            currentStage = "date_read";
             var dated = await ensureEntryDate(payload.work_date, contract, generation);
             if (!dated.ok) return dated;
             currentStage = "work_page_ready";
@@ -1452,8 +1474,8 @@
             var editor = await ensureEntryEditor(contract);
             if (!editor.ok) return stageResult(editor, "entry_editor_open");
             currentStage = "entry_editor_ready";
-            var stable = await awaitStableEntryEditor(contract);
-            if (!stable.ok) return stageResult(stable, "entry_editor_ready");
+            var stableAfterDate = await awaitStableEntryEditor(contract);
+            if (!stableAfterDate.ok) return stageResult(stableAfterDate, "entry_editor_ready");
             setFillBlockingMessage("正在填入，请勿操作");
             currentStage = "case_open";
             var prepared = await prepareCaseCombobox(contract, generation);
