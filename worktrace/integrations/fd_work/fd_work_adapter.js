@@ -90,7 +90,11 @@
             var ids = controls.split(/\s+/).filter(Boolean);
             for (var index = 0; index < ids.length; index += 1) {
                 var controlled = document.getElementById(ids[index]);
-                if (controlled) return controlled;
+                if (controlled) {
+                    var dropdown = typeof controlled.closest === "function"
+                        ? controlled.closest(".ant-select-dropdown") : null;
+                    return dropdown || controlled;
+                }
             }
             return null;
         }
@@ -253,8 +257,13 @@
 
     function optionNodeForTarget(target) {
         if (!target) return null;
-        if (target.getAttribute && target.getAttribute("role") === "option") return target;
-        if (typeof target.closest === "function") return target.closest("[role='option']");
+        if (
+            (target.getAttribute && target.getAttribute("role") === "option")
+            || (target.classList && target.classList.contains("ant-select-item-option"))
+        ) return target;
+        if (typeof target.closest === "function") {
+            return target.closest(".ant-select-item-option, [role='option']");
+        }
         return null;
     }
 
@@ -780,21 +789,27 @@
     }
 
     function optionLabels(popup) {
-        var candidates = popup && popup.querySelectorAll ? popup.querySelectorAll(
-            ".ant-select-item-option:not(.ant-select-item-option-disabled), "
-            + "[role='option']:not([aria-disabled='true'])"
-        ) : [];
-        var unique = [];
-        Array.prototype.forEach.call(candidates, function (option) {
-            if (unique.indexOf(option) < 0) unique.push(option);
-        });
-        return unique.filter(function (option) {
-            var classDisabled = option.classList
-                && option.classList.contains("ant-select-item-option-disabled");
-            var ariaDisabled = option.getAttribute
-                && option.getAttribute("aria-disabled") === "true";
-            return !classDisabled && !ariaDisabled && visible(option);
-        }).map(function (option) {
+        function usable(options) {
+            var unique = [];
+            Array.prototype.forEach.call(options || [], function (option) {
+                if (unique.indexOf(option) < 0) unique.push(option);
+            });
+            return unique.filter(function (option) {
+                var classDisabled = option.classList
+                    && option.classList.contains("ant-select-item-option-disabled");
+                var ariaDisabled = option.getAttribute
+                    && option.getAttribute("aria-disabled") === "true";
+                return !classDisabled && !ariaDisabled && visible(option);
+            });
+        }
+        if (!popup || !popup.querySelectorAll) return [];
+        var antOptions = usable(popup.querySelectorAll(
+            ".ant-select-item-option:not(.ant-select-item-option-disabled)"
+        ));
+        var candidates = antOptions.length ? antOptions : usable(popup.querySelectorAll(
+            "[role='option']:not([aria-disabled='true'])"
+        ));
+        return candidates.map(function (option) {
             return {
                 node: option,
                 label: normalizeExactText(

@@ -89,6 +89,7 @@ function exactCaseHarness({
   hiddenAccessibilityDuplicate = false,
   antClassOnly = false,
   semanticClickNoop = false,
+  virtualAntStructure = false,
 } = {}) {
   class Input {
     constructor() { this._value = ""; }
@@ -138,7 +139,11 @@ function exactCaseHarness({
     clickedLabels.push(label);
     selectedLabel = committedLabel === undefined ? label : committedLabel;
   }
-  function option(label, owner, { hidden = false, classOnly = antClassOnly } = {}) {
+  function option(label, owner, {
+    hidden = false,
+    classOnly = antClassOnly,
+    interactive = true,
+  } = {}) {
     const node = {
       label,
       innerText: label,
@@ -161,7 +166,7 @@ function exactCaseHarness({
         if (event.type === "pointerdown" && replaceOnPointerDown && this.isConnected) {
           currentPopup = makePopup();
         }
-        if (event.type === "click") {
+        if (event.type === "click" && interactive) {
           if (!this.isConnected) staleClickLabels.push(label);
           else commit(label);
         }
@@ -171,7 +176,7 @@ function exactCaseHarness({
     node.click = function () {
       interactionEvents.push({ label, type: "semantic-click", connected: node.isConnected });
       if (!node.isConnected) staleClickLabels.push(label);
-      else commit(label);
+      else if (interactive) commit(label);
     };
     return node;
   }
@@ -182,6 +187,21 @@ function exactCaseHarness({
       getClientRects() { return currentPopup === popup ? [{}] : []; },
       querySelectorAll(selector) {
         const options = currentLabels.map((label) => option(label, popup));
+        if (virtualAntStructure) {
+          const accessibilityOptions = currentLabels.map((label) => option(label, popup, {
+            classOnly: false,
+            interactive: false,
+          }));
+          if (selector.includes("aria-selected='true'")) {
+            return accessibilityOptions.filter((item) => item.label === selectedLabel);
+          }
+          if (selector.includes("ant-select-item-option") && selector.includes("[role='option']")) {
+            return accessibilityOptions.concat(options);
+          }
+          if (selector.includes("ant-select-item-option")) return options;
+          if (selector.includes("[role='option']")) return accessibilityOptions;
+          return [];
+        }
         if (hiddenAccessibilityDuplicate && currentLabels.length) {
           options.unshift(option(currentLabels[0], popup, { hidden: true, classOnly: false }));
         }
@@ -200,6 +220,19 @@ function exactCaseHarness({
         return [];
       },
     };
+    if (virtualAntStructure) {
+      popup.controlledListbox = {
+        getClientRects() { return [{}]; },
+        closest(selector) { return selector === ".ant-select-dropdown" ? popup : null; },
+        querySelectorAll(selector) {
+          const accessibilityOptions = currentLabels.map((label) => option(label, popup, {
+            classOnly: false,
+            interactive: false,
+          }));
+          return selector.includes("[role='option']") ? accessibilityOptions : [];
+        },
+      };
+    }
     return popup;
   }
   currentPopup = makePopup();
@@ -219,7 +252,10 @@ function exactCaseHarness({
       body: { firstElementChild: {}, appendChild() {}, insertBefore() {} },
       querySelector(selector) { return selector === "#case" ? input : null; },
       querySelectorAll() { return []; },
-      getElementById(id) { return id === "case-list" ? currentPopup : null; },
+      getElementById(id) {
+        if (id !== "case-list") return null;
+        return virtualAntStructure ? currentPopup.controlledListbox : currentPopup;
+      },
       createElement() { return { setAttribute() {}, appendChild() {}, addEventListener() {} }; },
     },
     window: {
@@ -513,6 +549,26 @@ test("query-time popup replacement is re-resolved before exact commit", async ()
   assert.ok(h.popupRevision() > initialRevision);
   assert.equal(selected.popup_replaced, true);
   assert.equal(selected.live_option_reacquired, true);
+});
+
+test("virtual Ant Select commits the visible interactive option instead of the aria mirror", async () => {
+  const expectedLabel = "#26IP0111 长飞光纤IP问题分析";
+  const h = exactCaseHarness({
+    optionLabels: [expectedLabel],
+    antClassOnly: true,
+    virtualAntStructure: true,
+  });
+
+  const selected = await h.adapter._test.selectExactCase(
+    expectedLabel,
+    "26IP0111",
+    h.contract,
+    0
+  );
+
+  assert.equal(selected.ok, true, JSON.stringify(selected));
+  assert.equal(selected.stage, "case_verified");
+  assert.deepEqual(h.clickedLabels, [expectedLabel]);
 });
 
 test("hidden accessibility option is ignored in favor of one visible Ant option", async () => {

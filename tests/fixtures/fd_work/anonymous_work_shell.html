@@ -13,7 +13,7 @@
     #basic { width: 560px; padding: 72px 24px 24px; }
     .ant-form-item { display: block; margin: 12px 0; }
     .ant-select, .ant-select-selector, .ant-select-selection-wrap { display: block; }
-    [role="listbox"] { width: 360px; border: 1px solid #ddd; background: white; }
+    .ant-select-dropdown { width: 360px; border: 1px solid #ddd; background: white; }
     [role="option"] { display: block; min-height: 24px; }
   </style>
 </head>
@@ -50,6 +50,8 @@
         caseQueries: 0,
         caseSearchValues: [],
         caseCommits: 0,
+        accessibilityMirrorClicks: 0,
+        caseResultFrames: 0,
         durationWrites: 0,
         narrativeWrites: 0,
         saveClicks: 0,
@@ -65,8 +67,12 @@
         caseOptions: null,
         replaceOptionOnPointerDown: false,
         includeHiddenAccessibilityOption: false,
-        antOptionWithoutRole: false
+        antOptionWithoutRole: false,
+        virtualAntStructure: true,
+        caseResultFrames: 0
       };
+      var renderedCaseInput = null;
+      var renderedCaseInputListener = null;
 
       function addDays(value, amount) {
         var parts = value.split("-").map(Number);
@@ -75,7 +81,8 @@
       }
 
       function removePopup() {
-        var old = document.getElementById("basic_caseId_list");
+        var old = document.getElementById("basic_caseId_dropdown")
+          || document.getElementById("basic_caseId_list");
         if (old) old.remove();
       }
 
@@ -83,14 +90,7 @@
         if (config.caseMode === "search_only") return;
         state.selectedCase = label;
         state.caseCommits += 1;
-        var selection = document.querySelector(".ant-select-selection-item");
-        if (selection) {
-          selection.textContent = label;
-          selection.setAttribute("title", label);
-        }
-        var input = document.getElementById("basic_caseId");
-        if (input) input.setAttribute("aria-expanded", "false");
-        removePopup();
+        renderForm();
       }
 
       function popupLabels(query) {
@@ -102,17 +102,31 @@
       }
 
       function renderPopup(query) {
-        var previous = document.getElementById("basic_caseId_list");
+        var previous = document.getElementById("basic_caseId_dropdown")
+          || document.getElementById("basic_caseId_list");
         if (previous) {
           previous.remove();
           state.popupReplacements += 1;
         }
         var popup = document.createElement("div");
-        popup.id = "basic_caseId_list";
-        popup.setAttribute("role", "listbox");
-        function appendOption(label, hidden, antOnly) {
+        popup.id = config.virtualAntStructure ? "basic_caseId_dropdown" : "basic_caseId_list";
+        if (config.virtualAntStructure) popup.className = "ant-select-dropdown";
+        else popup.setAttribute("role", "listbox");
+        var accessibilityList = popup;
+        var optionHost = popup;
+        if (config.virtualAntStructure) {
+          accessibilityList = document.createElement("div");
+          accessibilityList.id = "basic_caseId_list";
+          accessibilityList.setAttribute("role", "listbox");
+          accessibilityList.style.cssText = "height:0;width:0;overflow:hidden";
+          popup.appendChild(accessibilityList);
+          optionHost = document.createElement("div");
+          optionHost.className = "rc-virtual-list-holder-inner";
+          popup.appendChild(optionHost);
+        }
+        function appendOption(label, hidden, antOnly, target, interactive) {
           var option = document.createElement("div");
-          option.className = "ant-select-item ant-select-item-option";
+          option.className = interactive ? "ant-select-item ant-select-item-option" : "";
           if (!antOnly) option.setAttribute("role", "option");
           option.setAttribute("title", label);
           option.setAttribute("aria-selected", label === state.selectedCase ? "true" : "false");
@@ -128,6 +142,11 @@
             }
           });
           option.addEventListener("click", function (event) {
+            if (!interactive) {
+              state.accessibilityMirrorClicks += 1;
+              event.stopPropagation();
+              return;
+            }
             if (!option.isConnected) {
               state.staleOptionClicks += 1;
               event.stopPropagation();
@@ -136,11 +155,16 @@
             commitCase(label);
             event.stopPropagation();
           });
-          popup.appendChild(option);
+          target.appendChild(option);
         }
         popupLabels(query).forEach(function (label) {
-          if (config.includeHiddenAccessibilityOption) appendOption(label, true, false);
-          appendOption(label, false, config.antOptionWithoutRole);
+          if (config.virtualAntStructure) {
+            appendOption(label, false, false, accessibilityList, false);
+            appendOption(label, false, true, optionHost, true);
+          } else {
+            if (config.includeHiddenAccessibilityOption) appendOption(label, true, false, popup, false);
+            appendOption(label, false, config.antOptionWithoutRole, popup, true);
+          }
         });
         document.body.appendChild(popup);
         state.popupCreations += 1;
@@ -159,13 +183,26 @@
         state.caseQueries += 1;
         state.caseSearchValues.push(query);
         if (config.deferCaseResults) return;
-        queueMicrotask(function () { renderPopup(query); });
+        var frames = Math.max(0, Number(config.caseResultFrames) || 0);
+        function next() {
+          if (frames <= 0) {
+            renderPopup(query);
+            return;
+          }
+          state.caseResultFrames += 1;
+          frames -= 1;
+          requestAnimationFrame(next);
+        }
+        queueMicrotask(next);
       }
 
       function renderForm() {
         state.formRevision += 1;
         removePopup();
         var host = document.getElementById("form-host");
+        if (renderedCaseInput && renderedCaseInputListener) {
+          renderedCaseInput.removeEventListener("input", renderedCaseInputListener);
+        }
         host.innerHTML = [
           '<form id="basic" data-form-revision="' + state.formRevision + '">',
           '  <div class="ant-form-item" id="matter-item">',
@@ -194,9 +231,11 @@
           selector.addEventListener(name, openCasePopup);
         });
         var caseInput = document.getElementById("basic_caseId");
-        caseInput.addEventListener("input", function () {
+        renderedCaseInput = caseInput;
+        renderedCaseInputListener = function () {
           scheduleCaseResults(caseInput.value);
-        });
+        };
+        caseInput.addEventListener("input", renderedCaseInputListener);
         var duration = document.getElementById("basic_hoursWorked");
         duration.addEventListener("input", function () {
           var proposed = duration.value;
@@ -356,7 +395,9 @@
           caseOptions: null,
           replaceOptionOnPointerDown: false,
           includeHiddenAccessibilityOption: false,
-          antOptionWithoutRole: false
+          antOptionWithoutRole: false,
+          virtualAntStructure: true,
+          caseResultFrames: 0
         });
       }
       function contract(generation, deadlineOffset) {
@@ -412,7 +453,9 @@
         await nextTurn();
         check("popup_created_after_open", !!document.getElementById("basic_caseId_list"));
         check("query_replaced_popup", window.__fdWorkFixture.state.popupReplacements > 0);
-        var option = document.querySelector("#basic_caseId_list [title='TEST MATTER A']");
+        var option = document.querySelector(
+          ".ant-select-dropdown .ant-select-item-option[title='TEST MATTER A']"
+        );
         option.click();
         await Promise.resolve();
         await Promise.resolve();
@@ -437,7 +480,7 @@
           userOpenAndQuery(cycleLabel);
           await nextTurn();
           var cycleOption = document.querySelector(
-            "#basic_caseId_list [title='" + cycleLabel + "']"
+            ".ant-select-dropdown .ant-select-item-option[title='" + cycleLabel + "']"
           );
           if (cycleOption) cycleOption.click();
           await Promise.resolve();
@@ -458,7 +501,7 @@
         userOpenAndQuery("26IP0111");
         await nextTurn();
         var detachedOption = document.querySelector(
-          "#basic_caseId_list .ant-select-item-option"
+          ".ant-select-dropdown .ant-select-item-option"
         );
         var commitsBeforeDetachedClick = window.__fdWorkFixture.state.caseCommits;
         detachedOption.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
@@ -468,7 +511,7 @@
         check("detached_stale_option_click_does_not_commit",
           window.__fdWorkFixture.state.caseCommits === commitsBeforeDetachedClick
           && window.__fdWorkFixture.state.staleOptionClicks > 0);
-        var currentPopupAfterStaleClick = document.getElementById("basic_caseId_list");
+        var currentPopupAfterStaleClick = document.getElementById("basic_caseId_dropdown");
         if (currentPopupAfterStaleClick) currentPopupAfterStaleClick.remove();
         var staleClicksBeforeAutomatedCommit = window.__fdWorkFixture.state.staleOptionClicks;
         var durationWritesBeforeControlledCommit = window.__fdWorkFixture.state.durationWrites;
@@ -510,6 +553,44 @@
           && adapter.readSelectedCase(contract(30)).label === canonicalLabel);
         check("controlled_duration_readback", document.getElementById("basic_hoursWorked").value === "1.0");
         check("controlled_narrative_readback", document.getElementById("basic_narrative").value === "TEST DESCRIPTION");
+
+        resetConfig();
+        var delayedLabel = "#26IP0111 长飞光纤IP问题分析";
+        window.__fdWorkFixture.config.caseOptions = [
+          delayedLabel,
+          "#26IP0111 相似但不同的案件"
+        ];
+        window.__fdWorkFixture.config.caseResultFrames = 8;
+        var framesBeforeDelayedFill = window.__fdWorkFixture.state.caseResultFrames;
+        var savesBeforeDelayedFill = window.__fdWorkFixture.state.saveClicks;
+        var submitsBeforeDelayedFill = window.__fdWorkFixture.state.submitCalls;
+        var delayedFill = await adapter.fillEntry({
+          case_label: delayedLabel, case_query: "26IP0111", work_date: "2026-01-03",
+          duration_hours: "1.25", narrative: "DELAYED CONTROLLED FILL"
+        }, contract(301, 2000));
+        var delayedCaseInput = document.getElementById("basic_caseId");
+        var delayedSelection = document.querySelector(".ant-select-selection-item");
+        var delayedToolbar = document.getElementById("worktrace-fdwork-fill-toolbar");
+        check("delayed_results_complete_actual_fill",
+          delayedFill.ok === true && delayedFill.stage === "entry_verified"
+          && delayedSelection && delayedSelection.getAttribute("title") === delayedLabel
+          && delayedSelection.textContent === delayedLabel
+          && delayedCaseInput && delayedCaseInput.value === ""
+          && delayedCaseInput.getAttribute("aria-expanded") === "false"
+          && !document.getElementById("basic_caseId_dropdown")
+          && !document.getElementById("basic_caseId_list")
+          && document.getElementById("basic_hoursWorked").value === "1.25"
+          && document.getElementById("basic_narrative").value === "DELAYED CONTROLLED FILL"
+          && delayedToolbar
+          && delayedToolbar.textContent.indexOf("请检查后") >= 0
+          && adapter._test.activeMode() === "review");
+        check("delayed_results_were_awaited_before_commit",
+          window.__fdWorkFixture.state.caseResultFrames - framesBeforeDelayedFill >= 8
+          && window.__fdWorkFixture.state.accessibilityMirrorClicks === 0);
+        check("delayed_fill_never_saves_or_submits",
+          window.__fdWorkFixture.state.saveClicks === savesBeforeDelayedFill
+          && window.__fdWorkFixture.state.submitCalls === submitsBeforeDelayedFill
+          && window.__fdWorkFixture.state.apiCalls === 0);
 
         resetConfig();
         var revisionBeforePrevious = window.__fdWorkFixture.state.formRevision;

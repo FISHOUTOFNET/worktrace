@@ -32,13 +32,17 @@ def test_anonymous_fixture_preserves_minimum_real_ant_contract() -> None:
         'aria-controls="basic_caseId_list"',
         'aria-owns="basic_caseId_list"',
         'class="ant-select-selection-item"',
-        'popup.id = "basic_caseId_list"',
-        'popup.setAttribute("role", "listbox")',
+        'popup.className = "ant-select-dropdown"',
+        'accessibilityList.id = "basic_caseId_list"',
+        'accessibilityList.setAttribute("role", "listbox")',
+        'accessibilityList.style.cssText = "height:0;width:0;overflow:hidden"',
+        'option.className = interactive ? "ant-select-item ant-select-item-option" : ""',
         'option.setAttribute("role", "option")',
         'option.setAttribute("aria-selected"',
         'id="basic_hoursWorked"',
         'id="basic_narrative"',
-        'queueMicrotask(function () { renderPopup(query); })',
+        'requestAnimationFrame(next)',
+        'queueMicrotask(next)',
         'if (config.durationAccepted) state.duration = proposed',
         'if (config.narrativeAccepted) state.narrative = proposed',
         "TEST MATTER A",
@@ -55,6 +59,9 @@ def test_anonymous_fixture_preserves_minimum_real_ant_contract() -> None:
     assert 'check("complete_four_field_readback"' in source
     assert 'check("canonical_case_query_written"' in source
     assert 'check("canonical_query_exact_full_label_selected"' in source
+    assert 'check("delayed_results_complete_actual_fill"' in source
+    assert 'check("delayed_results_were_awaited_before_commit"' in source
+    assert 'check("delayed_fill_never_saves_or_submits"' in source
     assert 'check("never_auto_saves_or_submits"' in source
     assert "worktrace-result" in source
 
