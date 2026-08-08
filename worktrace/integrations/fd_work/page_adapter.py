@@ -485,7 +485,9 @@ class FDWorkPageAdapter:
             respect_operation_deadline=True,
         )
         if result_value.get("ok") is True and result_value.get("status") == "saved":
-            return {"ok": True, "status": "saved"}
+            if result_value.get("stage") != "save_completed":
+                return {"ok": False, "error": "dom_contract_changed"}
+            return {"ok": True, "status": "saved", "stage": "save_completed"}
         return result_value
 
     def _picker_contract(self, operation: Mapping[str, Any]) -> dict[str, Any]:
