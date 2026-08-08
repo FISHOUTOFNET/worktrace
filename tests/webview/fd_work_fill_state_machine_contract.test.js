@@ -33,11 +33,11 @@ test("entry readiness waiter never owns transaction blocker cleanup", () => {
   assert.doesNotMatch(body, /removeFillBlockingLayer/);
 });
 
-test("exact case may commit from a stable live popup without requiring DOM replacement", () => {
+test("exact case freshness accelerates commit but is not the only valid path", () => {
   const body = bodyBetween("async function selectExactCase", "async function awaitInteractiveEntryField");
-  assert.match(body, /if \(live\.ok\)/);
-  assert.doesNotMatch(body, /signature\s*!==\s*before/);
-  assert.doesNotMatch(body, /live\.popup\s*!==\s*beforePopup\s*\|\|/);
+  assert.match(body, /freshEvidence/);
+  assert.match(body, /stableExactFrames\s*>=\s*settleFrames/);
+  assert.match(body, /freshEvidence\s*\|\|\s*stableExactFrames\s*>=\s*settleFrames/);
 });
 
 test("save completion rejects loading-only and form-identity-only evidence", () => {
