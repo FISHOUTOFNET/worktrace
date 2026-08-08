@@ -249,7 +249,7 @@ test("source waits rendering and transient shell before create and hands blocker
   assert.ok(ensureStart >= 0 && ensureEnd > ensureStart);
   assert.ok(ensureBody.indexOf("state.form || state.input || state.wrapper") >= 0);
   assert.match(ensureBody, /while \(Date\.now\(\) <= deadline\)/);
-  assert.match(ensureBody, /createEntryActions\(\)/);
+  assert.match(ensureBody, /createEntryActions\(expected\)/);
   assert.ok(ensureBody.indexOf("installFillBlockingLayer()") < ensureBody.indexOf("action.click()"));
 
   const pickerStart = adapterSource.indexOf("function enterCasePicker");
