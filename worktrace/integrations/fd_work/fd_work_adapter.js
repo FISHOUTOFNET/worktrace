@@ -124,9 +124,19 @@
     }
 
     function deadlineAt(contract) {
+        var fillDeadline = Number(contract && contract.fill_deadline_ms);
+        if (Number.isFinite(fillDeadline) && fillDeadline > 0) return fillDeadline;
         var existing = Number(contract && contract.operation_deadline_ms);
         if (Number.isFinite(existing) && existing > 0) return existing;
         return Date.now() + Math.max(1, Number(contract && contract.deadline_ms) || 5000);
+    }
+
+    function saveDeadlineAt(contract) {
+        var timeout = Math.max(1, Number(contract && contract.save_timeout_ms) || 5000);
+        var staged = Date.now() + timeout;
+        var operationDeadline = Number(contract && contract.operation_deadline_ms);
+        return Number.isFinite(operationDeadline) && operationDeadline > 0
+            ? Math.min(staged, operationDeadline) : staged;
     }
 
     function canceled(generation) {
@@ -1372,6 +1382,20 @@
         return !!(typeof node.querySelector === "function" && node.querySelector(selector));
     }
 
+    async function awaitInteractiveSaveAction(contract, generation) {
+        var deadline = saveDeadlineAt(contract);
+        var lastError = "save_action_missing";
+        while (Date.now() <= deadline) {
+            if (canceled(generation)) return stageFailure("save_action", "lookup_superseded");
+            var located = locateSaveAction(contract);
+            if (located.ok && !saveActionBusy(located.node, contract)) return located;
+            if (located.error === "save_action_ambiguous") return located;
+            lastError = located.error || "save_action_not_interactive";
+            await requestFrame();
+        }
+        return stageFailure("save_action", lastError);
+    }
+
     function visibleSaveSuccessNodes(contract) {
         var selector = String(contract && contract.save_success_selector
             || ".ant-message-success, .ant-notification-notice-success");
@@ -1395,9 +1419,21 @@
         );
     }
 
+    function entryClosedAfterSave(baseline, contract) {
+        var currentForm = document.querySelector(String(contract.form_selector || "form#basic"));
+        if (currentForm && visible(currentForm)) return false;
+        if (baseline.form && baseline.form.isConnected !== false && currentForm === baseline.form) {
+            return false;
+        }
+        var actions = createEntryActions("创建工时");
+        if (actions.length !== 1) return false;
+        var action = actions[0];
+        return !(action.disabled || (action.getAttribute && action.getAttribute("aria-disabled") === "true"));
+    }
+
     async function verifySaveCompletion(baseline, contract, generation) {
-        var deadline = deadlineAt(contract);
-        var loadingObserved = saveActionBusy(baseline.node, contract);
+        var deadline = saveDeadlineAt(contract);
+        var loadingObserved = false;
         while (Date.now() <= deadline) {
             if (canceled(generation)) return stageFailure(
                 "save_completed", "lookup_superseded"
@@ -1407,14 +1443,17 @@
                 return baseline.successNodes.indexOf(node) < 0;
             });
             var reinitialized = formReinitializedAfterSave(baseline, contract);
+            var entryClosed = entryClosedAfterSave(baseline, contract);
             var busy = saveActionBusy(baseline.node, contract);
             loadingObserved = loadingObserved || busy;
-            if (successMessage || reinitialized) {
+            var loadingSettled = loadingObserved && !busy;
+            if (successMessage || reinitialized || entryClosed || loadingSettled) {
                 return result(true, "", {
                     stage: "save_completed",
                     save_loading_observed: loadingObserved,
                     save_success_message: successMessage,
-                    form_reinitialized: reinitialized
+                    form_reinitialized: reinitialized,
+                    entry_closed_after_save: entryClosed
                 });
             }
             await requestFrame();
@@ -1422,7 +1461,8 @@
         return stageFailure("save_completed", "save_completion_failed", {
             save_loading_observed: loadingObserved,
             save_success_message: false,
-            form_reinitialized: false
+            form_reinitialized: false,
+            entry_closed_after_save: false
         });
     }
 
@@ -1444,7 +1484,7 @@
     }
 
     async function saveEntry(contract, generation) {
-        var located = locateSaveAction(contract);
+        var located = await awaitInteractiveSaveAction(contract, generation);
         if (!located.ok) return located;
         var baseline = {
             form: located.form,
@@ -1560,8 +1600,9 @@
         [
             "viewport_available", "input_exists", "input_interactive",
             "editor_exists", "save_loading_observed", "save_success_message",
-            "form_reinitialized", "option_connected_before_action",
-            "option_connected_after_action", "popup_replaced", "live_option_reacquired"
+            "form_reinitialized", "entry_closed_after_save",
+            "option_connected_before_action", "option_connected_after_action",
+            "popup_replaced", "live_option_reacquired"
         ].forEach(function (key) {
             if (typeof value[key] === "boolean") safe[key] = value[key];
         });
