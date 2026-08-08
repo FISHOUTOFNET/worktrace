@@ -1138,6 +1138,9 @@
             "case_query", "case_popup_not_interactive"
         );
         var beforePopup = popup;
+        var beforeSignature = optionLabels(popup).map(function (item) {
+            return item.label;
+        }).join("\u0000");
         var applied = setSearchValue(input, searchQuery);
         if (!applied.ok) return stageResult(applied, "case_query");
         var deadline = deadlineAt(contract);
@@ -1152,9 +1155,13 @@
             await requestFrame();
         }
         if (!queryAccepted) return stageFailure("case_query", "case_query_not_applied");
-        await requestFrame();
         var optionCount = 0;
         var commitResult = null;
+        var stableExactFrames = 0;
+        var settleFrames = Math.max(
+            2,
+            Math.min(60, Number(contract && contract.case_result_settle_frames) || 12)
+        );
         while (Date.now() <= deadline) {
             if (canceled(generation)) return stageFailure("case_results", "lookup_superseded");
             var live = findExactLiveCaseOption(expectedLabel, contract);
@@ -1165,13 +1172,24 @@
                     popup_replaced: live.popup !== beforePopup
                 })
             );
+            var signature = live.popup
+                ? optionLabels(live.popup).map(function (item) { return item.label; }).join("\u0000")
+                : "";
+            var freshEvidence = !!(
+                live.popup && (live.popup !== beforePopup || signature !== beforeSignature)
+            );
             if (live.ok) {
-                commitResult = commitExactCaseOption(expectedLabel, contract, {
-                    option_count: optionCount,
-                    popup_replaced: live.popup !== beforePopup,
-                    live_option_reacquired: true
-                });
-                break;
+                stableExactFrames += 1;
+                if (freshEvidence || stableExactFrames >= settleFrames) {
+                    commitResult = commitExactCaseOption(expectedLabel, contract, {
+                        option_count: optionCount,
+                        popup_replaced: live.popup !== beforePopup,
+                        live_option_reacquired: true
+                    });
+                    break;
+                }
+            } else {
+                stableExactFrames = 0;
             }
             await requestFrame();
         }
