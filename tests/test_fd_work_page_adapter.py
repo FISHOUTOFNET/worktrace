@@ -169,11 +169,18 @@ def test_picker_and_stable_actions_fail_closed(method, remote_result, expected_e
 
 def test_fill_serializes_separate_case_label_and_query_with_v5_contract():
     adapter = FDWorkPageAdapter()
-    window = _Window(adapter, {"ok": True, "status": "saved"})
+    window = _Window(
+        adapter,
+        {"ok": True, "status": "saved", "stage": "save_completed"},
+    )
+    operation = _operation(
+        fill_deadline_ms=1893455995000,
+        save_timeout_ms=5000,
+    )
 
-    result = adapter.fill_entry(window, _draft(), contract=_operation())
+    result = adapter.fill_entry(window, _draft(), contract=operation)
 
-    assert result == {"ok": True, "status": "saved"}
+    assert result == {"ok": True, "status": "saved", "stage": "save_completed"}
     script = window.calls[-1][0]
     for key in ("work_date", "case_label", "case_query", "duration_hours", "narrative"):
         assert key in script
@@ -184,8 +191,19 @@ def test_fill_serializes_separate_case_label_and_query_with_v5_contract():
     assert '"entry_fields"' in script
     assert '"work_date"' in script
     assert '"outside_form_selector":"form#basic"' in script
+    assert '"fill_deadline_ms":1893455995000' in script
+    assert '"save_timeout_ms":5000' in script
     for forbidden in ("cookie", "localStorage", "sessionStorage"):
         assert forbidden not in script
+
+
+def test_fill_rejects_saved_result_without_explicit_completion_stage():
+    adapter = FDWorkPageAdapter()
+    window = _Window(adapter, {"ok": True, "status": "saved"})
+
+    result = adapter.fill_entry(window, _draft(), contract=_operation())
+
+    assert result == {"ok": False, "error": "dom_contract_changed"}
 
 
 def test_fill_diagnostics_preserve_privacy_safe_stage_without_page_values():
