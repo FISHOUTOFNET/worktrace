@@ -90,7 +90,8 @@ def test_timeline_header_filter_editor_and_advanced_menu_contract():
     assert 'maxlength="200"' in textarea.group(0)
     assert "0 / 200" in timeline_page
     assert 'id="timeline-readonly-notice"' in timeline_page
-    assert "进行中时段不可编辑，结束后可修改项目、描述和时长。" in timeline_page
+    assert "进行中时段不可编辑" in timeline_page
+    assert "结束后可修改项目、描述和时长" not in timeline_page
     duration = re.search(r'<input id="edit-duration-input"[^>]*>', timeline_page)
     assert duration is not None
     assert 'type="number"' in duration.group(0)
