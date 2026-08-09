@@ -69,4 +69,4 @@ def test_shipping_script_composition_contains_current_rule_owners_in_order():
     assert "规则删除后不再参与后续自动归类" not in loaded
     assert "既有历史归属保持不变" not in loaded
     assert "保留已有归类" in loaded
-    assert "恢复原状" in loaded
+    assert "视同规则不存在" in loaded
