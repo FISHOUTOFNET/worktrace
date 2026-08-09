@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 UI_ROOT = ROOT / "worktrace" / "webview_ui"
 INDEX = UI_ROOT / "index_fd_work_v5.html"
 _ASSET_RE = re.compile(
-    r'(?P<prefix>(?:href|src)=")(?P<path>(?:styles\.css|js/[^"?]+\.js))(?:\?v=[0-9a-f]+)?(?P<suffix>")'
+    r'(?P<prefix>(?:href|src)=")(?P<path>(?:[^"/?]+\.css|js/[^"?]+\.js))(?:\?v=[0-9a-f]+)?(?P<suffix>")'
 )
 
 
