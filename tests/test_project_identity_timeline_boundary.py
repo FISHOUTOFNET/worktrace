@@ -5,11 +5,9 @@ from types import SimpleNamespace
 import pytest
 
 from worktrace.api import application_capabilities
+from worktrace.api.application_capabilities import ProjectCatalogApplicationService
 from worktrace.api.external_project_identity import OptionalProjectIdentityCapability
-from worktrace.api.project_identity_timeline import ProjectIdentityTimelineApplicationService
-from worktrace.webview_ui.bridge_project_identity_timeline import (
-    ProjectIdentityTimelineBridgeMixin,
-)
+from worktrace.webview_ui.bridge_projects import ProjectCatalogBridgeMixin
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
@@ -50,7 +48,7 @@ def _identity(external):
     )
 
 
-def test_timeline_service_reads_binding_state_through_generic_identity_capability(
+def test_project_catalog_reads_binding_state_through_generic_identity_capability(
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -61,14 +59,22 @@ def test_timeline_service_reads_binding_state_through_generic_identity_capabilit
             {"id": 8, "name": "Local", "description": ""},
         ],
     )
-    service = ProjectIdentityTimelineApplicationService(
-        _identity(_ExternalIdentity({7}))
+    monkeypatch.setattr(
+        application_capabilities.timeline_api,
+        "list_filter_projects",
+        lambda: [
+            {"id": 7, "name": "CASE A", "description": ""},
+            {"id": 8, "name": "Local", "description": ""},
+        ],
     )
+    service = ProjectCatalogApplicationService(_identity(_ExternalIdentity({7})))
 
-    result = service.list_selectable_projects()
+    editing = service.list_editing_projects()
+    filtering = service.list_filter_projects()
 
-    assert result[0]["external_identity_bound"] is True
-    assert result[1]["external_identity_bound"] is False
+    assert editing[0]["external_identity_bound"] is True
+    assert editing[1]["external_identity_bound"] is False
+    assert all("external_identity_bound" not in item for item in filtering)
 
 
 def test_durable_binding_truth_does_not_depend_on_plugin_runtime_state():
@@ -88,9 +94,9 @@ def test_durable_binding_truth_does_not_depend_on_plugin_runtime_state():
     ]
 
 
-def test_timeline_bridge_exposes_binding_only_on_editing_catalog():
-    class _Timeline:
-        def list_selectable_projects(self):
+def test_project_catalog_bridge_exposes_binding_only_on_editing_catalog():
+    class _Projects:
+        def list_editing_projects(self):
             return [
                 {
                     "id": 7,
@@ -112,10 +118,10 @@ def test_timeline_bridge_exposes_binding_only_on_editing_catalog():
                 {"id": 8, "name": "Local", "description": ""},
             ]
 
-    bridge = ProjectIdentityTimelineBridgeMixin()
-    bridge._services = SimpleNamespace(timeline=_Timeline())
+    bridge = ProjectCatalogBridgeMixin()
+    bridge._services = SimpleNamespace(projects=_Projects())
 
-    result = bridge.list_projects_for_timeline()
+    result = bridge.list_project_catalog()
 
     assert result["ok"] is True
     assert result["editing_projects"] == [
