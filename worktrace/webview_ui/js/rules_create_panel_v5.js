@@ -34,6 +34,12 @@
         }
         var languageSelect = document.getElementById("rules-panel-project-language");
         if (languageSelect) languageSelect.addEventListener("change", refreshLanguageOther);
+        App.projectIdentity.bindHost({
+            onStateChanged: refreshPanelWriteState,
+            onBindingChanged: function () {
+                return App.loadProjectRules ? App.loadProjectRules() : Promise.resolve();
+            }
+        });
         App.projectIdentity.bindEvents();
         App.projectIdentity.syncStatus();
         var sortSelect = document.getElementById("rules-sort-select");
