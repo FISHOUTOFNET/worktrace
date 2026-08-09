@@ -26,6 +26,8 @@ def test_shared_copy_policy_removes_routine_explanations() -> None:
     assert 'hideSelector("#rules-panel-folder-recursive small")' in source
     assert 'hideSelector("#settings-privacy-card small")' in source
     assert 'hideSelector("#settings-storage-card small")' in source
+    assert 'hideSelector("#settings-section-data .maintenance-section > h3 + p")' in source
+    assert '#settings-section-data .maintenance-section > p' not in source
     assert 'statsScopeRow.hidden = true' in source
     assert '"本地项目；也可选择 FD Work 案件": ""' in source
     assert '"已取消 FD Work 关联，将作为本地项目保存": "已取消 FD Work 关联"' in source
