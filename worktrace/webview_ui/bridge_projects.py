@@ -42,5 +42,9 @@ class ProjectCatalogBridgeMixin:
             logger.exception("webview bridge list_project_catalog failed")
             return {"ok": False, "error": "operation_failed", "message": "操作失败"}
 
+    def list_projects_for_timeline(self) -> dict[str, Any]:
+        """Temporary frontend migration alias; catalog ownership stays here."""
+        return self.list_project_catalog()
+
 
 __all__ = ["ProjectCatalogBridgeMixin"]
