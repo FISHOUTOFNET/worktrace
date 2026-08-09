@@ -40,11 +40,9 @@ class ProjectIdentityIntegrationCapability(Protocol):
 
 
 class ExternalBoundProjectIdentityCapability(Protocol):
-    """Narrow external-binding operations used by the optional identity adapter."""
+    """Narrow durable-binding operations used by the optional identity adapter."""
 
-    def list_project_identities(
-        self, projects: Iterable[Mapping[str, Any]]
-    ) -> list[dict[str, Any]]: ...
+    def list_bound_project_ids(self) -> set[int]: ...
 
     def create_bound_project(
         self,
@@ -87,7 +85,16 @@ class OptionalProjectIdentityCapability:
     def list_project_identities(
         self, projects: Iterable[Mapping[str, Any]]
     ) -> list[dict[str, Any]]:
-        return self._external.list_project_identities(projects)
+        result = [dict(project) for project in projects]
+        try:
+            bound_ids = self._external.list_bound_project_ids()
+        except Exception:
+            bound_ids = set()
+        for project in result:
+            project["external_identity_bound"] = (
+                int(project.get("id") or 0) in bound_ids
+            )
+        return result
 
     def create_project(
         self,
@@ -130,7 +137,7 @@ class OptionalProjectIdentityCapability:
             )
 
         current = self._project_reader(int(project_id))
-        was_bound = self._is_bound(current)
+        was_bound = self._is_bound(int(project_id))
         old_name = str(current.get("name") or "").strip() if current else ""
         new_name = str(name or "").strip()
         name_changed = bool(current) and old_name != new_name
@@ -163,17 +170,13 @@ class OptionalProjectIdentityCapability:
     def after_project_deleted(self, project_id: int) -> dict[str, Any]:
         return self._external.after_project_deleted(int(project_id))
 
-    def _is_bound(self, project: Mapping[str, Any] | None) -> bool:
-        if project is None:
+    def _is_bound(self, project_id: int) -> bool:
+        if project_id <= 0:
             return False
         try:
-            decorated = self._external.list_project_identities((project,))
+            return project_id in self._external.list_bound_project_ids()
         except Exception:
             return False
-        return bool(
-            decorated
-            and decorated[0].get("external_identity_bound") is True
-        )
 
     @staticmethod
     def _external_result(result: dict[str, Any]) -> dict[str, Any]:
