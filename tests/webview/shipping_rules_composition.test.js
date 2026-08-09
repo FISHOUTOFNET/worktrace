@@ -229,7 +229,7 @@ test("shipping composition renders no enabled state and keyword delete opens bot
   const group = dialogBody.querySelector('[role="radiogroup"]');
   assert.ok(group);
   const labels = group.children.map((row) => row.children[1].children[0].textContent);
-  assert.deepEqual(labels, ["保留已有归类", "恢复原状"]);
+  assert.deepEqual(labels, ["保留已有归类", "视同规则不存在"]);
   assert.doesNotMatch(dialogBody.textContent, /规则删除后不再参与后续自动归类；既有历史归属保持不变/);
   dialogSecondary.dispatch("click");
   await flush();
