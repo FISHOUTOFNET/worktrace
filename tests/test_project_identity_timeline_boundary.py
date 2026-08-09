@@ -19,14 +19,8 @@ class _ExternalIdentity:
     def __init__(self, bound_ids=()):
         self.bound_ids = set(bound_ids)
 
-    def list_project_identities(self, projects):
-        return [
-            {
-                **dict(project),
-                "external_identity_bound": int(project.get("id") or 0) in self.bound_ids,
-            }
-            for project in projects
-        ]
+    def list_bound_project_ids(self):
+        return set(self.bound_ids)
 
     def create_bound_project(self, *args):
         raise AssertionError(args)
@@ -75,6 +69,23 @@ def test_timeline_service_reads_binding_state_through_generic_identity_capabilit
 
     assert result[0]["external_identity_bound"] is True
     assert result[1]["external_identity_bound"] is False
+
+
+def test_durable_binding_truth_does_not_depend_on_plugin_runtime_state():
+    external = _ExternalIdentity({7})
+    identity = _identity(external)
+
+    result = identity.list_project_identities(
+        [
+            {"id": 7, "name": "CASE A"},
+            {"id": 8, "name": "Local"},
+        ]
+    )
+
+    assert result == [
+        {"id": 7, "name": "CASE A", "external_identity_bound": True},
+        {"id": 8, "name": "Local", "external_identity_bound": False},
+    ]
 
 
 def test_timeline_bridge_exposes_binding_only_on_editing_catalog():
