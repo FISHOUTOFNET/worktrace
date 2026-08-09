@@ -62,7 +62,7 @@
         hideSelector("#settings-privacy-card small");
         hideSelector('label[for="settings-fd-work-toggle"] small');
         hideSelector("#settings-storage-card small");
-        hideSelector("#settings-section-data .maintenance-section > p");
+        hideSelector("#settings-section-data .maintenance-section > h3 + p");
         setSelectorText("#settings-danger-card small", "此操作不可撤销。");
         setSelectorText("#settings-section-advanced details > summary", "技术诊断");
 
