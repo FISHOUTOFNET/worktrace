@@ -21,6 +21,12 @@
             .join(" ").toLocaleLowerCase();
         var projectDescription = String((project && project.description) || "").trim();
         var lastUsedAt = String((project && project.last_used_at) || "").trim();
+        var descriptionMarkup = projectDescription
+            ? '<div class="rules-project-description">' + text(projectDescription, "") + '</div>'
+            : "";
+        var metaMarkup = lastUsedAt
+            ? '<div class="rules-project-meta"><span>上次使用：' + text(lastUsedAt, "") + '</span></div>'
+            : "";
         return '<article class="rules-project-card" data-project-id="' + count(id)
             + '" data-rules-search="' + text(searchable, "") + '">'
             + '<div class="rules-project-head">'
@@ -28,10 +34,7 @@
             + ' aria-label="展开 ' + text(project && project.name, "项目") + ' 的规则" data-tooltip="展开规则">'
             + App.iconMarkup("chevron-right") + '</button>'
             + '<div class="rules-project-title-group"><div class="rules-project-title">'
-            + text(project && project.name, "未命名项目") + '</div>'
-            + '<div class="rules-project-description' + (projectDescription ? "" : " is-empty") + '"'
-            + (projectDescription ? '' : ' hidden') + '>'
-            + text(projectDescription || "无描述", "无描述") + '</div></div>'
+            + text(project && project.name, "未命名项目") + '</div>' + descriptionMarkup + '</div>'
             + '<div class="rules-project-side"><div class="rules-project-actions">'
             + '<button class="rules-project-add-rule-button icon-button compact-icon-button inline-icon-button" type="button" data-project-id="' + count(id)
             + '" aria-label="新建规则" data-tooltip="新建规则">' + App.iconMarkup("plus") + '</button>'
@@ -39,9 +42,7 @@
             + '" aria-label="编辑项目" data-tooltip="编辑项目">' + App.iconMarkup("pencil") + '</button>'
             + '<button class="rules-project-delete-button icon-button compact-icon-button inline-icon-button danger-icon-button" type="button" data-project-id="' + count(id)
             + '" aria-label="删除项目" data-tooltip="删除项目">' + App.iconMarkup("trash") + '</button>'
-            + '</div><div class="rules-project-meta"' + (lastUsedAt ? '' : ' hidden') + '><span>上次使用：'
-            + text(lastUsedAt || "暂无使用记录", "暂无使用记录")
-            + '</span></div></div></div><div class="rules-row-list" style="overflow:visible" hidden>' + rows + '</div></article>';
+            + '</div>' + metaMarkup + '</div></div><div class="rules-row-list" hidden>' + rows + '</div></article>';
     }
     App.renderProjectRuleProject = renderProjectRuleProject;
 
