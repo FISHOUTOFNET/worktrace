@@ -10,6 +10,7 @@
     var operations = ["none", "user_auth", "user_picker", "automation_fill"];
     var pagePhases = ["none", "login_credentials", "login_confirmation", "work_shell", "unauthorized", "error", "unknown"];
     var operationStatuses = ["pending", "save_completed", "operation_canceled", "failed"];
+    var statusHost = { onStatusChanged: function () {} };
 
     function validStatus(status) {
         return !!status
@@ -32,6 +33,17 @@
             && (status.navigation_generation === undefined
                 || (Number.isInteger(status.navigation_generation)
                     && status.navigation_generation >= 0));
+    }
+
+    function bindStatusHost(host) {
+        statusHost = {
+            onStatusChanged: host && typeof host.onStatusChanged === "function"
+                ? host.onStatusChanged : function () {}
+        };
+    }
+
+    function notifyStatusHost(status) {
+        try { statusHost.onStatusChanged(status); } catch (_error) {}
     }
 
     App.receiveFDWorkStatus = function (status) {
@@ -78,10 +90,7 @@
             operation_generation: incomingOperationGeneration,
             operation_result_owner: status.operation_result_owner || null
         });
-        if (App.lastSettingsStatus) App.lastSettingsStatus.fd_work = App.fdWorkStatus;
-        if (typeof App.renderFDWorkToggle === "function") App.renderFDWorkToggle(App.lastSettingsStatus);
-        if (typeof App.updateFDWorkEntryButton === "function") App.updateFDWorkEntryButton();
-        if (App.projectIdentity) App.projectIdentity.syncStatus();
+        notifyStatusHost(App.fdWorkStatus);
         var fillTerminal = status.operation === "none" && (
             status.operation_result_owner === "automation_fill"
             || (previousOperation === "automation_fill"
@@ -483,7 +492,9 @@
         var select = document.getElementById("edit-project-select");
         var projectId = parseInt(select && select.value || session.project_id || 0, 10);
         if (!(projectId > 0)) return null;
-        var projects = App.editingProjectsCache || App.projectsCache || [];
+        var projects = App.projectCatalog
+            ? App.projectCatalog.getEditing()
+            : (App.editingProjectsCache || App.projectsCache || []);
         for (var index = 0; index < projects.length; index++) {
             if (parseInt(projects[index] && projects[index].id, 10) === projectId) {
                 return projects[index];
@@ -569,6 +580,7 @@
     });
     App.receiveFDWorkCasePickerResult = receiveIdentityPickerResult;
     App.fdWork = Object.freeze({
+        bindStatusHost: bindStatusHost,
         resetGeneration: resetIdentityEditor
     });
 })();
