@@ -141,6 +141,7 @@
         pickerEditorGeneration: null,
         pickerPending: false,
         pickerCounter: 0,
+        saveIntent: "local",
         host: {
             onStateChanged: function () {},
             onBindingChanged: function () {}
@@ -149,6 +150,10 @@
 
     function identityEnabled() {
         return (App.fdWorkStatus || {}).enabled === true;
+    }
+
+    function projectNameInput() {
+        return document.getElementById("rules-panel-project-name");
     }
 
     function refreshRulesWriteState() {
@@ -180,6 +185,13 @@
         target.className = "inline-status" + (isError ? " edit-status-error" : "");
     }
 
+    function hideLegacySelectedCaseField() {
+        var selected = document.getElementById("rules-panel-fd-work-selected-label");
+        if (!selected) return;
+        var row = selected.closest ? selected.closest("label") : selected.parentElement;
+        if (row) row.hidden = true;
+    }
+
     function resetIdentityEditor() {
         identityState.editorGeneration += 1;
         identityState.selectionProof = null;
@@ -191,8 +203,7 @@
         identityState.pickerRequestId = null;
         identityState.pickerEditorGeneration = null;
         identityState.pickerPending = false;
-        var selected = document.getElementById("rules-panel-fd-work-selected-label");
-        if (selected) selected.value = "";
+        identityState.saveIntent = "local";
         showIdentityStatus("", false);
     }
 
@@ -203,15 +214,14 @@
             ? projectId : null;
         identityState.originalName = project ? App.safeText(project.name, "") : "";
         identityState.originalBound = !!(project && project.fd_work_bound === true);
-        var selected = document.getElementById("rules-panel-fd-work-selected-label");
-        if (selected) selected.value = project ? identityState.originalName : "";
         if (project && identityState.originalBound) {
             showIdentityStatus("已关联 FD Work", false);
         } else if (project) {
-            showIdentityStatus("历史本地项目：名称不变时可继续维护其他信息", false);
+            showIdentityStatus("本地项目", false);
         }
         var pick = document.getElementById("rules-panel-fd-work-pick");
-        if (pick) pick.textContent = project ? "更换案件" : "选择案件";
+        if (pick) pick.textContent = identityState.originalBound ? "更换案件" : "选择案件";
+        hideLegacySelectedCaseField();
     }
 
     function isCurrentPickerRequest(requestId, editorGeneration) {
@@ -258,6 +268,8 @@
 
     function clearIdentitySelection() {
         if (identityState.pickerPending) return;
+        identityState.selectionProof = null;
+        identityState.selectedLabel = "";
         if (identityState.originalBound && identityState.editingProjectId) {
             var editorGeneration = identityState.editorGeneration;
             var editingProjectId = identityState.editingProjectId;
@@ -272,7 +284,7 @@
                     return;
                 }
                 identityState.originalBound = false;
-                showIdentityStatus("已取消 FD Work 关联", false);
+                showIdentityStatus("已取消 FD Work 关联，将作为本地项目保存", false);
                 notifyBindingChanged();
                 refreshRulesWriteState();
             }).catch(function () {
@@ -283,11 +295,7 @@
             });
             return;
         }
-        identityState.selectionProof = null;
-        identityState.selectedLabel = "";
-        var selected = document.getElementById("rules-panel-fd-work-selected-label");
-        if (selected) selected.value = "";
-        showIdentityStatus("尚未选择 FD Work 案件", false);
+        showIdentityStatus("将作为本地项目保存", false);
         refreshRulesWriteState();
     }
 
@@ -314,68 +322,114 @@
             refreshRulesWriteState();
             return false;
         }
-        identityState.selectedLabel = result.selected_label;
+        identityState.selectedLabel = result.selected_label.trim();
         identityState.selectionProof = result.selection_token;
-        var selected = document.getElementById("rules-panel-fd-work-selected-label");
-        if (selected) selected.value = result.selected_label;
+        var input = projectNameInput();
+        if (input) input.value = identityState.selectedLabel;
         showIdentityStatus("已选择 FD Work 案件", false);
         refreshRulesWriteState();
         return true;
     }
 
-    function buildIdentitySave(localName, editing) {
-        if (!identityEnabled()) {
-            var local = String(localName || "").trim();
-            return local
-                ? { ok: true, name: local, proof: null, verifyBinding: false }
-                : { ok: false, error: "请输入项目名称" };
-        }
-        var selected = document.getElementById("rules-panel-fd-work-selected-label");
-        var displayedLabel = String(selected && selected.value || "").trim();
+    function handleIdentityNameInput() {
+        var input = projectNameInput();
+        var name = String(input && input.value || "").trim();
         if (identityState.selectionProof
-            && displayedLabel !== String(identityState.selectedLabel || "").trim()) {
-            return { ok: false, error: "案件选择结果已被修改，请重新选择" };
+            && name !== String(identityState.selectedLabel || "").trim()) {
+            identityState.selectionProof = null;
+            identityState.selectedLabel = "";
         }
-        if (!editing && !identityState.selectionProof) {
-            return { ok: false, error: "请先选择 FD Work 案件" };
+        if (!identityEnabled()) {
+            showIdentityStatus("", false);
+        } else if (identityState.selectionProof) {
+            showIdentityStatus("已选择 FD Work 案件", false);
+        } else if (identityState.originalBound && name === identityState.originalName) {
+            showIdentityStatus("已关联 FD Work", false);
+        } else if (identityState.originalBound && name !== identityState.originalName) {
+            showIdentityStatus("名称已修改，保存后将取消 FD Work 关联", false);
+        } else if (name) {
+            showIdentityStatus("本地项目；也可选择 FD Work 案件", false);
+        } else {
+            showIdentityStatus("", false);
         }
-        var name = identityState.selectionProof
-            ? String(identityState.selectedLabel || "").trim()
-            : identityState.originalName;
-        return name
-            ? {
-                ok: true,
-                name: name,
-                proof: identityState.selectionProof,
-                verifyBinding: !!identityState.selectionProof
+        refreshRulesWriteState();
+    }
+
+    function buildIdentitySave(localName, editing) {
+        var name = String(localName || "").trim();
+        if (!name) {
+            identityState.saveIntent = "local";
+            return { ok: false, error: "请输入项目名称" };
+        }
+
+        if (!identityEnabled()) {
+            identityState.selectionProof = null;
+            identityState.selectedLabel = "";
+            identityState.saveIntent = "local";
+            return { ok: true, name: name, proof: null, verifyBinding: false };
+        }
+
+        if (identityState.selectionProof) {
+            var selected = String(identityState.selectedLabel || "").trim();
+            if (name === selected) {
+                identityState.saveIntent = "external";
+                return {
+                    ok: true,
+                    name: selected,
+                    proof: identityState.selectionProof,
+                    verifyBinding: true
+                };
             }
-            : { ok: false, error: "请先选择 FD Work 案件" };
+            identityState.selectionProof = null;
+            identityState.selectedLabel = "";
+        }
+
+        if (editing && identityState.originalBound && name === identityState.originalName) {
+            identityState.saveIntent = "preserve";
+        } else {
+            identityState.saveIntent = "local";
+        }
+        return { ok: true, name: name, proof: null, verifyBinding: false };
     }
 
     function verifyIdentityPersistence(result, saved, project) {
-        if (!identityState.selectionProof) return true;
+        if (!saved
+            || String(saved.name || "") !== String(project && project.name || "")) {
+            return false;
+        }
         var binding = (result && result.fd_work_binding) || {};
-        return binding.bound === true
-            && binding.verified === true
-            && !!saved
-            && String(saved.name || "") === String(project && project.name || "")
-            && saved.fd_work_bound === true;
+        if (identityState.saveIntent === "external") {
+            return binding.bound === true
+                && binding.verified === true
+                && saved.fd_work_bound === true;
+        }
+        if (identityState.saveIntent === "preserve") {
+            return saved.fd_work_bound === true;
+        }
+        return saved.fd_work_bound !== true && binding.bound !== true;
     }
 
     function syncIdentityStatus() {
         var enabled = identityEnabled();
         var label = document.getElementById("rules-panel-project-name-label");
         var help = document.getElementById("rules-panel-fd-work-help");
-        var input = document.getElementById("rules-panel-project-name");
-        if (label) label.textContent = enabled ? "FD Work 案件" : "项目名称";
-        if (help) help.hidden = !enabled;
+        var input = projectNameInput();
+        if (label) label.textContent = "项目名称";
+        if (help) {
+            help.hidden = !enabled;
+            help.textContent = "可直接输入本地项目名称，或从 FD Work 原生案件框选择案件。";
+        }
         if (input) {
-            input.hidden = enabled;
-            input.readOnly = enabled;
+            input.hidden = false;
+            input.readOnly = false;
         }
         var picker = document.getElementById("rules-panel-fd-work-picker");
         if (picker) picker.hidden = !enabled;
-        if (!enabled) resetIdentityEditor();
+        hideLegacySelectedCaseField();
+        if (!enabled) {
+            identityState.selectionProof = null;
+            identityState.selectedLabel = "";
+        }
         refreshRulesWriteState();
     }
 
@@ -384,11 +438,12 @@
         var pending = identityState.pickerPending;
         var pick = document.getElementById("rules-panel-fd-work-pick");
         var clear = document.getElementById("rules-panel-fd-work-clear");
+        var name = String((projectNameInput() || {}).value || "").trim();
         if (pick) {
-            pick.disabled = identityState.projectBusy || pending;
+            pick.disabled = identityState.projectBusy || pending || !identityEnabled();
             pick.textContent = pending
                 ? "正在打开……"
-                : (identityState.originalName || identityState.selectedLabel ? "更换案件" : "选择案件");
+                : (identityState.selectionProof || identityState.originalBound ? "更换案件" : "选择案件");
         }
         if (clear) {
             clear.disabled = identityState.projectBusy || pending;
@@ -396,16 +451,14 @@
         }
         return {
             pending: pending,
-            hasName: identityEnabled()
-                ? !!(identityState.selectionProof
-                    || (identityState.editingProjectId && identityState.originalName))
-                : true
+            hasName: !!name
         };
     }
 
     function bindIdentityEvents() {
         var pick = document.getElementById("rules-panel-fd-work-pick");
         var clear = document.getElementById("rules-panel-fd-work-clear");
+        var input = projectNameInput();
         if (pick && pick.getAttribute("data-bound") !== "1") {
             pick.setAttribute("data-bound", "1");
             pick.addEventListener("click", openIdentityPicker);
@@ -414,6 +467,111 @@
             clear.setAttribute("data-bound", "1");
             clear.addEventListener("click", clearIdentitySelection);
         }
+        if (input && input.getAttribute("data-fd-work-identity-bound") !== "1") {
+            input.setAttribute("data-fd-work-identity-bound", "1");
+            input.addEventListener("input", handleIdentityNameInput);
+        }
+        hideLegacySelectedCaseField();
+    }
+
+    function validProjectSessionForFDWorkGate(session) {
+        return !!session
+            && session.is_in_progress !== true
+            && !!session.end_time
+            && session.row_kind === "project_session"
+            && session.is_report_project === true
+            && session.is_report_uncategorized !== true
+            && session.is_uncategorized !== true
+            && session.project_is_deleted !== true;
+    }
+
+    function selectedTimelineProject() {
+        var session = App.editingSession;
+        if (!validProjectSessionForFDWorkGate(session)) return null;
+        var select = document.getElementById("edit-project-select");
+        var projectId = parseInt(select && select.value || session.project_id || 0, 10);
+        if (!(projectId > 0)) return null;
+        var projects = App.editingProjectsCache || App.projectsCache || [];
+        for (var index = 0; index < projects.length; index++) {
+            if (parseInt(projects[index] && projects[index].id, 10) === projectId) {
+                return projects[index];
+            }
+        }
+        return null;
+    }
+
+    function enforceTimelineProjectGate() {
+        var area = document.getElementById("fd-work-entry-area");
+        var button = document.getElementById("fd-work-entry-btn");
+        var status = document.getElementById("fd-work-status");
+        if (!area || !button || !status) return;
+        if (!identityEnabled() || area.hidden) {
+            if (button.textContent === "非 FD Work 项目") button.textContent = "填入 FD Work";
+            return;
+        }
+        var project = selectedTimelineProject();
+        if (!project) {
+            if (button.textContent === "非 FD Work 项目") button.textContent = "填入 FD Work";
+            return;
+        }
+        if (project.fd_work_bound === true) {
+            if (button.textContent === "非 FD Work 项目") button.textContent = "填入 FD Work";
+            return;
+        }
+        if (!button.disabled) button.disabled = true;
+        if (button.textContent !== "非 FD Work 项目") button.textContent = "非 FD Work 项目";
+        if (status.textContent !== "此项目未关联 FD Work") {
+            status.textContent = "此项目未关联 FD Work";
+        }
+        status.hidden = false;
+        status.className = "inline-status";
+    }
+
+    function installTimelineProjectGate() {
+        if (typeof App.updateFDWorkEntryButton !== "function"
+            || typeof App.openFDWorkEntryForSelection !== "function") return;
+        if (App.fdWorkProjectGateInstalled === true) return;
+        App.fdWorkProjectGateInstalled = true;
+
+        var originalUpdate = App.updateFDWorkEntryButton;
+        App.updateFDWorkEntryButton = function () {
+            var result = originalUpdate.apply(this, arguments);
+            enforceTimelineProjectGate();
+            return result;
+        };
+
+        var originalOpen = App.openFDWorkEntryForSelection;
+        App.openFDWorkEntryForSelection = function () {
+            var project = selectedTimelineProject();
+            if (project && project.fd_work_bound !== true) {
+                enforceTimelineProjectGate();
+                return Promise.resolve(false);
+            }
+            return originalOpen.apply(this, arguments);
+        };
+
+        var select = document.getElementById("edit-project-select");
+        if (select) {
+            select.addEventListener("change", enforceTimelineProjectGate);
+        }
+        var list = document.getElementById("timeline-sessions-list");
+        if (list) {
+            list.addEventListener("click", function () {
+                window.setTimeout(function () {
+                    App.updateFDWorkEntryButton();
+                }, 0);
+            });
+        }
+        var button = document.getElementById("fd-work-entry-btn");
+        var status = document.getElementById("fd-work-status");
+        if (window.MutationObserver && button && status) {
+            var observer = new MutationObserver(function () {
+                enforceTimelineProjectGate();
+            });
+            observer.observe(button, { attributes: true, attributeFilter: ["disabled"] });
+            observer.observe(status, { childList: true });
+        }
+        enforceTimelineProjectGate();
     }
 
     App.projectIdentity = Object.freeze({
@@ -431,4 +589,10 @@
     App.fdWork = Object.freeze({
         resetGeneration: resetIdentityEditor
     });
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", installTimelineProjectGate);
+    } else {
+        installTimelineProjectGate();
+    }
 })();
