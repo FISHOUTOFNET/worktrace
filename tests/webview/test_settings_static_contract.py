@@ -64,7 +64,7 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
     assert (WEBVIEW_UI_DIR / "js" / "settings.js").is_file()
     assert re.search(r'src="js/settings\.js\?v=[0-9a-f]+"', index)
     assert "设置与隐私" in section
-    assert "管理本地数据、采集和备份" in section
+    assert "管理本地数据、采集和备份" not in section
     for category in ("常规", "隐私", "数据与备份", "高级"):
         assert category in section
     assert 'data-settings-section="collection"' not in section
@@ -224,8 +224,6 @@ def test_settings_operation_state_has_one_cross_operation_guard() -> None:
     ):
         assert "anySettingsOperationInProgress()" in func_body(source, operation)
 
-    # Recovery must participate in the same unified mutex: it sets the flag
-    # at start and releases it through a single path on success/failure.
     recovery = func_body(source, "recoverDatabaseMaintenance")
     assert "App.recoveryInProgress = true" in recovery
     assert "setSettingsControlsDisabled(anySettingsOperationInProgress())" in recovery
@@ -425,24 +423,17 @@ def test_first_run_notice_is_fail_closed_and_mode_safe() -> None:
     assert 'mode !== "view"' in render
     assert ".hidden" in render
     assert "textContent" in render
-    # The retry button must be hidden in normal gate/view modes.
     assert "first-run-notice-retry-btn" in render
 
     blocking = func_body(source, "showFirstRunNoticeBlockingError")
     assert 'textContent = ""' in blocking
     assert "disabled = true" in blocking
     assert "hidden = true" in blocking
-    # On load failure the retry button must be visible and enabled so the
-    # user can recover without restarting or reinstalling.
     assert "first-run-notice-retry-btn" in blocking
 
     load = func_body(source, "loadFirstRunNotice")
     assert "App.bridge.getFirstRunNotice()" in load
     assert "showFirstRunNoticeBlockingError" in load
-    # The privacy gate is now driven by an explicit state machine. The
-    # ``acceptance_required`` state must set ``firstRunNoticeRequired`` via
-    # ``setPrivacyGateState`` so that fail-closed semantics remain while the
-    # notice is loaded but unaccepted.
     assert 'setPrivacyGateState("acceptance_required")' in load
 
     gate = func_body(source, "setPrivacyGateState")
@@ -456,8 +447,6 @@ def test_first_run_notice_is_fail_closed_and_mode_safe() -> None:
     accept = func_body(source, "acceptFirstRunNotice")
     assert "App.bridge.acceptFirstRunNotice()" in accept
     assert "App.firstRunNoticeAcceptInProgress" in accept
-    # The accept flow must continue through the single idempotent startup
-    # entry owned by init_fd_work_v5.js, not a second refreshAll path.
     assert "App.continueStartupAfterPrivacyGate" in accept
     assert "loadSettingsPrivacyStatus()" in accept
 
