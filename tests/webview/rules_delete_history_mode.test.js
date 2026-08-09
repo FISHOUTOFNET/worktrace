@@ -19,7 +19,6 @@ function harness(choice) {
   const App = context.window.WorkTraceApp;
   Object.assign(App, {
     rulesDeletingRuleKey: null,
-    rulesDeletingFolderKey: null,
     openDeleteDialog(options) {
       dialogOptions = options;
       return Promise.resolve(choice);
@@ -28,7 +27,6 @@ function harness(choice) {
     showRulesError(message) { App.lastError = String(message || ""); },
     loadProjectRules() { return Promise.resolve(true); },
     showToast(message) { App.lastToast = String(message || ""); },
-    setFolderDeleting() {},
     bridge: {
       deleteProjectKeywordRule(ruleId, restoreHistory) {
         deleteCalls.push(["keyword", ruleId, restoreHistory]);
@@ -41,9 +39,9 @@ function harness(choice) {
     },
   });
   vm.runInContext(
-    fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/rules_keyword_actions.js"), "utf8"),
+    fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/rules_delete_actions.js"), "utf8"),
     context,
-    { filename: "rules_keyword_actions.js" },
+    { filename: "rules_delete_actions.js" },
   );
   return { App, getDialogOptions: () => dialogOptions, deleteCalls };
 }
