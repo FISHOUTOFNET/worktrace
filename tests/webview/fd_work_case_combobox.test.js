@@ -26,7 +26,11 @@ function harness({ enabled = true } = {}) {
       contains(target) { return target === node || node.children.includes(target); },
       closest() { return null; },
       fire(name, extra = {}) {
-        const event = Object.assign({ target: node, preventDefault() {} }, extra);
+        const event = Object.assign({
+          target: node,
+          preventDefault() {},
+          stopImmediatePropagation() {},
+        }, extra);
         if (listeners.has(name)) return listeners.get(name).call(node, event);
       },
       focus() {},
@@ -124,14 +128,18 @@ test("plugin disabled leaves ordinary editable project creation unchanged", asyn
   assert.deepEqual(calls.create[0], ["Local project", "", "中文", null]);
 });
 
-test("plugin enabled new project uses readonly picker and opening Drawer has no helper side effect", () => {
+test("plugin enabled keeps local project input editable without opening helper", () => {
   const { App, element, calls } = harness();
 
   App.openRulesPanel("project", {});
+  const input = element("rules-panel-project-name");
 
-  assert.equal(element("rules-panel-project-name").hidden, true);
-  assert.equal(element("rules-panel-fd-work-selected-label").readOnly, false);
+  assert.equal(input.hidden, false);
+  assert.equal(input.readOnly, false);
   assert.equal(element("rules-panel-save-project").disabled, true);
+  input.value = "Local project";
+  input.fire("input");
+  assert.equal(element("rules-panel-save-project").disabled, false);
   assert.deepEqual(calls.picker, []);
   assert.deepEqual(calls.login, []);
 });
@@ -148,25 +156,26 @@ test("explicit picker click opens once and disables the button while pending", a
   assert.match(element("rules-panel-fd-work-status").textContent, /原生案件框/);
 });
 
-test("picker result must match the current Drawer request and session", async () => {
+test("picker result must match the current Drawer request and writes shared name", async () => {
   const { App, element, calls } = harness();
   App.openRulesPanel("project", {});
   element("rules-panel-fd-work-pick").fire("click");
   await tick();
   const requestId = calls.picker[0];
+  const input = element("rules-panel-project-name");
 
   assert.equal(App.receiveFDWorkCasePickerResult({
     ok: true, request_id: "stale", selected_label: "OLD", selection_token: "old-token",
   }), false);
-  assert.equal(element("rules-panel-fd-work-selected-label").value, "");
+  assert.equal(input.value, "");
   assert.equal(App.receiveFDWorkCasePickerResult({
     ok: true, request_id: requestId, selected_label: "CASE A", selection_token: "token-a",
   }), true);
-  assert.equal(element("rules-panel-fd-work-selected-label").value, "CASE A");
+  assert.equal(input.value, "CASE A");
   assert.equal(element("rules-panel-save-project").disabled, false);
 });
 
-test("manual display-label tampering cannot be saved", async () => {
+test("manual editing after picker selection intentionally creates a local project", async () => {
   const { App, element, calls } = harness();
   App.openRulesPanel("project", {});
   element("rules-panel-fd-work-pick").fire("click");
@@ -177,12 +186,14 @@ test("manual display-label tampering cannot be saved", async () => {
     selected_label: "CASE A",
     selection_token: "token-a",
   });
-  element("rules-panel-fd-work-selected-label").value = "TAMPERED";
+  const input = element("rules-panel-project-name");
+  input.value = "Manual project";
+  input.fire("input");
 
   App.savePanelProject();
 
-  assert.deepEqual(calls.create, []);
-  assert.match(element("rules-panel-status").textContent, /重新选择/);
+  assert.deepEqual(calls.create[0], ["Manual project", "", "中文", null]);
+  assert.match(element("rules-panel-fd-work-status").textContent, /本地项目/);
 });
 
 test("FD Work create success waits for verified binding and project-list readback", async () => {
@@ -223,21 +234,27 @@ test("bound unchanged edit preserves binding without a transient token", async (
   assert.deepEqual(calls.update[0], [7, "CASE A", "old", "中文", null]);
 });
 
-test("historical unbound unchanged project can edit non-name fields", async () => {
+test("historical unbound project can rename while plugin stays enabled", async () => {
   const { App, element, calls } = harness();
   const project = { id: 8, name: "Legacy", description: "old", language: "English", fd_work_bound: false };
   App.lastProjectRulesData.projects = [project];
   App.openRulesPanel("project", { project });
+  const input = element("rules-panel-project-name");
+  input.value = "Renamed local";
+  input.fire("input");
   element("rules-panel-project-description").value = "new";
   App.savePanelProject();
   await tick();
 
-  assert.deepEqual(calls.update[0], [8, "Legacy", "new", "English", null]);
+  assert.deepEqual(calls.update[0], [8, "Renamed local", "new", "English", null]);
 });
 
-test("picker cancel or close restores pending state without changing the project name", async () => {
+test("picker cancel or close restores pending state without changing project name", async () => {
   const { App, element, calls } = harness();
   App.openRulesPanel("project", {});
+  const input = element("rules-panel-project-name");
+  input.value = "Local draft";
+  input.fire("input");
   element("rules-panel-fd-work-pick").fire("click");
   await tick();
   const requestId = calls.picker[0];
@@ -246,7 +263,7 @@ test("picker cancel or close restores pending state without changing the project
     ok: false, request_id: requestId, error: "picker_canceled",
   }), true);
   assert.equal(element("rules-panel-fd-work-pick").disabled, false);
-  assert.equal(element("rules-panel-fd-work-selected-label").value, "");
+  assert.equal(input.value, "Local draft");
   assert.match(element("rules-panel-fd-work-status").textContent, /已取消/);
 });
 
@@ -261,4 +278,5 @@ test("explicit cancel association clears an existing durable binding", async () 
 
   assert.deepEqual(calls.clear, [7]);
   assert.equal(element("rules-panel-fd-work-clear").hidden, true);
+  assert.equal(element("rules-panel-project-name").value, "CASE A");
 });
