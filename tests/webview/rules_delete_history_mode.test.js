@@ -56,6 +56,7 @@ test("rule delete dialog offers only preserve history and treat-rule-as-absent c
   const options = getDialogOptions();
   assert.ok(options);
   assert.equal(options.warning, "如何处理已有归类？");
+  assert.equal(options.objectLabel, undefined);
   assert.equal(options.choices.length, 2);
   assert.equal(options.choices[0].value, "preserve");
   assert.equal(options.choices[0].label, "保留已有归类");
