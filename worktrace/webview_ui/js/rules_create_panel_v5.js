@@ -114,12 +114,12 @@
         App.openDeleteDialog({
             trigger: button,
             title: "删除项目",
-            secondTitle: "确认永久删除项目",
-            secondIntro: "此操作不可撤销，即将永久删除：",
+            secondTitle: "确认删除项目",
+            secondIntro: "即将删除：",
             objectLabel: App.safeText(project && project.name, "当前项目"),
-            warning: "此操作不可撤销。项目的全部自动归类规则将永久删除；当前归属于该项目的时间将释放为“未归类”；FD Work 项目关联也会清除。活动事实、时长、描述及其他时间编辑不会被删除。",
+            warning: "此操作不可撤销。",
             twoStep: true,
-            confirmLabel: "永久删除项目"
+            confirmLabel: "删除项目"
         }).then(function (confirmed) {
             if (!confirmed) return null;
             return App.bridge.deleteProjectForRules(projectId);
@@ -131,7 +131,7 @@
             }
             return App.loadProjectRules().then(function () {
                 App.clearRulesError();
-                if (App.showToast) App.showToast("项目已永久删除，原归属时间已释放为未归类");
+                if (App.showToast) App.showToast("项目已删除");
             });
         }).catch(function () { App.showRulesError("删除项目失败"); });
     }
@@ -268,7 +268,7 @@
             return;
         }
         context.textContent = options.isSuccess
-            ? "项目已新增：“" + projectName + "”。请继续添加自动归类规则。"
+            ? "项目已新增"
             : "为项目“" + projectName + "”添加规则。";
         context.classList.toggle("is-success", !!options.isSuccess);
     }
@@ -338,10 +338,6 @@
         }
         var name = identityPayload.name;
         var description = descInput ? (descInput.value || "").trim() : "";
-        // When editing an existing project, pass back the original language
-        // verbatim instead of reading from the hidden select (which only
-        // offers ``中文`` and would overwrite non-中文 projects). New
-        // projects default to ``中文`` via readPanelLanguage().
         var language = wasEditing
             ? (App.rulesPanelOriginalLanguage || "中文")
             : readPanelLanguage();
@@ -476,10 +472,6 @@
         setValue("rules-panel-project-name", project ? App.safeText(project.name, "") : "");
         setValue("rules-panel-project-description", project ? App.safeText(project.description, "") : "");
         App.projectIdentity.prepareEditor(project);
-        // Preserve the original language when editing. The hidden select
-        // only offers ``中文``; reading from it on save would overwrite
-        // non-中文 projects. We store the original language and pass it
-        // back verbatim on update. New projects default to ``中文``.
         if (project && App.rulesPanelEditingProjectId) {
             App.rulesPanelOriginalLanguage = App.safeText(project.language, "中文");
         } else {
