@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import hashlib
+import importlib.util
 import re
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -12,13 +12,15 @@ pytestmark = [pytest.mark.contract, pytest.mark.webview_static, pytest.mark.pack
 ROOT = Path(__file__).resolve().parents[2]
 UI_ROOT = ROOT / "worktrace" / "webview_ui"
 INDEX = UI_ROOT / "index_fd_work_v5.html"
+SYNC_SCRIPT = ROOT / "scripts" / "sync_webview_asset_revisions.py"
 
 
-def _revision(path: Path) -> str:
-    canonical_text = (
-        path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
-    )
-    return hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()[:16]
+def _sync_module():
+    spec = importlib.util.spec_from_file_location("sync_webview_asset_revisions", SYNC_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _local_assets(source: str) -> list[str]:
@@ -30,46 +32,39 @@ def _local_assets(source: str) -> list[str]:
     return styles + scripts
 
 
-def test_shipping_index_and_every_local_asset_use_content_revision_cache_keys():
+def test_shipping_index_and_every_local_asset_use_shared_content_revision_keys():
     from worktrace import webview_main
 
+    sync = _sync_module()
     source = INDEX.read_text(encoding="utf-8")
-    assets = _local_assets(source)
-    assert assets
-    mismatches: list[str] = []
-    for asset_url in assets:
-        parsed = urlsplit(asset_url)
-        assert parsed.scheme == "" and parsed.netloc == ""
-        expected = _revision(UI_ROOT / parsed.path)
-        actual = parse_qs(parsed.query).get("v", [])
-        if actual != [expected]:
-            mismatches.append(f"{parsed.path}: expected {expected}, got {actual!r}")
-    assert not mismatches, "shipping asset cache revisions are stale:\n" + "\n".join(mismatches)
+    assert source == sync.expected_index_source(source)
 
     index_url = webview_main._versioned_resource_url(INDEX)
     index_path, separator, revision = index_url.rpartition("?v=")
     assert separator == "?v="
     assert Path(index_path) == INDEX
-    assert revision == _revision(INDEX)
+    assert revision == sync.content_revision(INDEX)
 
 
-def test_shipping_script_composition_contains_current_rule_owners_in_order():
+def test_shipping_script_composition_contains_current_owners_in_order():
     source = INDEX.read_text(encoding="utf-8")
     scripts = [urlsplit(url).path for url in _local_assets(source) if url.startswith("js/")]
     required = [
         "js/core.js",
         "js/ui_components.js",
+        "js/project_catalog.js",
         "js/rules.js",
         "js/rules_render.js",
         "js/rules_create_panel_v5.js",
         "js/rules_rule_actions.js",
-        "js/rules_keyword_actions.js",
-        "js/rules_folder_actions.js",
+        "js/rules_delete_actions.js",
+        "js/init_fd_work_v5.js",
+        "js/ui_composition.js",
     ]
     assert [name for name in scripts if name in required] == required
 
     loaded = "\n".join((UI_ROOT / name).read_text(encoding="utf-8") for name in required)
-    assert "规则删除后不再参与后续自动归类" not in loaded
-    assert "既有历史归属保持不变" not in loaded
+    assert "rules_keyword_actions.js" not in source
+    assert "rules_folder_actions.js" not in source
     assert "保留已有归类" in loaded
     assert "视同规则不存在" in loaded
