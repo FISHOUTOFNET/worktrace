@@ -56,10 +56,10 @@ test("rule delete dialog offers only preserve history and restore original state
   const options = getDialogOptions();
   assert.ok(options);
   assert.equal(options.choices.length, 2);
-  assert.deepEqual(
-    options.choices.map((item) => [item.value, item.label]),
-    [["preserve", "保留已有归类"], ["restore", "恢复原状"]],
-  );
+  assert.equal(options.choices[0].value, "preserve");
+  assert.equal(options.choices[0].label, "保留已有归类");
+  assert.equal(options.choices[1].value, "restore");
+  assert.equal(options.choices[1].label, "恢复原状");
   assert.match(options.choices[1].description, /视同这条规则从未存在/);
   assert.match(options.choices[1].description, /按其他现有规则重新归类/);
 });
