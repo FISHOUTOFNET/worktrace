@@ -472,6 +472,7 @@
             input.addEventListener("input", handleIdentityNameInput);
         }
         hideLegacySelectedCaseField();
+        installTimelineProjectGate();
     }
 
     function validProjectSessionForFDWorkGate(session) {
@@ -528,43 +529,26 @@
     }
 
     function installTimelineProjectGate() {
-        if (typeof App.updateFDWorkEntryButton !== "function"
-            || typeof App.openFDWorkEntryForSelection !== "function") return;
         if (App.fdWorkProjectGateInstalled === true) return;
-        App.fdWorkProjectGateInstalled = true;
-
-        var originalUpdate = App.updateFDWorkEntryButton;
-        App.updateFDWorkEntryButton = function () {
-            var result = originalUpdate.apply(this, arguments);
-            enforceTimelineProjectGate();
-            return result;
-        };
-
-        var originalOpen = App.openFDWorkEntryForSelection;
-        App.openFDWorkEntryForSelection = function () {
-            var project = selectedTimelineProject();
-            if (project && project.fd_work_bound !== true) {
-                enforceTimelineProjectGate();
-                return Promise.resolve(false);
-            }
-            return originalOpen.apply(this, arguments);
-        };
-
         var select = document.getElementById("edit-project-select");
-        if (select) {
-            select.addEventListener("change", enforceTimelineProjectGate);
-        }
         var list = document.getElementById("timeline-sessions-list");
-        if (list) {
-            list.addEventListener("click", function () {
-                window.setTimeout(function () {
-                    App.updateFDWorkEntryButton();
-                }, 0);
-            });
-        }
         var button = document.getElementById("fd-work-entry-btn");
         var status = document.getElementById("fd-work-status");
-        if (window.MutationObserver && button && status) {
+        if (!select || !list || !button || !status) return;
+        App.fdWorkProjectGateInstalled = true;
+
+        select.addEventListener("change", enforceTimelineProjectGate);
+        list.addEventListener("click", function () {
+            window.setTimeout(enforceTimelineProjectGate, 0);
+        });
+        button.addEventListener("click", function (event) {
+            var project = selectedTimelineProject();
+            if (!project || project.fd_work_bound === true) return;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            enforceTimelineProjectGate();
+        }, true);
+        if (window.MutationObserver) {
             var observer = new MutationObserver(function () {
                 enforceTimelineProjectGate();
             });
@@ -589,10 +573,4 @@
     App.fdWork = Object.freeze({
         resetGeneration: resetIdentityEditor
     });
-
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", installTimelineProjectGate);
-    } else {
-        installTimelineProjectGate();
-    }
 })();
