@@ -30,7 +30,7 @@ SHIPPING_METHODS = frozenset(
         "get_statistics_export_summary", "get_status", "get_timeline",
         "get_timeline_session_activity_summary", "hide_timeline_session",
         "hide_timeline_session_activity", "import_encrypted_backup",
-        "list_project_catalog", "merge_timeline_session",
+        "list_project_catalog", "list_projects_for_timeline", "merge_timeline_session",
         "open_fd_work_case_picker", "open_fd_work_entry", "show_fd_work_login",
         "preview_encrypted_backup_manifest", "preview_project_rule_impact",
         "preview_project_rules_batch_impact", "recover_database_maintenance",
