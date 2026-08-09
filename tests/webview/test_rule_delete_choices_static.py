@@ -20,9 +20,27 @@ def test_rule_delete_dialog_exposes_preserve_and_restore_history_modes():
     assert 'label: "恢复原状"' in source
     assert 'defaultChoice: "preserve"' in source
     assert 'historyMode === "restore"' in source
-    assert "排除该规则后按其他现有规则重新判断" in source
-    assert "没有其他规则匹配时恢复为“未归类”" in source
-    assert "手动修改过的归属不受影响" in source
+    assert "视同这条规则从未存在" in source
+    assert "按其他现有规则重新归类" in source
+    assert "没有匹配时为“未归类”" in source
+
+
+def test_rule_enabled_state_is_not_exposed_as_a_user_control_or_status():
+    render = (ROOT / "worktrace/webview_ui/js/rules_render.js").read_text(
+        encoding="utf-8"
+    )
+    actions = (ROOT / "worktrace/webview_ui/js/rules_rule_actions.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "rules-rule-enabled-toggle" not in render
+    assert "停用规则" not in render
+    assert "启用规则" not in render
+    assert "setProjectRuleEnabled" not in actions
+    assert "bindProjectRuleEnabledEvents" not in actions
+    assert "visibleRuleDetail" in render
+    assert 'return kind(rule && rule.kind) === "folder"' in render
+    assert '            : "";' in render
 
 
 def test_project_delete_dialog_states_irreversible_release_semantics():

@@ -5,6 +5,11 @@
     function text(value, fallback) { return App.escapeHtml(App.safeText(value, fallback)); }
     function count(value) { return App.escapeHtml(String(parseInt(value, 10) || 0)); }
     function kind(value) { return value === "folder" ? "folder" : "keyword"; }
+    function visibleRuleDetail(rule) {
+        return kind(rule && rule.kind) === "folder"
+            ? (rule && rule.recursive === false ? "仅直接文件" : "包含子文件夹")
+            : "";
+    }
 
     function renderProjectRuleProject(project) {
         var id = parseInt(project && project.id, 10) || 0;
@@ -12,7 +17,7 @@
         var rows = rules.length ? rules.map(renderProjectRuleRow).join("")
             : '<div class="rules-project-empty">此项目暂无规则</div>';
         var searchable = [project && project.name, project && project.description]
-            .concat(rules.map(function (rule) { return (rule.target || "") + " " + (rule.detail || ""); }))
+            .concat(rules.map(function (rule) { return (rule.target || "") + " " + visibleRuleDetail(rule); }))
             .join(" ").toLocaleLowerCase();
         var projectDescription = String((project && project.description) || "").trim();
         return '<article class="rules-project-card" data-project-id="' + count(id)
@@ -41,19 +46,14 @@
     function renderProjectRuleRow(rule) {
         var ruleKind = kind(rule && rule.kind);
         var id = parseInt(rule && rule.id, 10) || 0;
-        var enabled = !!(rule && rule.enabled);
-        var toggleAction = enabled ? "停用规则" : "启用规则";
+        var detail = visibleRuleDetail(rule);
         return '<div class="rules-row"><span class="rules-kind-badge rules-kind-' + ruleKind + '">'
             + text(rule && rule.kind_label, "规则") + '</span><div class="rules-row-main"><div class="rules-target">'
             + text(rule && rule.target, "未设置") + '</div>'
-            + (rule && rule.detail ? '<div class="rules-detail">' + text(rule.detail, "") + '</div>' : '')
-            + '</div><div class="rules-project-actions">'
-            + '<label class="toggle-wrap"><input class="rules-rule-enabled-toggle" type="checkbox" data-rule-kind="'
-            + ruleKind + '" data-rule-id="' + count(id) + '" aria-label="' + toggleAction + '"'
-            + (enabled ? ' checked' : '') + '></label>'
-            + '<button class="rules-' + ruleKind + '-delete-button icon-button compact-icon-button danger-icon-button" type="button" data-rule-kind="'
+            + (detail ? '<div class="rules-detail">' + text(detail, "") + '</div>' : '')
+            + '</div><button class="rules-' + ruleKind + '-delete-button icon-button compact-icon-button danger-icon-button" type="button" data-rule-kind="'
             + ruleKind + '" data-rule-id="' + count(id) + '" aria-label="删除规则" data-tooltip="删除规则">'
-            + App.iconMarkup("trash") + '</button></div></div>';
+            + App.iconMarkup("trash") + '</button></div>';
     }
     App.renderProjectRuleRow = renderProjectRuleRow;
     App.renderExcludedRuleRow = renderProjectRuleRow;
