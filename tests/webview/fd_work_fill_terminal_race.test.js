@@ -66,7 +66,7 @@ function harness() {
     openFDWorkCasePicker: bridgeCall("open_fd_work_case_picker"),
   };
 
-  for (const file of ["fd_work_v5.js", "timeline.js"]) {
+  for (const file of ["fd_work_v5.js", "timeline.js", "ui_composition.js"]) {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", file), "utf8"),
       context,
@@ -108,7 +108,7 @@ function configureFDWorkSession(App, element) {
     entries: [session],
   };
   App.lastSettingsStatus = { fd_work: { supported: true, enabled: true } };
-  App.projectsCache = [{ id: 17, name: "CASE-001" }];
+  App.projectsCache = [{ id: 17, name: "CASE-001", fd_work_bound: true }];
   App.timelineLastSaveFailed = false;
   App.editSaving = false;
   App.timelineCompositionActive = false;
