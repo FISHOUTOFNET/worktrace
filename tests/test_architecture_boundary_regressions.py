@@ -46,6 +46,7 @@ def test_runtime_and_backup_facades_have_single_owners():
     assert "capture_installation_privacy_state" not in backup_api
     assert "restore_installation_privacy_state" not in backup_api
 
+
 def test_statistics_bridge_separates_display_summary_and_export_ticket(temp_db):
     envelope = {
         "summary": {
@@ -87,6 +88,9 @@ def test_frontend_generation_and_coalescing_contracts_are_shipping():
     statistics = (root / "worktrace/webview_ui/js/statistics.js").read_text(
         encoding="utf-8"
     )
+    project_catalog = (
+        root / "worktrace/webview_ui/js/project_catalog.js"
+    ).read_text(encoding="utf-8")
     rules = (root / "worktrace/webview_ui/js/rules.js").read_text(encoding="utf-8")
 
     assert "bumpDataEpoch" in request_state
@@ -97,6 +101,11 @@ def test_frontend_generation_and_coalescing_contracts_are_shipping():
     assert "statisticsLoadPromise" in statistics
     assert "exportTicket" in statistics
     assert "ticket.revision" in statistics
-    assert "projectsLoadPromise" in rules
-    assert "data-project-load-gate" in rules
-    assert "stopImmediatePropagation" in rules
+    assert "loadPromise" in project_catalog
+    assert "generation" in project_catalog
+    assert "acceptedDataEpoch" in project_catalog
+    assert "App.projectCatalog" in project_catalog
+    assert "listProjectCatalog" in project_catalog
+    assert "projectsLoadPromise" not in rules
+    assert "data-project-load-gate" not in rules
+    assert "stopImmediatePropagation" not in rules
