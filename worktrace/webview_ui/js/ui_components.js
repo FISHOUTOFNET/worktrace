@@ -73,36 +73,6 @@
         hideEmptyStateDetails(document.getElementById("timeline-details-list"));
     }
 
-    function normalizeIdentityStatus() {
-        var target = document.getElementById("rules-panel-fd-work-status");
-        if (!target) return;
-        var current = String(target.textContent || "").trim();
-        var replacements = {
-            "本地项目": "",
-            "将作为本地项目保存": "",
-            "本地项目；也可选择 FD Work 案件": "",
-            "已取消 FD Work 关联，将作为本地项目保存": "已取消 FD Work 关联",
-            "正在打开 FD Work 案件选择器……": "正在打开案件选择器…",
-            "请在 FD Work 原生案件框中选择并确认": "请在 FD Work 中选择案件",
-            "请在 FD Work 窗口完成登录并选择案件": "请登录 FD Work 并选择案件"
-        };
-        var next = Object.prototype.hasOwnProperty.call(replacements, current)
-            ? replacements[current] : current;
-        if (next !== current) target.textContent = next;
-        target.hidden = !next;
-    }
-
-    function normalizeTimelineFDWorkStatus() {
-        var button = document.getElementById("fd-work-entry-btn");
-        var status = document.getElementById("fd-work-status");
-        if (!button || !status) return;
-        if (String(button.textContent || "").trim() === "非 FD Work 项目"
-                && String(status.textContent || "").trim() === "此项目未关联 FD Work") {
-            status.textContent = "";
-            status.hidden = true;
-        }
-    }
-
     function normalizeRulesProjectContext() {
         var target = document.getElementById("rules-panel-project-context");
         if (!target) return;
@@ -118,14 +88,6 @@
     }
 
     function installConciseCopyObservers() {
-        var identityStatus = document.getElementById("rules-panel-fd-work-status");
-        observeConciseCopy(identityStatus, { childList: true, characterData: true, subtree: true }, normalizeIdentityStatus);
-
-        var fdWorkStatus = document.getElementById("fd-work-status");
-        var fdWorkButton = document.getElementById("fd-work-entry-btn");
-        observeConciseCopy(fdWorkStatus, { childList: true, characterData: true, subtree: true }, normalizeTimelineFDWorkStatus);
-        observeConciseCopy(fdWorkButton, { childList: true, characterData: true, subtree: true }, normalizeTimelineFDWorkStatus);
-
         var rulesContext = document.getElementById("rules-panel-project-context");
         observeConciseCopy(rulesContext, { childList: true, characterData: true, subtree: true }, normalizeRulesProjectContext);
 
@@ -141,8 +103,6 @@
 
     function applyConciseCopyPolicy() {
         applyStaticConciseCopy();
-        normalizeIdentityStatus();
-        normalizeTimelineFDWorkStatus();
         normalizeRulesProjectContext();
     }
     App.applyConciseCopyPolicy = applyConciseCopyPolicy;
