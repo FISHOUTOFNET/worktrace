@@ -1,8 +1,7 @@
-"""Tests for the Timeline editing bridge methods.
+"""Tests for the shared project catalog and Timeline editing bridge methods.
 
-Covers ``WebViewBridge.list_projects_for_timeline`` and the single
-Session Edit Contract write method
-``WebViewBridge.save_timeline_session_override``:
+Covers ``WebViewBridge.list_project_catalog`` and the single
+Session Edit Contract write method used by Timeline editing:
 
 - JSON-serializable return values;
 - successful writes through the bridge → worktrace.api path;
@@ -14,7 +13,7 @@ Session Edit Contract write method
 
 The old ``update_timeline_project`` / ``update_timeline_note`` /
 ``update_timeline_note_and_duration`` bridge methods have been removed;
-``save_timeline_session_override`` is the only Timeline editing surface.
+``save_timeline_session_edit`` is the only Timeline editing surface.
 """
 
 from __future__ import annotations
@@ -26,6 +25,7 @@ import pytest
 
 from tests.support import activity_factory as activity_service
 from tests.support.application import FakeTimelineCapability, build_test_bridge
+from worktrace.api import project_api
 from worktrace.db import get_connection
 from worktrace.services import (
     project_service,
@@ -210,31 +210,35 @@ def _save_timeline_session_override(
     )
 
 
-def test_list_projects_for_timeline_returns_json_serializable(bridge):
-    result = bridge.list_projects_for_timeline()
+def test_list_project_catalog_returns_json_serializable(bridge):
+    result = bridge.list_project_catalog()
     assert result["ok"] is True
-    assert isinstance(result["projects"], list)
+    assert isinstance(result["editing_projects"], list)
+    assert isinstance(result["filter_projects"], list)
     json.dumps(result)
 
 
-def test_list_projects_for_timeline_includes_uncategorized(bridge):
-    result = bridge.list_projects_for_timeline()
-    names = [p["name"] for p in result["projects"]]
+def test_list_project_catalog_editing_includes_uncategorized(bridge):
+    result = bridge.list_project_catalog()
+    names = [p["name"] for p in result["editing_projects"]]
     assert "未归类" in names
 
 
-def test_list_projects_for_timeline_has_safe_fields_only(bridge):
-    result = bridge.list_projects_for_timeline()
-    for p in result["projects"]:
-        assert set(p.keys()) <= {"id", "name", "description"}
+def test_list_project_catalog_has_safe_fields_only(bridge):
+    result = bridge.list_project_catalog()
+    for project in result["editing_projects"]:
+        assert set(project.keys()) <= {"id", "name", "description", "fd_work_bound"}
+    for project in result["filter_projects"]:
+        assert set(project.keys()) <= {"id", "name", "description"}
     _assert_no_sensitive_keys(result)
 
 
-def test_list_projects_for_timeline_no_traceback_on_error():
-    timeline = FakeTimelineCapability()
-    timeline.list_selectable_projects_side_effect = RuntimeError("boom")
-    bridge = build_test_bridge(timeline=timeline)
-    result = bridge.list_projects_for_timeline()
+def test_list_project_catalog_no_traceback_on_error(monkeypatch):
+    def explode():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(project_api, "list_selectable_projects", explode)
+    result = build_test_bridge().list_project_catalog()
     assert result["ok"] is False
     assert result["error"] == "operation_failed"
     assert result["message"] == "操作失败"
