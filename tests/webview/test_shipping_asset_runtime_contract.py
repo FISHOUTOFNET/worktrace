@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.util
 import re
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -38,6 +38,16 @@ def test_shipping_index_and_every_local_asset_use_shared_content_revision_keys()
     sync = _sync_module()
     source = INDEX.read_text(encoding="utf-8")
     assert source == sync.expected_index_source(source)
+
+    assets = _local_assets(source)
+    assert assets
+    for asset_url in assets:
+        parsed = urlsplit(asset_url)
+        asset_path = UI_ROOT / parsed.path
+        assert asset_path.is_file(), f"shipping asset does not exist: {parsed.path}"
+        assert parse_qs(parsed.query) == {"v": [sync.content_revision(asset_path)]}, (
+            f"stale or missing content revision for {parsed.path}"
+        )
 
     index_url = webview_main._versioned_resource_url(INDEX)
     index_path, separator, revision = index_url.rpartition("?v=")
