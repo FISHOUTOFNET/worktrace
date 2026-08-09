@@ -26,17 +26,17 @@
             trigger: trigger,
             title: "删除规则",
             objectLabel: kind === "folder" ? "当前文件夹规则" : "当前关键词规则",
-            warning: "删除后，该规则将不再用于新的自动归类。",
+            warning: "删除后，该规则将不再用于新的自动归类。请选择如何处理该规则已经产生的历史归类。",
             choices: [
                 {
                     value: "preserve",
                     label: "保留已有归类",
-                    description: "当前已由此规则归类的时间保持不变。"
+                    description: "仅删除规则，不改变已经由该规则归类的历史时间。"
                 },
                 {
-                    value: "recompute",
-                    label: "重新计算已有归类",
-                    description: "当前仍由此规则归类的时间会按照其他现有规则重新判断；没有其他规则匹配时变为“未归类”。手动修改过的归属不受影响。"
+                    value: "restore",
+                    label: "恢复原状",
+                    description: "撤销当前规则产生的历史自动归类，并在排除该规则后按其他现有规则重新判断；没有其他规则匹配时恢复为“未归类”。手动修改过的归属不受影响。"
                 }
             ],
             defaultChoice: "preserve",
@@ -45,29 +45,25 @@
             confirmLabel: "删除规则"
         }).then(function (historyMode) {
             if (!historyMode) return;
-            if (historyMode === "recompute") {
-                deleteRule(kind, ruleId, true);
-                return;
-            }
-            deleteRule(kind, ruleId, false);
+            deleteRule(kind, ruleId, historyMode === "restore");
         });
     }
     App.openProjectRuleDeleteModal = openProjectRuleDeleteModal;
 
-    function deleteRule(kind, ruleId, applyToHistory) {
+    function deleteRule(kind, ruleId, restoreHistory) {
         App.setRuleDeleting("keyword:" + ruleId);
         if (kind === "folder" && App.setFolderDeleting) App.setFolderDeleting("folder:" + ruleId);
         App.clearRulesError();
         var request = kind === "folder"
-            ? App.bridge.deleteProjectFolderRule(ruleId, applyToHistory)
-            : App.bridge.deleteProjectKeywordRule(ruleId, applyToHistory);
+            ? App.bridge.deleteProjectFolderRule(ruleId, restoreHistory)
+            : App.bridge.deleteProjectKeywordRule(ruleId, restoreHistory);
         request.then(function (result) {
             if (result && result.ok === false) { App.showRulesError(result.error || "删除规则失败"); return; }
             return App.loadProjectRules().then(function () {
                 App.clearRulesError();
-                if (App.showToast) App.showToast(applyToHistory
-                    ? "规则删除已提交，已有归类将按其他现有规则重新计算"
-                    : "规则已删除，已有归类保持不变");
+                if (App.showToast) App.showToast(restoreHistory
+                    ? "规则已删除，相关历史归类已恢复；无其他规则匹配的记录已变为未归类"
+                    : "规则已删除，已有历史归类保持不变");
             });
         }).catch(function () { App.showRulesError("删除规则失败"); }).finally(function () {
             App.setRuleDeleting(null);
