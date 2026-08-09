@@ -216,8 +216,6 @@
         identityState.originalBound = !!(project && project.fd_work_bound === true);
         if (project && identityState.originalBound) {
             showIdentityStatus("已关联 FD Work", false);
-        } else if (project) {
-            showIdentityStatus("本地项目", false);
         }
         var pick = document.getElementById("rules-panel-fd-work-pick");
         if (pick) pick.textContent = identityState.originalBound ? "更换案件" : "选择案件";
@@ -238,7 +236,7 @@
         identityState.pickerPending = true;
         identityState.pickerRequestId = requestId;
         identityState.pickerEditorGeneration = editorGeneration;
-        showIdentityStatus("正在打开 FD Work 案件选择器……", false);
+        showIdentityStatus("正在打开案件选择器…", false);
         refreshRulesWriteState();
         App.bridge.openFDWorkCasePicker(requestId).then(function (result) {
             if (!isCurrentPickerRequest(requestId, editorGeneration)) return;
@@ -252,8 +250,8 @@
             }
             showIdentityStatus(
                 result.operation_status === "authentication_required"
-                    ? "请在 FD Work 窗口完成登录并选择案件"
-                    : "请在 FD Work 原生案件框中选择并确认",
+                    ? "请登录 FD Work 并选择案件"
+                    : "请在 FD Work 中选择案件",
                 false
             );
         }).catch(function () {
@@ -284,7 +282,7 @@
                     return;
                 }
                 identityState.originalBound = false;
-                showIdentityStatus("已取消 FD Work 关联，将作为本地项目保存", false);
+                showIdentityStatus("已取消 FD Work 关联", false);
                 notifyBindingChanged();
                 refreshRulesWriteState();
             }).catch(function () {
@@ -295,7 +293,7 @@
             });
             return;
         }
-        showIdentityStatus("将作为本地项目保存", false);
+        showIdentityStatus("", false);
         refreshRulesWriteState();
     }
 
@@ -347,8 +345,6 @@
             showIdentityStatus("已关联 FD Work", false);
         } else if (identityState.originalBound && name !== identityState.originalName) {
             showIdentityStatus("名称已修改，保存后将取消 FD Work 关联", false);
-        } else if (name) {
-            showIdentityStatus("本地项目；也可选择 FD Work 案件", false);
         } else {
             showIdentityStatus("", false);
         }
@@ -411,8 +407,8 @@
         var input = projectNameInput();
         if (label) label.textContent = "项目名称";
         if (help) {
-            help.hidden = !enabled;
-            help.textContent = "可直接输入本地项目名称，或从 FD Work 原生案件框选择案件。";
+            help.hidden = true;
+            help.textContent = "";
         }
         if (input) {
             input.hidden = false;
@@ -496,6 +492,12 @@
         return null;
     }
 
+    function clearLocalProjectGateStatus(status) {
+        if (!status || String(status.textContent || "").trim() !== "此项目未关联 FD Work") return;
+        status.textContent = "";
+        status.hidden = true;
+    }
+
     function enforceTimelineProjectGate() {
         var area = document.getElementById("fd-work-entry-area");
         var button = document.getElementById("fd-work-entry-btn");
@@ -503,23 +505,24 @@
         if (!area || !button || !status) return;
         if (!identityEnabled() || area.hidden) {
             if (button.textContent === "非 FD Work 项目") button.textContent = "填入 FD Work";
+            clearLocalProjectGateStatus(status);
             return;
         }
         var project = selectedTimelineProject();
         if (!project) {
             if (button.textContent === "非 FD Work 项目") button.textContent = "填入 FD Work";
+            clearLocalProjectGateStatus(status);
             return;
         }
         if (project.fd_work_bound === true) {
             if (button.textContent === "非 FD Work 项目") button.textContent = "填入 FD Work";
+            clearLocalProjectGateStatus(status);
             return;
         }
         if (!button.disabled) button.disabled = true;
         if (button.textContent !== "非 FD Work 项目") button.textContent = "非 FD Work 项目";
-        if (status.textContent !== "此项目未关联 FD Work") {
-            status.textContent = "此项目未关联 FD Work";
-        }
-        status.hidden = false;
+        status.textContent = "";
+        status.hidden = true;
         status.className = "inline-status";
     }
 
