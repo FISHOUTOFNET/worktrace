@@ -17,16 +17,22 @@ class ProjectIdentityTimelineBridgeMixin(TimelineBridgeMixin):
         try:
             editing_projects = self._services.timeline.list_selectable_projects()
             filter_projects = self._services.timeline.list_filter_projects()
-            editing_dto = [
+            legacy_dto = [
                 {
                     "id": int(project.get("id") or 0),
                     "name": str(project.get("name") or ""),
                     "description": str(project.get("description") or ""),
-                    "fd_work_bound": (
-                        project.get("external_identity_bound") is True
-                    ),
                 }
                 for project in editing_projects
+            ]
+            editing_dto = [
+                {
+                    **project,
+                    "fd_work_bound": (
+                        source.get("external_identity_bound") is True
+                    ),
+                }
+                for project, source in zip(legacy_dto, editing_projects)
             ]
             filter_dto = [
                 {
@@ -38,7 +44,7 @@ class ProjectIdentityTimelineBridgeMixin(TimelineBridgeMixin):
             ]
             return {
                 "ok": True,
-                "projects": editing_dto,
+                "projects": legacy_dto,
                 "editing_projects": editing_dto,
                 "filter_projects": filter_dto,
             }
