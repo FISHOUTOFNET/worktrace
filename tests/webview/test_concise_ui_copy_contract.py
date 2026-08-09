@@ -29,9 +29,28 @@ def test_shared_copy_policy_removes_routine_explanations() -> None:
     assert 'hideSelector("#settings-section-data .maintenance-section > h3 + p")' in source
     assert '#settings-section-data .maintenance-section > p' not in source
     assert 'statsScopeRow.hidden = true' in source
-    assert '"本地项目；也可选择 FD Work 案件": ""' in source
-    assert '"已取消 FD Work 关联，将作为本地项目保存": "已取消 FD Work 关联"' in source
+    assert 'document.getElementById("fd-work-status")' not in source
+    assert 'document.getElementById("fd-work-entry-btn")' not in source
+
+
+def test_fd_work_copy_is_concise_at_its_owner_boundary() -> None:
+    source = read_js("fd_work_v5.js")
+
+    assert 'showIdentityStatus("本地项目", false)' not in source
+    assert 'showIdentityStatus("将作为本地项目保存", false)' not in source
+    assert '本地项目；也可选择 FD Work 案件' not in source
+    assert '已取消 FD Work 关联，将作为本地项目保存' not in source
+    assert '可直接输入本地项目名称，或从 FD Work 原生案件框选择案件。' not in source
+    assert 'showIdentityStatus("已取消 FD Work 关联", false)' in source
+    assert 'showIdentityStatus("正在打开案件选择器…", false)' in source
+    assert '"请登录 FD Work 并选择案件"' in source
+    assert '"请在 FD Work 中选择案件"' in source
+    assert 'help.hidden = true;' in source
+    assert 'button.textContent !== "非 FD Work 项目"' in source
     assert 'status.textContent = "";' in source
+    assert 'status.hidden = true;' in source
+    assert '"名称已修改，保存后将取消 FD Work 关联"' in source
+    assert '"FD Work 保存结果未确认，请先在 FD Work 页面核对；确认前不要重复填入"' in source
 
 
 def test_shared_confirmation_copy_keeps_only_decision_relevant_risk() -> None:
