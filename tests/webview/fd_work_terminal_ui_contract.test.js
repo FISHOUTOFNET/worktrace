@@ -78,7 +78,7 @@ function harness() {
   App.setLiveClockTarget = () => {};
   App.acceptLiveRuntimePayload = () => true;
 
-  for (const file of ["fd_work_v5.js", "timeline.js"]) {
+  for (const file of ["fd_work_v5.js", "timeline.js", "ui_composition.js"]) {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", file), "utf8"),
       context,
