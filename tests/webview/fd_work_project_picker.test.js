@@ -54,18 +54,20 @@ test("project name focus click input never invoke FD Work helper operations", ()
   assert.doesNotMatch(rulesSource, /project-name[\s\S]{0,500}showFDWorkLogin/);
 });
 
-test("picker state is private and bound to request id and current Drawer session", () => {
+test("picker state is private and bound to request id and FD Work editor generation", () => {
   assert.doesNotMatch(rulesSource, /rulesFDWorkPickerRequestId|rulesFDWorkPickerPending/);
   assert.match(fdWorkSource, /pickerRequestId/);
   assert.match(fdWorkSource, /pickerPending/);
-  assert.match(fdWorkSource, /rulesPanelSessionToken/);
+  assert.match(fdWorkSource, /editorGeneration/);
+  assert.match(fdWorkSource, /pickerEditorGeneration/);
+  assert.doesNotMatch(fdWorkSource, /rulesPanelSessionToken|pickerDrawerSession/);
   const receiver = fdWorkSource.slice(
     fdWorkSource.indexOf("receiveIdentityPickerResult"),
-    fdWorkSource.indexOf("receiveIdentityPickerResult") + 1800
+    fdWorkSource.indexOf("receiveIdentityPickerResult") + 2000
   );
   assert.match(receiver, /request_id/);
   assert.match(receiver, /pickerRequestId/);
-  assert.match(receiver, /pickerDrawerSession/);
+  assert.match(receiver, /pickerEditorGeneration|editorGeneration/);
 });
 
 test("save is fail closed without a picker proof and detects label tampering", () => {
