@@ -86,16 +86,16 @@ def test_fd_work_case_semantics_are_enabled_only_by_shared_capability_status():
     name_input = re.search(r'id="rules-panel-project-name"[^>]*>', section)
     assert name_input is not None
     assert 'maxlength="100"' in name_input.group(0)
+    assert "readonly" not in name_input.group(0)
     assert 'role="combobox"' not in name_input.group(0)
     assert 'aria-autocomplete="list"' not in name_input.group(0)
-    selected = re.search(r'id="rules-panel-fd-work-selected-label"[^>]*>', section)
-    assert selected is not None
-    assert "readonly" in selected.group(0)
+    assert 'id="rules-panel-fd-work-selected-label"' not in section
     assert 'id="rules-panel-fd-work-pick"' in section
     source = read_js("rules_create_panel_v5.js")
     identity_source = read_js("fd_work_v5.js")
     presentation = func_body(identity_source, "syncIdentityStatus")
-    assert "input.hidden = enabled" in presentation
+    assert "input.hidden = false" in presentation
+    assert "input.readOnly = false" in presentation
     assert "picker.hidden = !enabled" in presentation
     assert "App.projectIdentity = Object.freeze" in identity_source
     assert "App.projectIdentity.syncStatus()" in source
