@@ -156,7 +156,7 @@ def test_project_rules_panel_presentation_context_and_tab_state_are_single_owner
 
     context = func_body(source, "renderRulesPanelProjectContext")
     assert "项目已新增" in context
-    assert "项目已新增：“ not in context
+    assert '项目已新增：“' not in context
     assert "请继续添加自动归类规则" not in context
     assert "is-success" in context
 
