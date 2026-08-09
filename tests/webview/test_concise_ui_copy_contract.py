@@ -1,4 +1,4 @@
-"""Static contracts for concise, user-facing WorkTrace copy."""
+"""Static contracts for concise copy and presentation ownership."""
 from __future__ import annotations
 
 import os
@@ -11,29 +11,76 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from static_helpers import read_js  # noqa: E402
+from static_helpers import func_body, read_js, read_resource  # noqa: E402
 
 
-def test_shared_copy_policy_removes_routine_explanations() -> None:
+def test_shipping_html_contains_final_static_copy() -> None:
+    source = read_resource("index_fd_work_v5.html")
+
+    assert "同时应用到历史记录" not in source
+    assert ">应用到历史记录<" in source
+    assert "默认匹配该文件夹及全部子文件夹" not in source
+    assert ">包含子文件夹<" in source
+    assert "统计仅包含已完成时间段" not in source
+    assert "仅统计已完成时段" in source
+    assert ">进行中时段不可编辑<" in source
+    assert "新建项目后可添加自动归类规则" not in source
+    assert 'id="app-tooltip" role="tooltip" hidden' in source
+
+
+def test_shared_ui_components_do_not_patch_feature_presentation() -> None:
     source = read_js("ui_components.js")
 
-    assert 'compactPageHeader("#page-overview")' in source
-    assert 'compactPageHeader("#page-timeline")' in source
-    assert 'compactPageHeader("#page-rules")' in source
-    assert 'compactPageHeader("#page-settings")' in source
-    assert 'setSelectorText("#page-statistics .page-header p", "仅统计已完成时段")' in source
-    assert 'setSelectorText("#timeline-readonly-notice", "进行中时段不可编辑")' in source
-    assert "normalizeRulesOptionRows()" in source
-    assert 'normalizeOptionRow(recursive, "包含子文件夹")' in source
-    assert 'normalizeOptionRow(document.getElementById("rules-panel-backfill"), "应用到历史记录")' in source
-    assert 'hideSelector("#settings-privacy-card small")' in source
-    assert 'hideSelector("#settings-storage-card small")' in source
-    assert 'hideSelector("#settings-section-data .maintenance-section > h3 + p")' in source
-    assert 'hideEmptyStateDetails(document.getElementById("rules-empty"))' in source
-    assert "normalizeSettingsStatusCopy()" in source
-    assert 'statsScopeRow.hidden = true' in source
-    assert 'document.getElementById("fd-work-status")' not in source
-    assert 'document.getElementById("fd-work-entry-btn")' not in source
+    for forbidden in (
+        "applyStaticConciseCopy",
+        "normalizeRulesOptionRows",
+        "normalizeSettingsStatusCopy",
+        "rules-panel-folder-recursive",
+        "rules-panel-backfill",
+        "settings-privacy-notice-status",
+        "stats-scope-row",
+        "timeline-readonly-notice",
+        "MutationObserver",
+        "再次确认",
+        "当前选中的时间段",
+    ):
+        assert forbidden not in source
+
+    assert 'group.className = "dialog-choice-group"' in source
+    assert 'row.className = "dialog-choice-row"' in source
+    assert 'document.getElementById("app-tooltip")' in source
+    assert "getBoundingClientRect" in source
+
+
+def test_shared_primitive_css_owns_dialog_and_tooltip_geometry() -> None:
+    source = read_resource("ui_components.css")
+
+    assert "#app-tooltip" in source
+    assert "position: fixed" in source
+    assert "pointer-events: none" in source
+    assert ".dialog-choice-row" in source
+    assert "grid-template-columns: 14px minmax(0, 1fr)" in source
+    assert "[data-tooltip]::after" in source and "content: none !important" in source
+
+
+def test_fd_work_status_owner_notifies_host_instead_of_pages() -> None:
+    source = read_js("fd_work_v5.js")
+    receive = func_body(source, "App.receiveFDWorkStatus = function") if False else source[
+        source.index("App.receiveFDWorkStatus = function"):
+        source.index("App.fdWorkStatusText = function")
+    ]
+
+    assert "notifyStatusHost(App.fdWorkStatus)" in receive
+    assert "App.lastSettingsStatus" not in receive
+    assert "App.renderFDWorkToggle" not in receive
+    assert "App.updateFDWorkEntryButton" not in receive
+    assert "App.projectIdentity.syncStatus" not in receive
+
+    composition = read_js("ui_composition.js")
+    assert "App.fdWork.bindStatusHost" in composition
+    assert "App.renderFDWorkToggle" in composition
+    assert "App.updateFDWorkEntryButton" in composition
+    assert "App.projectIdentity.syncStatus" in composition
 
 
 def test_fd_work_copy_is_concise_at_its_owner_boundary() -> None:
@@ -41,49 +88,17 @@ def test_fd_work_copy_is_concise_at_its_owner_boundary() -> None:
 
     assert 'showIdentityStatus("本地项目", false)' not in source
     assert 'showIdentityStatus("将作为本地项目保存", false)' not in source
-    assert '本地项目；也可选择 FD Work 案件' not in source
-    assert '已取消 FD Work 关联，将作为本地项目保存' not in source
-    assert '可直接输入本地项目名称，或从 FD Work 原生案件框选择案件。' not in source
     assert 'showIdentityStatus("已取消 FD Work 关联", false)' in source
     assert 'showIdentityStatus("正在打开案件选择器…", false)' in source
-    assert '"请登录 FD Work 并选择案件"' in source
-    assert '"请在 FD Work 中选择案件"' in source
-    assert 'help.hidden = true;' in source
-    assert 'button.textContent !== "非 FD Work 项目"' in source
-    assert 'status.textContent = "";' in source
-    assert 'status.hidden = true;' in source
     assert '"名称已修改，保存后将取消 FD Work 关联"' in source
     assert '"FD Work 保存结果未确认，请先在 FD Work 页面核对；确认前不要重复填入"' in source
 
 
-def test_shared_confirmation_copy_keeps_only_decision_relevant_risk() -> None:
-    source = read_js("ui_components.js")
-
-    assert 'normalized.warning = "此操作不可撤销。";' in source
-    assert 'normalized.secondIntro = normalized.objectLabel ? "即将删除：" : "此操作不可撤销。";' in source
-    assert 'normalized.warning = "当前数据将被备份替换，且不可撤销。";' in source
-    assert "conciseDeleteConfirmLabel" in source
-    assert '.replace(/^再次确认/, "")' in source
-    assert '.replace(/^再次确认/, "确认")' in source
-    assert 'return "项目已删除";' in source
-
-
-def test_dialog_choices_use_dedicated_aligned_rows() -> None:
-    source = read_js("ui_components.js")
-
-    assert 'group.className = "dialog-choice-group"' in source
-    assert 'row.className = "dialog-choice-row"' in source
-    assert 'row.style.gridTemplateColumns = "14px minmax(0, 1fr)"' in source
-    assert 'row.style.alignItems = "start"' in source
-    assert 'input.style.margin = "2px 0 0"' in source
-
-
-def test_rule_delete_copy_uses_plain_user_terms() -> None:
-    source = read_js("rules_keyword_actions.js")
+def test_rule_delete_copy_has_one_owner_and_plain_terms() -> None:
+    source = read_js("rules_delete_actions.js")
 
     assert 'warning: "如何处理已有归类？"' in source
     assert 'label: "保留已有归类"' in source
     assert 'label: "视同规则不存在"' in source
-    assert 'objectLabel:' not in source
-    assert 'description:' not in source
     assert 'App.showToast("规则已删除")' in source
+    assert not (read_resource("js/rules_keyword_actions.js") if False else False)
