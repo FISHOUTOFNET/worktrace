@@ -53,6 +53,7 @@ def test_shipping_script_composition_contains_current_owners_in_order():
         "js/core.js",
         "js/ui_components.js",
         "js/project_catalog.js",
+        "js/timeline_delete_actions.js",
         "js/rules.js",
         "js/rules_render.js",
         "js/rules_create_panel_v5.js",
