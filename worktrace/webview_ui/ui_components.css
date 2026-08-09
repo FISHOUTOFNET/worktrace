@@ -1,0 +1,50 @@
+/* Shared UI primitive presentation. Feature/page layout stays in styles.css. */
+#app-tooltip {
+    position: fixed;
+    z-index: 90;
+    max-width: min(320px, calc(100vw - 12px));
+    padding: 3px 6px;
+    color: #fff;
+    background: #24313a;
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-flyout);
+    white-space: nowrap;
+    font-size: var(--font-size-xs);
+    font-weight: 400;
+    line-height: 1.35;
+    pointer-events: none;
+}
+
+/* The portal above is the only tooltip renderer. Disable the retired pseudo layer. */
+[data-tooltip]::after {
+    content: none !important;
+    display: none !important;
+}
+
+.dialog-choice-group {
+    display: grid;
+    gap: 8px;
+    margin-top: 8px;
+}
+.dialog-choice-row {
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr);
+    gap: 8px;
+    align-items: start;
+    text-align: left;
+}
+.dialog-choice-row input {
+    width: 14px;
+    height: 14px;
+    min-height: 0;
+    margin: 2px 0 0;
+}
+.dialog-choice-copy {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+    line-height: 1.35;
+}
+.dialog-choice-title { font-weight: 500; }
+
+.page-header-compact { align-items: center; }
