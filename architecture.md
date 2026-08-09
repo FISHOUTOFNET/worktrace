@@ -49,7 +49,8 @@ state or database facts.
 | Atomic maintenance activity seal | `ActivityMaintenanceCommandService` |
 | Maintenance ordering/recovery | `RuntimeMaintenanceCoordinator` |
 | Backup use cases | `SecureBackupService` module |
-| Project lifecycle invariants | `project_service` |
+| Project identity lifecycle invariants | `project_service` |
+| Permanent project deletion orchestration | `project_deletion_command_service` |
 | Rule write invariants | canonical rule command/service layer |
 | Verified page read snapshot | `PageReadContext` |
 | Row runtime overlay | `ActivityRowOverlay` |
@@ -173,6 +174,15 @@ Project/rule invariants are enforced inside canonical service transactions and
 by current-schema constraints where concurrency requires it. APIs do not scan
 whole tables to recreate uniqueness or atomicity.
 
+Permanent project deletion is an application workflow, not a `project_service`
+God method. `project_deletion_command_service` owns one root `DomainUnitOfWork`
+and coordinates narrow in-transaction capabilities for project validation,
+active history-job guarding, assignment release, rule deletion and final project
+identity deletion. `project_service` does not query history-job or rule tables to
+perform that orchestration. The workflow remains one atomic `BEGIN IMMEDIATE`
+transaction, so decoupling must never split deletion into independently
+committed steps.
+
 Database replacement is independent from ordinary report/data generations.
 Caches and page-read handshakes include the replacement epoch so facts from an
 old database generation cannot overlay a new database.
@@ -256,13 +266,22 @@ one-use selection token is required before a new bound project can be saved.
 
 Session state (`disabled`, `deferred_by_privacy`, `idle`, `probing`,
 `login_required`, `ready`, `error`, `shutdown`) is separate from interaction
-ownership (`none`, `user_auth`, `user_picker`, `automation_fill`, `user_review`).
-Only one non-`none` owner exists. Picker and authentication are user-owned;
-Timeline fill is automation-owned until verified readback, then becomes
-user-review-owned and performs no further writes. Helper close, navigation,
-disable and shutdown invalidate the current nonce/generation. The helper exposes
-only `confirm_case_picker` and `cancel_case_picker`; it has no application service
-access and never creates bindings.
+ownership (`none`, `user_auth`, `user_picker`, `automation_fill`). Only one
+non-`none` owner exists. Picker and authentication are user-owned. Timeline
+fill/save remains `automation_fill`-owned through target editor preparation,
+exact field readback, the explicit Save click and verified save completion.
+Success requires positive post-click evidence: a new success notice, a
+reinitialized entry form or a closed editor with the unique create action
+available. Save-button loading that merely settles to idle proves only that a
+request stopped, not that it succeeded. A new error/validation signal or an
+otherwise unprovable post-click result fails closed; an ambiguous result is
+reported as `save_outcome_unknown`, the helper remains visible for user
+verification and no automatic retry is permitted. Helper close, navigation,
+disable and shutdown invalidate the current nonce/generation; a delayed close
+callback carrying an older navigation generation is ignored and cannot
+terminalize a newer operation. The helper exposes only `confirm_case_picker` and
+`cancel_case_picker`; it has no application service access and never creates
+bindings.
 
 Every helper `show`, `hide`, `restore`, `focus` and `destroy` mutation goes through
 the GUI dispatcher with window, navigation and operation guards before and after
@@ -285,7 +304,10 @@ own their transient generation state and expose fixed `resetGeneration` methods.
 The central generation reset bumps the runtime generation, resets the runtime
 store, and invokes those static lifecycle hooks without reading page-private
 fields. FD Work owns picker request, selection-proof and binding-editor state;
-Project Rules calls only the narrow `projectIdentity` editor interface.
+Project Rules calls only the narrow `projectIdentity` editor interface and binds
+narrow host callbacks for Rules-owned refresh work. FD Work must not read
+`rulesPanel*`, Rules busy/editing globals, `loadProjectRules` or
+`refreshRulesPanelWriteState` directly.
 
 Overview, Timeline, Details, Statistics and Export use the same canonical report
 facts. Natural live-second growth is DOM-local and does not trigger heavy page
