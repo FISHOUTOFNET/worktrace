@@ -67,6 +67,13 @@ No-op, rollback, worker progress, checkpoint and receipt-only writes publish no
 business generation. Effective report operations publish `REPORT_STRUCTURE` once;
 no-effect and duplicate receipts do not publish.
 
+Permanent project deletion is an application-level workflow owned by
+`project_deletion_command_service`. It keeps project validation, assignment
+release, active history-job guarding, rule deletion and project-row deletion in
+one root `DomainUnitOfWork`. Each domain contributes a narrow in-transaction
+capability; `project_service` owns project identity writes and does not query
+history-job or rule tables to coordinate deletion.
+
 `DatabaseReplacementUnitOfWork` solely owns the replacement epoch, live commit
 and process-local generation publication. Secure import creates decrypted staging
 inside one `ValidatedStaging` scope, fully validates it before maintenance and
@@ -93,7 +100,7 @@ Schema seeding alone creates system projects. Stable identity controls reserved
 behavior. Ordinary commands cannot create, rename, archive, delete or toggle
 system projects; missing system rows are reported unavailable rather than
 recreated by normal API calls. Shipped lifecycle capabilities are exactly:
-user project create / edit / enable-disable / archive.
+user project create / edit / enable-disable / archive / permanent delete.
 
 Keyword/folder mutations use the canonical rule command owner for project type,
 normalized pattern, duplicate and batch-atomicity validation. Excluded rules use
@@ -140,7 +147,9 @@ bounded reconciliation.
   enabled, new projects use an explicit native FD Work picker and require its
   one-use selection proof; WorkTrace provides no cross-window autocomplete.
 - `window.WorkTraceApp` is a namespace, not a state owner. Pages reset their own
-  transient state; FD Work owns picker state behind `projectIdentity`.
+  transient state; FD Work owns picker/editor identity state behind
+  `projectIdentity`. Project Rules supplies narrow host callbacks and FD Work does
+  not read Rules panel session/busy/editing globals.
 - Settings/Privacy: four categories. General owns authoritative HKCU launch state
   and clipboard control; Privacy, Data and Backup, and Advanced retain their
   responsibilities. Secret inputs remain local and are cleared after use.
@@ -156,9 +165,18 @@ use persisted report facts rather than frontend time.
 
 FD Work is shared by Settings, Timeline and Project Rules. Its sidecar stays outside
 the main schema/backup; only bindings authorize Timeline fill. Privacy gates startup
-and passive probes stay hidden. Auth/picker are user-owned; fill is automation-owned,
-then user review without auto-submit. Selection uses FD Work's native Ant Select only.
-Adapter v5 is side-effect-free and generation-guarded; v4 bindings remain valid.
+and passive probes stay hidden. Auth/picker are user-owned; fill/save is exclusively
+`automation_fill`-owned through field verification, the explicit Save click and
+verified save completion. Adapter v5 reports success only on positive completion
+evidence such as a new success notice, a reinitialized entry form or a closed
+editor with the unique create action available. Save-button loading that merely
+settles to idle is not success. A new error/validation signal or an otherwise
+unprovable post-click result fails closed; an ambiguous result is surfaced as
+`save_outcome_unknown`, the helper remains visible for user verification and
+WorkTrace does not retry automatically. Helper close/navigation/disable/shutdown
+invalidate the active generation; a delayed close callback from an older helper
+generation cannot cancel a newer operation. Selection uses FD Work's native Ant
+Select only. Adapter v5 remains generation-guarded; v4 bindings remain valid.
 WorkTrace never reads or exports credentials.
 
 ## Validation
