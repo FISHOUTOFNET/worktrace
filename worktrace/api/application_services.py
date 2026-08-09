@@ -9,6 +9,7 @@ from .application_capabilities import (
     BackupCapability,
     FDWorkCapability,
     OverviewCapability,
+    ProjectCatalogCapability,
     RulesCapability,
     SettingsCapability,
     StatisticsCapability,
@@ -34,6 +35,7 @@ class ApplicationServices:
     settings: SettingsCapability
     backup: BackupCapability
     statistics: StatisticsCapability
+    projects: ProjectCatalogCapability
     timeline: TimelineCapability
     fd_work: FDWorkCapability
     rules: RulesCapability
