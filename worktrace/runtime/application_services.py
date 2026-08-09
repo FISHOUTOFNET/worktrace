@@ -9,9 +9,10 @@ from ..api.application_capabilities import (
     RulesApplicationService,
     SettingsApplicationService,
     StatisticsApplicationService,
-    TimelineApplicationService,
 )
 from ..api.application_services import ApplicationServices
+from ..api.external_project_identity import OptionalProjectIdentityCapability
+from ..api.project_identity_timeline import ProjectIdentityTimelineApplicationService
 from ..services import database_maintenance_service
 from ..services import project_service
 from ..api import project_api
@@ -48,6 +49,12 @@ def build_application_services(
         project_updater=project_api.update_project_for_rules,
         project_reader=project_api.get_project,
     )
+    project_identity = OptionalProjectIdentityCapability(
+        external=fd_work,
+        create_project=project_api.create_project_for_rules,
+        update_project=project_api.update_project_for_rules,
+        project_reader=project_api.get_project,
+    )
     data_lifecycle = ApplicationDataLifecycle((fd_work,))
     base_app_control = ApplicationControlService(runtime, maintenance)
     app_control = PostPrivacyStartupCoordinator(
@@ -60,9 +67,9 @@ def build_application_services(
         settings=SettingsApplicationService(data_lifecycle=data_lifecycle),
         backup=BackupApplicationService(data_lifecycle),
         statistics=StatisticsApplicationService(),
-        timeline=TimelineApplicationService(),
+        timeline=ProjectIdentityTimelineApplicationService(project_identity),
         fd_work=fd_work,
-        rules=RulesApplicationService(project_identity=fd_work),
+        rules=RulesApplicationService(project_identity=project_identity),
     )
 
 
