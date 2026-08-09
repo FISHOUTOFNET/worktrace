@@ -23,11 +23,14 @@ def test_shared_copy_policy_removes_routine_explanations() -> None:
     assert 'compactPageHeader("#page-settings")' in source
     assert 'setSelectorText("#page-statistics .page-header p", "仅统计已完成时段")' in source
     assert 'setSelectorText("#timeline-readonly-notice", "进行中时段不可编辑")' in source
-    assert 'hideSelector("#rules-panel-folder-recursive small")' in source
+    assert "normalizeRulesOptionRows()" in source
+    assert 'normalizeOptionRow(recursive, "包含子文件夹")' in source
+    assert 'normalizeOptionRow(document.getElementById("rules-panel-backfill"), "应用到历史记录")' in source
     assert 'hideSelector("#settings-privacy-card small")' in source
     assert 'hideSelector("#settings-storage-card small")' in source
     assert 'hideSelector("#settings-section-data .maintenance-section > h3 + p")' in source
-    assert '#settings-section-data .maintenance-section > p' not in source
+    assert 'hideEmptyStateDetails(document.getElementById("rules-empty"))' in source
+    assert "normalizeSettingsStatusCopy()" in source
     assert 'statsScopeRow.hidden = true' in source
     assert 'document.getElementById("fd-work-status")' not in source
     assert 'document.getElementById("fd-work-entry-btn")' not in source
@@ -57,11 +60,22 @@ def test_shared_confirmation_copy_keeps_only_decision_relevant_risk() -> None:
     source = read_js("ui_components.js")
 
     assert 'normalized.warning = "此操作不可撤销。";' in source
-    assert 'normalized.secondIntro = "即将删除：";' in source
+    assert 'normalized.secondIntro = normalized.objectLabel ? "即将删除：" : "此操作不可撤销。";' in source
     assert 'normalized.warning = "当前数据将被备份替换，且不可撤销。";' in source
-    assert 'normalized.secondTitle.replace(/永久/g, "")' in source
-    assert 'normalized.confirmLabel.replace(/永久/g, "")' in source
+    assert "conciseDeleteConfirmLabel" in source
+    assert '.replace(/^再次确认/, "")' in source
+    assert '.replace(/^再次确认/, "确认")' in source
     assert 'return "项目已删除";' in source
+
+
+def test_dialog_choices_use_dedicated_aligned_rows() -> None:
+    source = read_js("ui_components.js")
+
+    assert 'group.className = "dialog-choice-group"' in source
+    assert 'row.className = "dialog-choice-row"' in source
+    assert 'row.style.gridTemplateColumns = "14px minmax(0, 1fr)"' in source
+    assert 'row.style.alignItems = "start"' in source
+    assert 'input.style.margin = "2px 0 0"' in source
 
 
 def test_rule_delete_copy_uses_plain_user_terms() -> None:
@@ -70,5 +84,6 @@ def test_rule_delete_copy_uses_plain_user_terms() -> None:
     assert 'warning: "如何处理已有归类？"' in source
     assert 'label: "保留已有归类"' in source
     assert 'label: "视同规则不存在"' in source
+    assert 'objectLabel:' not in source
     assert 'description:' not in source
     assert 'App.showToast("规则已删除")' in source
