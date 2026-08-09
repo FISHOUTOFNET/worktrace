@@ -17,7 +17,7 @@
         if (!header) return;
         var subtitle = header.querySelector("p");
         if (subtitle) subtitle.hidden = true;
-        header.style.alignItems = "center";
+        if (header.style) header.style.alignItems = "center";
     }
 
     function hideSelector(selector) {
@@ -36,6 +36,56 @@
         Array.prototype.forEach.call(details, function (detail) {
             detail.hidden = true;
         });
+    }
+
+    function normalizeOptionRow(input, labelText) {
+        if (!input) return;
+        var row = input.closest ? input.closest("label") : input.parentElement;
+        if (!row) return;
+        if (row.style) {
+            row.style.display = "flex";
+            row.style.alignItems = "center";
+            row.style.gap = "8px";
+            row.style.minHeight = "24px";
+        }
+        if (input.style) {
+            input.style.width = "14px";
+            input.style.height = "14px";
+            input.style.minHeight = "0";
+            input.style.flex = "0 0 14px";
+            input.style.margin = "0";
+        }
+        var copy = row.querySelector && row.querySelector("span");
+        if (copy && labelText) copy.textContent = labelText;
+    }
+
+    function normalizeRulesOptionRows() {
+        var recursive = document.getElementById("rules-panel-folder-recursive");
+        var recursiveRow = recursive && (recursive.closest ? recursive.closest("label") : recursive.parentElement);
+        if (recursiveRow && recursiveRow.querySelector) {
+            var small = recursiveRow.querySelector("small");
+            if (small && small.parentNode) small.parentNode.removeChild(small);
+        }
+        normalizeOptionRow(recursive, "包含子文件夹");
+        normalizeOptionRow(document.getElementById("rules-panel-backfill"), "应用到历史记录");
+    }
+    App.normalizeRulesOptionRows = normalizeRulesOptionRows;
+
+    function stripRepeatedPrefix(target, prefix) {
+        if (!target) return;
+        var current = String(target.textContent || "").trim();
+        if (current.indexOf(prefix) === 0) target.textContent = current.slice(prefix.length);
+    }
+
+    function normalizeSettingsStatusCopy() {
+        stripRepeatedPrefix(
+            document.querySelector('[data-settings-key="export_path_configured"]'),
+            "导出目录："
+        );
+        stripRepeatedPrefix(
+            document.getElementById("settings-privacy-notice-status"),
+            "隐私说明："
+        );
     }
 
     function applyStaticConciseCopy() {
@@ -57,7 +107,7 @@
             fdWorkHelp.hidden = true;
         }
 
-        hideSelector("#rules-panel-folder-recursive small");
+        normalizeRulesOptionRows();
         hideSelector('label[for="settings-launch-at-login-toggle"] small');
         hideSelector("#settings-privacy-card small");
         hideSelector('label[for="settings-fd-work-toggle"] small');
@@ -71,6 +121,8 @@
 
         hideEmptyStateDetails(document.getElementById("recent-list"));
         hideEmptyStateDetails(document.getElementById("timeline-details-list"));
+        hideEmptyStateDetails(document.getElementById("rules-empty"));
+        normalizeSettingsStatusCopy();
     }
 
     function normalizeRulesProjectContext() {
@@ -99,6 +151,20 @@
         observeConciseCopy(detailList, { childList: true, subtree: true }, function () {
             hideEmptyStateDetails(detailList);
         });
+        var rulesEmpty = document.getElementById("rules-empty");
+        observeConciseCopy(rulesEmpty, { childList: true, subtree: true }, function () {
+            hideEmptyStateDetails(rulesEmpty);
+        });
+        observeConciseCopy(
+            document.querySelector('[data-settings-key="export_path_configured"]'),
+            { childList: true, characterData: true, subtree: true },
+            normalizeSettingsStatusCopy
+        );
+        observeConciseCopy(
+            document.getElementById("settings-privacy-notice-status"),
+            { childList: true, characterData: true, subtree: true },
+            normalizeSettingsStatusCopy
+        );
     }
 
     function applyConciseCopyPolicy() {
@@ -195,15 +261,33 @@
         var choices = normalizedDialogChoices(options);
         if (!choices.length) return;
         var group = document.createElement("div");
-        group.className = "field";
+        group.className = "dialog-choice-group";
         group.setAttribute("role", "radiogroup");
+        if (group.style) {
+            group.style.display = "grid";
+            group.style.gap = "8px";
+            group.style.marginTop = "8px";
+        }
         choices.forEach(function (choice, index) {
             var row = document.createElement("label");
-            row.className = "checkbox-row";
+            row.className = "dialog-choice-row";
+            if (row.style) {
+                row.style.display = "grid";
+                row.style.gridTemplateColumns = "14px minmax(0, 1fr)";
+                row.style.gap = "8px";
+                row.style.alignItems = "start";
+                row.style.textAlign = "left";
+            }
             var input = document.createElement("input");
             input.type = "radio";
             input.name = "confirm-dialog-choice";
             input.value = choice.value;
+            if (input.style) {
+                input.style.width = "14px";
+                input.style.height = "14px";
+                input.style.minHeight = "0";
+                input.style.margin = "2px 0 0";
+            }
             var selected = dialogState.choice || options.defaultChoice || choices[0].value;
             input.checked = choice.value === selected;
             if (input.checked) dialogState.choice = choice.value;
@@ -211,9 +295,16 @@
                 if (input.checked && dialogState) dialogState.choice = choice.value;
             });
             var copy = document.createElement("span");
-            copy.className = "field";
-            var title = document.createElement("strong");
+            copy.className = "dialog-choice-copy";
+            if (copy.style) {
+                copy.style.minWidth = "0";
+                copy.style.display = "grid";
+                copy.style.gap = "2px";
+                copy.style.lineHeight = "1.35";
+            }
+            var title = document.createElement("span");
             title.textContent = choice.label;
+            if (title.style) title.style.fontWeight = "500";
             copy.appendChild(title);
             if (choice.description) {
                 var description = document.createElement("span");
@@ -234,12 +325,12 @@
         var options = dialogState.options;
         var second = dialogState.step === 2;
         dialogTitle.textContent = second
-            ? (options.secondTitle || "再次确认操作")
+            ? (options.secondTitle || "确认操作")
             : (options.title || "确认操作");
         dialogBody.innerHTML = "";
-        if (second) {
+        if (second && options.secondIntro) {
             var secondIntro = document.createElement("p");
-            secondIntro.textContent = options.secondIntro || "即将执行：";
+            secondIntro.textContent = options.secondIntro;
             dialogBody.appendChild(secondIntro);
         }
         if (options.objectLabel) {
@@ -305,24 +396,46 @@
         });
     };
 
+    function conciseDeleteConfirmLabel(label, fallback) {
+        var text = String(label || fallback || "");
+        text = text.replace(/永久/g, "").replace(/^再次确认/, "").replace(/^确认/, "");
+        return text || fallback || "删除";
+    }
+
     App.openDeleteDialog = function (options) {
         var normalized = Object.assign({}, options || {});
         var hasChoices = Array.isArray(normalized.choices) && normalized.choices.length > 0;
+        var title = String(normalized.title || "确认删除");
+
+        if (hasChoices && title === "删除规则") normalized.objectLabel = "";
+        if (normalized.objectLabel === "当前选中的时间段"
+                || normalized.objectLabel === "当前时间段中的这个活动") {
+            normalized.objectLabel = "";
+        }
+
         if (!hasChoices) {
             normalized.warning = "此操作不可撤销。";
-            normalized.secondIntro = "即将删除：";
+            normalized.secondIntro = normalized.objectLabel ? "即将删除：" : "此操作不可撤销。";
         }
-        if (typeof normalized.secondTitle === "string") {
+
+        var fallbackConfirm = title.indexOf("删除") === 0 ? title : "删除";
+        normalized.confirmLabel = conciseDeleteConfirmLabel(
+            normalized.confirmLabel,
+            fallbackConfirm
+        );
+        if (normalized.twoStep === true) {
+            normalized.secondTitle = String(normalized.secondTitle || ("确认" + fallbackConfirm))
+                .replace(/永久/g, "")
+                .replace(/^再次确认/, "确认");
+        } else if (typeof normalized.secondTitle === "string") {
             normalized.secondTitle = normalized.secondTitle.replace(/永久/g, "");
         }
-        if (typeof normalized.confirmLabel === "string") {
-            normalized.confirmLabel = normalized.confirmLabel.replace(/永久/g, "");
-        }
+
         return App.openConfirmDialog(Object.assign({
             title: "确认删除",
-            secondTitle: "再次确认删除",
-            secondIntro: "即将删除：",
-            confirmLabel: "确认删除",
+            secondTitle: "确认删除",
+            secondIntro: "此操作不可撤销。",
+            confirmLabel: "删除",
             twoStep: true,
             danger: true
         }, normalized));
