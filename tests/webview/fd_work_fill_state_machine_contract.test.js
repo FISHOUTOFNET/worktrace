@@ -40,14 +40,16 @@ test("exact case freshness accelerates commit but is not the only valid path", (
   assert.match(body, /freshEvidence\s*\|\|\s*stableExactFrames\s*>=\s*settleFrames/);
 });
 
-test("save completion accepts post-click loading settle but rejects form identity alone", () => {
+test("save completion requires positive evidence and loading settle stays diagnostic", () => {
   const reinit = bodyBetween("function formReinitializedAfterSave", "function entryClosedAfterSave");
   const verify = bodyBetween("async function verifySaveCompletion", "function clickSave");
   assert.doesNotMatch(reinit, /currentForm\s*!==\s*baseline\.form/);
   assert.match(verify, /var loadingObserved = false/);
   assert.match(verify, /loadingObserved\s*=\s*loadingObserved\s*\|\|\s*busy/);
-  assert.match(verify, /loadingSettled\s*=\s*loadingObserved\s*&&\s*!busy/);
-  assert.match(verify, /successMessage\s*\|\|\s*reinitialized\s*\|\|\s*entryClosed\s*\|\|\s*loadingSettled/);
+  assert.match(verify, /errorMessage/);
+  assert.match(verify, /if \(successMessage \|\| reinitialized \|\| entryClosed\)/);
+  assert.doesNotMatch(verify, /loadingSettled/);
+  assert.match(verify, /save_completion_failed/);
 });
 
 test("save readiness waits for a transiently disabled React action", () => {
