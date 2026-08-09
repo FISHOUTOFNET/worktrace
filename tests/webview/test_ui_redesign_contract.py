@@ -82,12 +82,16 @@ def test_timeline_list_and_compact_inspector_have_keyboard_semantics() -> None:
 
 def test_direct_deletions_use_shared_dialog_and_wait_for_backend_refresh() -> None:
     timeline = read_js("timeline.js")
-    rules = read_js("rules_keyword_actions.js") + read_js("rules_create_panel_v5.js")
-    assert 'confirmTimelineDeletion("hideActivity"' in timeline
-    assert "App.openDeleteDialog" in timeline
-    assert "twoStep: true" in timeline
+    timeline_delete = read_js("timeline_delete_actions.js")
+    rules = read_js("rules_delete_actions.js") + read_js("rules_create_panel_v5.js")
+    assert "App.confirmTimelineDeletion = function" in timeline_delete
+    assert "App.openDeleteDialog" in timeline_delete
+    assert "twoStep: true" in timeline_delete
+    assert "App.runTimelineSessionOperation" in timeline_delete
     assert "refreshAfterConfirmedMutation" in timeline
     assert "App.openDeleteDialog" in rules
+    assert "deleteProjectFolderRule" in rules
+    assert "deleteProjectKeywordRule" in rules
     assert "window.confirm" not in read_all_js()
 
 
