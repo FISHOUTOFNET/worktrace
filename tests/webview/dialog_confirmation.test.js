@@ -128,7 +128,7 @@ test("openConfirmDialog supports a one-step confirmation with generic defaults",
   assert.equal(state.layer.hidden, true);
 });
 
-test("openDeleteDialog preserves the existing two-step deletion wrapper", async () => {
+test("openDeleteDialog preserves two-step safety with concise labels", async () => {
   const state = harness();
   const promise = state.App.openDeleteDialog({
     objectLabel: "时间段",
@@ -138,9 +138,9 @@ test("openDeleteDialog preserves the existing two-step deletion wrapper", async 
   assert.equal(state.element("confirm-dialog-title").textContent, "确认删除");
   assert.equal(state.primary.textContent, "继续");
   state.primary.dispatch("click");
-  assert.equal(state.element("confirm-dialog-title").textContent, "再次确认删除");
+  assert.equal(state.element("confirm-dialog-title").textContent, "确认删除");
   assert.equal(state.secondary.textContent, "返回");
-  assert.equal(state.primary.textContent, "再次确认删除时间段");
+  assert.equal(state.primary.textContent, "删除时间段");
   assert.equal(state.primary.classList.contains("danger"), true);
   state.primary.dispatch("click");
 
