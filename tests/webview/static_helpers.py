@@ -29,7 +29,9 @@ README_PATH = REPO_ROOT / "README.md"
 # load list is parsed from the real versioned index instead of being
 # hand-maintained. The capture group extracts the filename without the
 # ``js/`` prefix.
-_SCRIPT_SRC_RE = re.compile(r'<script\s+src="js/([^"]+\.js)"\s*>\s*</script>')
+_SCRIPT_SRC_RE = re.compile(
+    r'<script\s+src="js/([^"]+\.js)(?:\?v=[0-9a-f]+)?"\s*>\s*</script>'
+)
 
 
 def _parse_js_load_order_from_index() -> list[str]:

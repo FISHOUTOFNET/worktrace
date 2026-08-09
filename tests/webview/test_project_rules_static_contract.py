@@ -108,9 +108,8 @@ def test_fd_work_case_semantics_are_enabled_only_by_shared_capability_status():
 def test_fd_work_frontend_contract_scripts_are_cache_versioned_together():
     index = read_resource("index_fd_work_v5.html")
 
-    assert 'src="js/fd_work_v5.js"' in index
-    assert 'src="js/rules_create_panel_v5.js"' in index
-    assert 'src="js/init_fd_work_v5.js"' in index
+    for name in ("fd_work_v5.js", "rules_create_panel_v5.js", "init_fd_work_v5.js"):
+        assert re.search(rf'src="js/{re.escape(name)}\?v=[0-9a-f]+"', index)
 
 
 def test_project_rules_folder_path_uses_native_readonly_picker_contract():
@@ -188,9 +187,9 @@ def test_project_rules_deletion_uses_shared_dialog_and_explicit_history_policy()
     assert 'id="rules-delete-modal"' not in section
     assert 'id="confirm-dialog"' in index
     delete = func_body(read_js("rules_keyword_actions.js"), "deleteRule")
-    assert "deleteProjectFolderRule(ruleId, applyToHistory)" in delete
-    assert "deleteProjectKeywordRule(ruleId, applyToHistory)" in delete
-    assert "deleteRule(kind, ruleId, false)" in read_js("rules_keyword_actions.js")
+    assert "deleteProjectFolderRule(ruleId, restoreHistory)" in delete
+    assert "deleteProjectKeywordRule(ruleId, restoreHistory)" in delete
+    assert 'historyMode === "restore"' in read_js("rules_keyword_actions.js")
 
 
 def test_project_rules_script_order_includes_create_panel_before_actions():

@@ -60,7 +60,7 @@ def test_frontend_resource_set_is_complete_and_ordered() -> None:
     positions = []
     for name in ALL_JS_FILES:
         assert "/" not in name and "\\" not in name and name.endswith(".js")
-        marker = 'src="js/' + name + '"'
+        marker = 'src="js/' + name + '?v='
         positions.append(index.index(marker))
     assert positions == sorted(positions)
     assert 'src="app.js"' not in index

@@ -605,6 +605,21 @@ def test_shipping_webview_forces_edgechromium_and_persistent_worktrace_profile(
     assert callable(kwargs["func"])
 
 
+def test_shipping_webview_opens_the_content_versioned_index(
+    monkeypatch,
+    tmp_path,
+):
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+    import worktrace.webview_main as webview_main
+
+    assert webview_main.main() == 0
+
+    index_path = webview_main.resource_path("index_fd_work_v5.html")
+    assert mocks["create_window_kwargs"]["url"] == (
+        webview_main._versioned_resource_url(index_path)
+    )
+
+
 def test_initialized_renderer_mismatch_fails_closed_with_webview2_message(
     monkeypatch,
     tmp_path,

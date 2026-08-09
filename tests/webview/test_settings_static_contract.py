@@ -62,7 +62,7 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
     index = (WEBVIEW_UI_DIR / "index_fd_work_v5.html").read_text(encoding="utf-8")
     section = html_section_by_id(index, "page-settings")
     assert (WEBVIEW_UI_DIR / "js" / "settings.js").is_file()
-    assert 'src="js/settings.js"' in index
+    assert re.search(r'src="js/settings\.js\?v=[0-9a-f]+"', index)
     assert "设置与隐私" in section
     assert "管理本地数据、采集和备份" in section
     for category in ("常规", "隐私", "数据与备份", "高级"):

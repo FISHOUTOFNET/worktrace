@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from hashlib import sha256
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,11 @@ def desktop_resource_path(relative: str) -> Path:
     if base:
         return Path(base) / "worktrace" / "assets" / relative
     return Path(__file__).resolve().parent / "assets" / relative
+
+
+def _versioned_resource_url(path: Path) -> str:
+    revision = sha256(path.read_bytes()).hexdigest()[:16]
+    return f"{path}?v={revision}"
 
 
 def _check_pywebview_available() -> Any:
@@ -239,7 +245,7 @@ def main(*, background: bool = False) -> int:
         try:
             window = webview.create_window(
                 title="WorkTrace",
-                url=str(index_path),
+                url=_versioned_resource_url(index_path),
                 js_api=bridge.shipping_api,
                 width=1080,
                 height=720,

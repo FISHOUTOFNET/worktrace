@@ -62,7 +62,10 @@ def test_index_html_loads_all_js_in_order():
     html = _read(INDEX_HTML_PATH)
     import re
 
-    scripts = re.findall(r'<script\s+src="js/([^"]+)"\s*>\s*</script>', html)
+    scripts = re.findall(
+        r'<script\s+src="js/([^"?]+)(?:\?v=[0-9a-f]+)?"\s*>\s*</script>',
+        html,
+    )
     assert scripts, "expected at least one <script src=js/...> tag in index_fd_work_v5.html"
     assert scripts == ALL_JS_FILES, (
         "index_fd_work_v5.html script order must match ALL_JS_FILES exactly; "
