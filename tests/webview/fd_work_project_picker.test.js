@@ -20,11 +20,59 @@ const html = fs.readFileSync(
   "utf8"
 );
 
-test("project Drawer contains an explicit readonly FD Work picker and no local listbox", () => {
-  assert.match(html, /id="rules-panel-fd-work-selected-label"[^>]*readonly/);
+test("project Drawer keeps one editable name field with optional FD Work picker", () => {
+  assert.match(html, /id="rules-panel-project-name"[^>]*type="text"/);
+  assert.doesNotMatch(html, /id="rules-panel-fd-work-selected-label"/);
   assert.match(html, /id="rules-panel-fd-work-pick"/);
   assert.match(html, /id="rules-panel-fd-work-clear"/);
-  assert.doesNotMatch(html, /id="rules-panel-fd-work-options"/);
+  assert.match(fdWorkSource, /label\.textContent = "项目名称"/);
+  assert.match(fdWorkSource, /input\.hidden = false/);
+  assert.match(fdWorkSource, /input\.readOnly = false/);
+});
+
+test("picker writes canonical case label into the shared project name field", () => {
+  const receiver = fdWorkSource.slice(
+    fdWorkSource.indexOf("function receiveIdentityPickerResult"),
+    fdWorkSource.indexOf("function handleIdentityNameInput")
+  );
+  assert.match(receiver, /identityState\.selectedLabel = result\.selected_label\.trim\(\)/);
+  assert.match(receiver, /identityState\.selectionProof = result\.selection_token/);
+  assert.match(receiver, /projectNameInput\(\)/);
+  assert.match(receiver, /input\.value = identityState\.selectedLabel/);
+});
+
+test("manual name input discards picker proof and saves as a local project", () => {
+  const inputHandler = fdWorkSource.slice(
+    fdWorkSource.indexOf("function handleIdentityNameInput"),
+    fdWorkSource.indexOf("function buildIdentitySave")
+  );
+  const saveBuilder = fdWorkSource.slice(
+    fdWorkSource.indexOf("function buildIdentitySave"),
+    fdWorkSource.indexOf("function verifyIdentityPersistence")
+  );
+  assert.match(inputHandler, /identityState\.selectionProof = null/);
+  assert.match(inputHandler, /identityState\.selectedLabel = ""/);
+  assert.match(saveBuilder, /proof: null/);
+  assert.match(saveBuilder, /identityState\.saveIntent = "local"/);
+  assert.doesNotMatch(saveBuilder, /请先选择 FD Work 案件/);
+});
+
+test("bound project preserves unchanged identity but manual rename becomes local", () => {
+  const saveBuilder = fdWorkSource.slice(
+    fdWorkSource.indexOf("function buildIdentitySave"),
+    fdWorkSource.indexOf("function verifyIdentityPersistence")
+  );
+  assert.match(saveBuilder, /editing && identityState\.originalBound && name === identityState\.originalName/);
+  assert.match(saveBuilder, /identityState\.saveIntent = "preserve"/);
+  assert.match(fdWorkSource, /名称已修改，保存后将取消 FD Work 关联/);
+});
+
+test("timeline gate disables unbound projects before opening FD Work", () => {
+  assert.match(fdWorkSource, /project\.fd_work_bound === true/);
+  assert.match(fdWorkSource, /非 FD Work 项目/);
+  assert.match(fdWorkSource, /此项目未关联 FD Work/);
+  assert.match(fdWorkSource, /var originalOpen = App\.openFDWorkEntryForSelection/);
+  assert.match(fdWorkSource, /project && project\.fd_work_bound !== true/);
 });
 
 test("main bridge exports picker open and removes inline case search", () => {
@@ -40,7 +88,7 @@ test("picker UI consumes operation status and never the ambiguous status field",
   assert.doesNotMatch(fdWorkSource, /result\.status\s*===\s*["']authentication_required["']/);
 });
 
-test("project name focus click input never invoke FD Work helper operations", () => {
+test("project name input never invokes FD Work helper operations while typing", () => {
   for (const retired of [
     "requestRecentFDWorkCases",
     "searchFDWorkCases",
@@ -51,10 +99,14 @@ test("project name focus click input never invoke FD Work helper operations", ()
   ]) {
     assert.doesNotMatch(rulesSource, new RegExp(retired));
   }
-  assert.doesNotMatch(rulesSource, /project-name[\s\S]{0,500}showFDWorkLogin/);
+  const inputHandler = fdWorkSource.slice(
+    fdWorkSource.indexOf("function handleIdentityNameInput"),
+    fdWorkSource.indexOf("function buildIdentitySave")
+  );
+  assert.doesNotMatch(inputHandler, /openFDWorkCasePicker|showFDWorkLogin/);
 });
 
-test("picker state is private and bound to request id and FD Work editor generation", () => {
+test("picker state remains private and generation-bound", () => {
   assert.doesNotMatch(rulesSource, /rulesFDWorkPickerRequestId|rulesFDWorkPickerPending/);
   assert.match(fdWorkSource, /pickerRequestId/);
   assert.match(fdWorkSource, /pickerPending/);
@@ -63,27 +115,9 @@ test("picker state is private and bound to request id and FD Work editor generat
   assert.doesNotMatch(fdWorkSource, /rulesPanelSessionToken|pickerDrawerSession/);
   const receiver = fdWorkSource.slice(
     fdWorkSource.indexOf("receiveIdentityPickerResult"),
-    fdWorkSource.indexOf("receiveIdentityPickerResult") + 2000
+    fdWorkSource.indexOf("receiveIdentityPickerResult") + 2200
   );
   assert.match(receiver, /request_id/);
   assert.match(receiver, /pickerRequestId/);
   assert.match(receiver, /pickerEditorGeneration|editorGeneration/);
-});
-
-test("save is fail closed without a picker proof and detects label tampering", () => {
-  const saveBody = rulesSource.slice(
-    rulesSource.indexOf("function savePanelProject"),
-    rulesSource.indexOf("function savePanelRule")
-  );
-  assert.match(saveBody, /projectIdentity\.buildSavePayload/);
-  assert.doesNotMatch(saveBody, /fdWorkEnabled|rulesFDWorkSelectionToken/);
-  assert.match(fdWorkSource, /请先选择 FD Work 案件/);
-  assert.match(fdWorkSource, /displayedLabel[^\n]*!==|!==[^\n]*displayedLabel/);
-});
-
-test("picker pending disables the explicit button and cancel restores local UI state", () => {
-  assert.match(fdWorkSource, /pickerPending/);
-  assert.match(fdWorkSource, /rules-panel-fd-work-pick/);
-  assert.match(fdWorkSource, /picker_canceled/);
-  assert.match(fdWorkSource, /取消关联/);
 });
