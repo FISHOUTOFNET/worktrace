@@ -7,10 +7,11 @@ from ..api.application_services import ApplicationServices
 from .bridge_dialogs import BridgeDialogMixin
 from .bridge_fd_work import FDWorkBridgeMixin
 from .bridge_overview import OverviewBridgeMixin
-from .bridge_project_identity_timeline import ProjectIdentityTimelineBridgeMixin
+from .bridge_projects import ProjectCatalogBridgeMixin
 from .bridge_rules import ProjectRulesBridgeMixin
 from .bridge_settings import SettingsBridgeMixin
 from .bridge_statistics import StatisticsBridgeMixin
+from .bridge_timeline import TimelineBridgeMixin
 
 SHIPPING_METHODS = frozenset(
     {
@@ -29,7 +30,7 @@ SHIPPING_METHODS = frozenset(
         "get_statistics_export_summary", "get_status", "get_timeline",
         "get_timeline_session_activity_summary", "hide_timeline_session",
         "hide_timeline_session_activity", "import_encrypted_backup",
-        "list_projects_for_timeline", "merge_timeline_session",
+        "list_project_catalog", "merge_timeline_session",
         "open_fd_work_case_picker", "open_fd_work_entry", "show_fd_work_login",
         "preview_encrypted_backup_manifest", "preview_project_rule_impact",
         "preview_project_rules_batch_impact", "recover_database_maintenance",
@@ -63,7 +64,8 @@ class WebViewBridge(
     OverviewBridgeMixin,
     SettingsBridgeMixin,
     StatisticsBridgeMixin,
-    ProjectIdentityTimelineBridgeMixin,
+    ProjectCatalogBridgeMixin,
+    TimelineBridgeMixin,
     ProjectRulesBridgeMixin,
 ):
     """Internal bridge controller with explicitly composed API capabilities."""
