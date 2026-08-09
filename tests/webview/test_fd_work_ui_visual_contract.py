@@ -11,7 +11,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from static_helpers import read_resource  # noqa: E402
+from static_helpers import read_js, read_resource  # noqa: E402
 
 
 def test_fd_work_controls_reuse_the_worktrace_visual_system() -> None:
@@ -44,3 +44,13 @@ def test_fd_work_disabled_primary_and_settings_reconnect_are_low_emphasis() -> N
     assert "#settings-fd-work-reconnect:not([hidden])" in styles
     assert "border-color: transparent; background: transparent" in styles
     assert "label.setting-row:has(+ #settings-fd-work-reconnect:not([hidden]))" in styles
+
+
+def test_project_editor_keeps_shared_name_field_as_primary_focus() -> None:
+    source = read_js("rules_create_panel_v5.js")
+
+    start = source.index("var focus =")
+    end = source.index("App.openManagedDrawer", start)
+    focus_block = source[start:end]
+    assert '"rules-panel-project-name"' in focus_block
+    assert '"rules-panel-fd-work-pick"' not in focus_block
