@@ -3,98 +3,10 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    function installProjectCatalogCoordinator() {
-        // Unified project catalog coordinator. One bridge call returns the
-        // editing catalog (includes system ``未归类``) and the filter
-        // catalog (excludes the system project to avoid duplicate
-        // ``未归类`` entries).
-        function applyCatalogResult(result) {
-            if (!result || result.ok === false) return null;
-            var editing = result.editing_projects || result.projects || [];
-            var filter = result.filter_projects || result.projects || [];
-            App.editingProjectsCache = editing;
-            App.filterProjectsCache = filter;
-            // Backward compatibility: legacy consumers read ``projectsCache``
-            // expecting the editing catalog.
-            App.projectsCache = editing;
-            // Render every consumer from the single authoritative load.
-            if (typeof App.renderTimelineProjectFilter === "function") {
-                App.renderTimelineProjectFilter(filter);
-            }
-            if (typeof App.populateStatisticsProjectFilter === "function") {
-                App.populateStatisticsProjectFilter(filter);
-            }
-            return editing;
-        }
-
-        App.loadProjects = function () {
-            if (App.projectsCache) return Promise.resolve(App.projectsCache);
-            if (App.projectsLoadPromise) return App.projectsLoadPromise;
-            App.projectsLoading = true;
-            var epoch = App.dataEpoch || 0;
-            var request = App.bridge.listProjectsForTimeline().then(function (result) {
-                if (epoch !== (App.dataEpoch || 0)) return null;
-                return applyCatalogResult(result);
-            }).catch(function () {
-                return null;
-            }).finally(function () {
-                if (App.projectsLoadPromise === request) {
-                    App.projectsLoadPromise = null;
-                    App.projectsLoading = false;
-                }
-            });
-            App.projectsLoadPromise = request;
-            return request;
-        };
-
-        // Force a fresh load (used after project add/update/delete/generation
-        // reset). Clears the cache and re-renders all consumers.
-        App.refreshProjectCatalogs = function () {
-            App.projectsCache = null;
-            App.editingProjectsCache = null;
-            App.filterProjectsCache = null;
-            App.projectsLoading = false;
-            App.projectsLoadPromise = null;
-            return App.loadProjects();
-        };
-    }
-    installProjectCatalogCoordinator();
-
-    function closestTimelineItem(target) {
-        while (target && target !== document) {
-            if (target.classList && target.classList.contains("timeline-item")) return target;
-            target = target.parentElement;
-        }
-        return null;
-    }
-
-    function installTimelineProjectLoadGate() {
-        var list = document.getElementById("timeline-sessions-list");
-        if (!list || list.getAttribute("data-project-load-gate") === "1") return;
-        list.setAttribute("data-project-load-gate", "1");
-        list.addEventListener("click", function (event) {
-            if (!App.projectsLoading || !App.projectsLoadPromise) return;
-            var item = closestTimelineItem(event.target);
-            if (!item) return;
-            event.preventDefault();
-            event.stopImmediatePropagation();
-            var epoch = App.dataEpoch || 0;
-            App.projectsLoadPromise.then(function () {
-                if (epoch !== (App.dataEpoch || 0)) return;
-                if (document.body.contains(item)) item.click();
-            });
-        }, true);
-    }
-    installTimelineProjectLoadGate();
-
     function refreshSharedProjectCatalog() {
-        if (typeof App.refreshProjectCatalogs === "function") {
-            return App.refreshProjectCatalogs();
-        }
-        App.projectsCache = null;
-        App.projectsLoading = false;
-        App.projectsLoadPromise = null;
-        return typeof App.loadProjects === "function" ? App.loadProjects() : Promise.resolve(null);
+        if (!App.projectCatalog) return Promise.resolve(null);
+        App.projectCatalog.invalidate();
+        return App.projectCatalog.load();
     }
     App.refreshSharedProjectCatalog = refreshSharedProjectCatalog;
 
@@ -163,8 +75,7 @@
         list.innerHTML = projects.map(function (project) {
             return App.renderProjectRuleProject(project);
         }).join("");
-        App.bindProjectRuleDelete();
-        App.bindProjectRuleFolderEvents();
+        if (App.bindProjectRuleDeleteEvents) App.bindProjectRuleDeleteEvents();
         applyRulesSearch();
     }
     App.showProjectRules = showProjectRules;
@@ -181,8 +92,7 @@
         list.innerHTML = projects.map(function (project) {
             return App.renderProjectRuleProject(project);
         }).join("");
-        App.bindProjectRuleDelete();
-        App.bindProjectRuleFolderEvents();
+        if (App.bindProjectRuleDeleteEvents) App.bindProjectRuleDeleteEvents();
         applyRulesSearch();
     };
 
@@ -215,11 +125,6 @@
         App.rulesLoaded = false;
         App.lastProjectRulesData = null;
         App.rulesLoadPromise = null;
-        App.projectsCache = null;
-        App.editingProjectsCache = null;
-        App.filterProjectsCache = null;
-        App.projectsLoading = false;
-        App.projectsLoadPromise = null;
         App.rulesRequestToken = (App.rulesRequestToken || 0) + 1;
         if (typeof App.resetRulesTransientUi === "function") {
             App.resetRulesTransientUi({ restoreFocus: false });
