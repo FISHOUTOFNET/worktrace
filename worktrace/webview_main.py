@@ -298,6 +298,7 @@ def main(*, background: bool = False) -> int:
             webview.start(
                 func=handle_webview_initialized,
                 gui="edgechromium",
+                http_server=True,
                 private_mode=False,
                 storage_path=str(webview_profile_path),
             )
