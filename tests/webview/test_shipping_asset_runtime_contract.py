@@ -36,12 +36,15 @@ def test_shipping_index_and_every_local_asset_use_content_revision_cache_keys():
     source = INDEX.read_text(encoding="utf-8")
     assets = _local_assets(source)
     assert assets
+    mismatches: list[str] = []
     for asset_url in assets:
         parsed = urlsplit(asset_url)
         assert parsed.scheme == "" and parsed.netloc == ""
-        assert parse_qs(parsed.query) == {
-            "v": [_revision(UI_ROOT / parsed.path)]
-        }, f"shipping asset must use its content hash: {asset_url}"
+        expected = _revision(UI_ROOT / parsed.path)
+        actual = parse_qs(parsed.query).get("v", [])
+        if actual != [expected]:
+            mismatches.append(f"{parsed.path}: expected {expected}, got {actual!r}")
+    assert not mismatches, "shipping asset cache revisions are stale:\n" + "\n".join(mismatches)
 
     index_url = webview_main._versioned_resource_url(INDEX)
     index_path, separator, revision = index_url.rpartition("?v=")
