@@ -1,7 +1,7 @@
 """Read-side rule catalog capabilities used by cross-domain application workflows."""
 from __future__ import annotations
 
-from .rule_catalog_command_service import RuleRef
+from .rule_catalog_contracts import RuleRef
 
 
 def list_project_rule_refs_in_transaction(conn, project_id: int) -> list[RuleRef]:
