@@ -21,6 +21,7 @@ def test_rule_delete_dialog_exposes_preserve_and_treat_as_absent_modes():
     assert 'defaultChoice: "preserve"' in source
     assert 'historyMode === "restore"' in source
     assert 'warning: "如何处理已有归类？"' in source
+    assert "objectLabel:" not in source
     assert "视同这条规则从未存在" not in source
     assert "按其他现有规则重新归类" not in source
     assert "没有匹配时为“未归类”" not in source
@@ -42,6 +43,8 @@ def test_rule_enabled_state_is_not_exposed_as_a_user_control_or_status():
     assert "visibleRuleDetail" in render
     assert 'return kind(rule && rule.kind) === "folder"' in render
     assert '            : "";' in render
+    assert 'style="overflow:visible"' in render
+    assert '<span class="rules-detail"> · ' in render
 
 
 def test_project_delete_keeps_behavior_while_shared_ui_uses_concise_risk_copy():
@@ -55,7 +58,8 @@ def test_project_delete_keeps_behavior_while_shared_ui_uses_concise_risk_copy():
     assert "twoStep: true" in project_source
     assert "deleteProjectForRules" in project_source
     assert 'normalized.warning = "此操作不可撤销。";' in ui_source
-    assert 'normalized.secondIntro = "即将删除：";' in ui_source
-    assert 'normalized.secondTitle.replace(/永久/g, "")' in ui_source
-    assert 'normalized.confirmLabel.replace(/永久/g, "")' in ui_source
+    assert 'normalized.secondIntro = normalized.objectLabel ? "即将删除：" : "此操作不可撤销。";' in ui_source
+    assert "conciseDeleteConfirmLabel" in ui_source
+    assert '.replace(/永久/g, "")' in ui_source
+    assert '.replace(/^再次确认/, "确认")' in ui_source
     assert 'return "项目已删除";' in ui_source
