@@ -1,4 +1,4 @@
-// WorkTrace shared UI primitives: focus management, Drawer, Dialog, and Toast.
+// WorkTrace shared UI primitives: focus management, Drawer, Dialog, Toast, and concise presentation copy.
 (function () {
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
@@ -10,6 +10,142 @@
     var dialogSecondary = document.getElementById("confirm-dialog-secondary");
     var dialogState = null;
     var toastTimer = null;
+    var conciseCopyObservers = [];
+
+    function compactPageHeader(pageSelector) {
+        var header = document.querySelector(pageSelector + " .page-header");
+        if (!header) return;
+        var subtitle = header.querySelector("p");
+        if (subtitle) subtitle.hidden = true;
+        header.style.alignItems = "center";
+    }
+
+    function hideSelector(selector) {
+        var target = document.querySelector(selector);
+        if (target) target.hidden = true;
+    }
+
+    function setSelectorText(selector, text) {
+        var target = document.querySelector(selector);
+        if (target) target.textContent = text;
+    }
+
+    function hideEmptyStateDetails(container) {
+        if (!container) return;
+        var details = container.querySelectorAll(".empty-state span");
+        Array.prototype.forEach.call(details, function (detail) {
+            detail.hidden = true;
+        });
+    }
+
+    function applyStaticConciseCopy() {
+        compactPageHeader("#page-overview");
+        compactPageHeader("#page-timeline");
+        compactPageHeader("#page-rules");
+        compactPageHeader("#page-settings");
+        setSelectorText("#page-statistics .page-header p", "仅统计已完成时段");
+        setSelectorText("#timeline-readonly-notice", "进行中时段不可编辑");
+
+        var readonlyHint = document.getElementById("rules-readonly-hint");
+        if (readonlyHint) {
+            readonlyHint.textContent = "";
+            readonlyHint.hidden = true;
+        }
+        var fdWorkHelp = document.getElementById("rules-panel-fd-work-help");
+        if (fdWorkHelp) {
+            fdWorkHelp.textContent = "";
+            fdWorkHelp.hidden = true;
+        }
+
+        hideSelector("#rules-panel-folder-recursive small");
+        hideSelector('label[for="settings-launch-at-login-toggle"] small');
+        hideSelector("#settings-privacy-card small");
+        hideSelector('label[for="settings-fd-work-toggle"] small');
+        hideSelector("#settings-storage-card small");
+        hideSelector("#settings-section-data .maintenance-section > p");
+        setSelectorText("#settings-danger-card small", "此操作不可撤销。");
+        setSelectorText("#settings-section-advanced details > summary", "技术诊断");
+
+        var statsScopeRow = document.querySelector(".stats-scope-row");
+        if (statsScopeRow) statsScopeRow.hidden = true;
+
+        hideEmptyStateDetails(document.getElementById("recent-list"));
+        hideEmptyStateDetails(document.getElementById("timeline-details-list"));
+    }
+
+    function normalizeIdentityStatus() {
+        var target = document.getElementById("rules-panel-fd-work-status");
+        if (!target) return;
+        var current = String(target.textContent || "").trim();
+        var replacements = {
+            "本地项目": "",
+            "将作为本地项目保存": "",
+            "本地项目；也可选择 FD Work 案件": "",
+            "已取消 FD Work 关联，将作为本地项目保存": "已取消 FD Work 关联",
+            "正在打开 FD Work 案件选择器……": "正在打开案件选择器…",
+            "请在 FD Work 原生案件框中选择并确认": "请在 FD Work 中选择案件",
+            "请在 FD Work 窗口完成登录并选择案件": "请登录 FD Work 并选择案件"
+        };
+        var next = Object.prototype.hasOwnProperty.call(replacements, current)
+            ? replacements[current] : current;
+        if (next !== current) target.textContent = next;
+        target.hidden = !next;
+    }
+
+    function normalizeTimelineFDWorkStatus() {
+        var button = document.getElementById("fd-work-entry-btn");
+        var status = document.getElementById("fd-work-status");
+        if (!button || !status) return;
+        if (String(button.textContent || "").trim() === "非 FD Work 项目"
+                && String(status.textContent || "").trim() === "此项目未关联 FD Work") {
+            status.textContent = "";
+            status.hidden = true;
+        }
+    }
+
+    function normalizeRulesProjectContext() {
+        var target = document.getElementById("rules-panel-project-context");
+        if (!target) return;
+        var current = String(target.textContent || "").trim();
+        if (current.indexOf("项目已新增：") === 0) target.textContent = "项目已新增";
+    }
+
+    function observeConciseCopy(target, options, callback) {
+        if (!target || typeof MutationObserver !== "function") return;
+        var observer = new MutationObserver(function () { callback(); });
+        observer.observe(target, options);
+        conciseCopyObservers.push(observer);
+    }
+
+    function installConciseCopyObservers() {
+        var identityStatus = document.getElementById("rules-panel-fd-work-status");
+        observeConciseCopy(identityStatus, { childList: true, characterData: true, subtree: true }, normalizeIdentityStatus);
+
+        var fdWorkStatus = document.getElementById("fd-work-status");
+        var fdWorkButton = document.getElementById("fd-work-entry-btn");
+        observeConciseCopy(fdWorkStatus, { childList: true, characterData: true, subtree: true }, normalizeTimelineFDWorkStatus);
+        observeConciseCopy(fdWorkButton, { childList: true, characterData: true, subtree: true }, normalizeTimelineFDWorkStatus);
+
+        var rulesContext = document.getElementById("rules-panel-project-context");
+        observeConciseCopy(rulesContext, { childList: true, characterData: true, subtree: true }, normalizeRulesProjectContext);
+
+        var recentList = document.getElementById("recent-list");
+        observeConciseCopy(recentList, { childList: true, subtree: true }, function () {
+            hideEmptyStateDetails(recentList);
+        });
+        var detailList = document.getElementById("timeline-details-list");
+        observeConciseCopy(detailList, { childList: true, subtree: true }, function () {
+            hideEmptyStateDetails(detailList);
+        });
+    }
+
+    function applyConciseCopyPolicy() {
+        applyStaticConciseCopy();
+        normalizeIdentityStatus();
+        normalizeTimelineFDWorkStatus();
+        normalizeRulesProjectContext();
+    }
+    App.applyConciseCopyPolicy = applyConciseCopyPolicy;
 
     function isWithinHiddenAncestor(element) {
         var node = element;
@@ -184,8 +320,17 @@
         state.resolve(choices.length ? (state.choice || choices[0].value) : true);
     }
 
+    function conciseConfirmOptions(options) {
+        var normalized = Object.assign({}, options || {});
+        if (String(normalized.title || "").indexOf("导入并替换") === 0) {
+            normalized.objectLabel = "";
+            normalized.warning = "当前数据将被备份替换，且不可撤销。";
+        }
+        return normalized;
+    }
+
     App.openConfirmDialog = function (options) {
-        options = options || {};
+        options = conciseConfirmOptions(options);
         if (dialogState) return Promise.resolve(false);
         return new Promise(function (resolve) {
             dialogState = {
@@ -201,15 +346,26 @@
     };
 
     App.openDeleteDialog = function (options) {
-        options = options || {};
+        var normalized = Object.assign({}, options || {});
+        var hasChoices = Array.isArray(normalized.choices) && normalized.choices.length > 0;
+        if (!hasChoices) {
+            normalized.warning = "此操作不可撤销。";
+            normalized.secondIntro = "即将删除：";
+        }
+        if (typeof normalized.secondTitle === "string") {
+            normalized.secondTitle = normalized.secondTitle.replace(/永久/g, "");
+        }
+        if (typeof normalized.confirmLabel === "string") {
+            normalized.confirmLabel = normalized.confirmLabel.replace(/永久/g, "");
+        }
         return App.openConfirmDialog(Object.assign({
             title: "确认删除",
             secondTitle: "再次确认删除",
-            secondIntro: "即将永久删除：",
+            secondIntro: "即将删除：",
             confirmLabel: "确认删除",
             twoStep: true,
             danger: true
-        }, options));
+        }, normalized));
     };
 
     if (dialogPrimary) dialogPrimary.addEventListener("click", function () {
@@ -234,13 +390,21 @@
         if (event.target === dialogLayer) finishDialog(false);
     });
 
+    function conciseToastMessage(message) {
+        var text = String(message || "");
+        if (text.indexOf("项目已永久删除") === 0) return "项目已删除";
+        if (text.indexOf("规则已删除，") === 0) return "规则已删除";
+        return text;
+    }
+
     App.showToast = function (message) {
         var toast = document.getElementById("app-toast");
         if (!toast) return;
         clearTimeout(toastTimer);
-        toast.textContent = String(message || "");
-        toast.hidden = !message;
-        if (message) toastTimer = setTimeout(function () {
+        var copy = conciseToastMessage(message);
+        toast.textContent = copy;
+        toast.hidden = !copy;
+        if (copy) toastTimer = setTimeout(function () {
             toast.hidden = true;
             toast.textContent = "";
         }, 3200);
@@ -265,5 +429,11 @@
             return;
         }
         trapFocus(event, drawer.querySelector(".drawer"));
+    });
+
+    applyStaticConciseCopy();
+    document.addEventListener("DOMContentLoaded", function () {
+        applyConciseCopyPolicy();
+        installConciseCopyObservers();
     });
 })();
