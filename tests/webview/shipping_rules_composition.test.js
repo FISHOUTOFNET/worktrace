@@ -10,12 +10,12 @@ const shippingOrder = Array.from(indexSource.matchAll(/<script\s+src="js\/([^"?]
 const ruleComposition = new Set([
   "core.js",
   "ui_components.js",
+  "project_catalog.js",
   "rules.js",
   "rules_render.js",
   "rules_create_panel_v5.js",
   "rules_rule_actions.js",
-  "rules_keyword_actions.js",
-  "rules_folder_actions.js",
+  "rules_delete_actions.js",
 ]);
 
 class FakeElement {
@@ -144,6 +144,9 @@ const fakeDocument = {
   querySelectorAll(selector) {
     if (selector === ".rules-keyword-delete-button") return buttonsByKind.keyword;
     if (selector === ".rules-folder-delete-button") return buttonsByKind.folder;
+    if (selector === ".rules-keyword-delete-button, .rules-folder-delete-button") {
+      return buttonsByKind.keyword.concat(buttonsByKind.folder);
+    }
     return [];
   },
 };
