@@ -758,8 +758,9 @@ class FDWorkInteractionCoordinator:
                 )
 
     def _on_helper_closed(self, navigation_generation: int) -> None:
-        del navigation_generation
         with self._lock:
+            if navigation_generation != self._navigation_generation_locked():
+                return
             had_operation = self._interaction_owner != "none"
             terminal_owner = self._interaction_owner
             if (
