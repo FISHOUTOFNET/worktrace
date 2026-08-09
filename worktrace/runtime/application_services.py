@@ -6,13 +6,14 @@ from ..api.application_lifecycle import ApplicationDataLifecycle
 from ..api.application_capabilities import (
     BackupApplicationService,
     OverviewApplicationService,
+    ProjectCatalogApplicationService,
     RulesApplicationService,
     SettingsApplicationService,
     StatisticsApplicationService,
+    TimelineApplicationService,
 )
 from ..api.application_services import ApplicationServices
 from ..api.external_project_identity import OptionalProjectIdentityCapability
-from ..api.project_identity_timeline import ProjectIdentityTimelineApplicationService
 from ..services import database_maintenance_service
 from ..services import project_service
 from ..api import project_api
@@ -67,7 +68,8 @@ def build_application_services(
         settings=SettingsApplicationService(data_lifecycle=data_lifecycle),
         backup=BackupApplicationService(data_lifecycle),
         statistics=StatisticsApplicationService(),
-        timeline=ProjectIdentityTimelineApplicationService(project_identity),
+        projects=ProjectCatalogApplicationService(project_identity),
+        timeline=TimelineApplicationService(),
         fd_work=fd_work,
         rules=RulesApplicationService(project_identity=project_identity),
     )
