@@ -1405,6 +1405,15 @@
         );
     }
 
+    function visibleSaveErrorNodes(contract) {
+        var selector = String(contract && contract.save_error_selector
+            || ".ant-message-error, .ant-notification-notice-error, .ant-form-item-explain-error");
+        return Array.prototype.filter.call(
+            document.querySelectorAll ? document.querySelectorAll(selector) : [],
+            visible
+        );
+    }
+
     function formReinitializedAfterSave(baseline, contract) {
         var currentForm = document.querySelector(String(contract.form_selector || "form#basic"));
         if (!currentForm || !visible(currentForm)) return false;
@@ -1442,16 +1451,29 @@
             var successMessage = successNodes.some(function (node) {
                 return baseline.successNodes.indexOf(node) < 0;
             });
+            var errorNodes = visibleSaveErrorNodes(contract);
+            var errorMessage = errorNodes.some(function (node) {
+                return baseline.errorNodes.indexOf(node) < 0;
+            });
             var reinitialized = formReinitializedAfterSave(baseline, contract);
             var entryClosed = entryClosedAfterSave(baseline, contract);
             var busy = saveActionBusy(baseline.node, contract);
             loadingObserved = loadingObserved || busy;
-            var loadingSettled = loadingObserved && !busy;
-            if (successMessage || reinitialized || entryClosed || loadingSettled) {
+            if (errorMessage) {
+                return stageFailure("save_completed", "save_completion_failed", {
+                    save_loading_observed: loadingObserved,
+                    save_success_message: false,
+                    save_error_message: true,
+                    form_reinitialized: reinitialized,
+                    entry_closed_after_save: entryClosed
+                });
+            }
+            if (successMessage || reinitialized || entryClosed) {
                 return result(true, "", {
                     stage: "save_completed",
                     save_loading_observed: loadingObserved,
                     save_success_message: successMessage,
+                    save_error_message: false,
                     form_reinitialized: reinitialized,
                     entry_closed_after_save: entryClosed
                 });
@@ -1461,6 +1483,7 @@
         return stageFailure("save_completed", "save_completion_failed", {
             save_loading_observed: loadingObserved,
             save_success_message: false,
+            save_error_message: false,
             form_reinitialized: false,
             entry_closed_after_save: false
         });
@@ -1489,7 +1512,8 @@
         var baseline = {
             form: located.form,
             node: located.node,
-            successNodes: visibleSaveSuccessNodes(contract)
+            successNodes: visibleSaveSuccessNodes(contract),
+            errorNodes: visibleSaveErrorNodes(contract)
         };
         setFillBlockingMessage("正在保存 FD Work…");
         var clicked = clickSave(located.node);
@@ -1600,7 +1624,7 @@
         [
             "viewport_available", "input_exists", "input_interactive",
             "editor_exists", "save_loading_observed", "save_success_message",
-            "form_reinitialized", "entry_closed_after_save",
+            "save_error_message", "form_reinitialized", "entry_closed_after_save",
             "option_connected_before_action", "option_connected_after_action",
             "popup_replaced", "live_option_reacquired"
         ].forEach(function (key) {
