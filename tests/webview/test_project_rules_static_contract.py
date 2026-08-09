@@ -247,9 +247,9 @@ def test_project_rules_header_places_description_left_and_actions_with_metadata_
     actions = rendered.index('<div class="rules-project-actions">')
     meta = rendered.index("metaMarkup")
     assert title_start < description < side < actions < meta
-    assert 'projectDescription\n            ?' in body or "projectDescription\n            ?" in body
+    assert re.search(r"var descriptionMarkup\s*=\s*projectDescription\s*\?", body)
     assert 'projectDescription || "无描述"' not in body
-    assert 'lastUsedAt\n            ?' in body or "lastUsedAt\n            ?" in body
+    assert re.search(r"var metaMarkup\s*=\s*lastUsedAt\s*\?", body)
     assert "暂无使用记录" not in body
     head = re.search(r"\.rules-project-head\s*\{([^}]*)\}", css)
     assert head is not None
