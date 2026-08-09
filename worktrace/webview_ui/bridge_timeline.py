@@ -1,7 +1,8 @@
 """Timeline bridge mixin.
 
 The bridge owns transport validation and public error mapping only. Timeline
-queries, mutation validation and DTO construction stay behind API capabilities.
+queries and mutation validation stay behind the Timeline capability; shared
+project catalogs have their own bridge owner.
 """
 
 from __future__ import annotations
@@ -68,40 +69,6 @@ class TimelineBridgeMixin:
                 exc,
                 "webview bridge get_timeline_session_activity_summary failed",
             )
-
-    def list_projects_for_timeline(self) -> dict[str, Any]:
-        try:
-            editing_projects = self._services.timeline.list_selectable_projects()
-            filter_projects = self._services.timeline.list_filter_projects()
-            editing_dto = [
-                {
-                    "id": int(project.get("id") or 0),
-                    "name": str(project.get("name") or ""),
-                    "description": str(project.get("description") or ""),
-                }
-                for project in editing_projects
-            ]
-            filter_dto = [
-                {
-                    "id": int(project.get("id") or 0),
-                    "name": str(project.get("name") or ""),
-                    "description": str(project.get("description") or ""),
-                }
-                for project in filter_projects
-            ]
-            return {
-                "ok": True,
-                # ``projects`` is kept for backward compatibility. New
-                # consumers should use ``editing_projects`` (edit dropdown,
-                # includes the system ``未归类``) or ``filter_projects``
-                # (filter dropdowns, excludes the system project).
-                "projects": editing_dto,
-                "editing_projects": editing_dto,
-                "filter_projects": filter_dto,
-            }
-        except Exception:
-            logger.exception("webview bridge list_projects_for_timeline failed")
-            return {"ok": False, "error": "operation_failed", "message": "操作失败"}
 
     def save_timeline_session_edit(
         self,
