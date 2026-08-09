@@ -27,7 +27,6 @@
         return App.openDeleteDialog({
             trigger: trigger,
             title: "删除规则",
-            objectLabel: kind === "folder" ? "当前文件夹规则" : "当前关键词规则",
             warning: "如何处理已有归类？",
             choices: [
                 {
