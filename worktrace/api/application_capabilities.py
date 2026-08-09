@@ -58,12 +58,16 @@ class StatisticsCapability(Protocol):
 
 
 @runtime_checkable
+class ProjectCatalogCapability(Protocol):
+    def list_editing_projects(self) -> list[dict[str, Any]]: ...
+    def list_filter_projects(self) -> list[dict[str, Any]]: ...
+
+
+@runtime_checkable
 class TimelineCapability(Protocol):
     TIMELINE_NOTE_MAX_LENGTH: int
     def get_timeline_view_model(self, date, *, runtime, collector_status) -> dict[str, Any]: ...
     def get_session_activity_summary_view_model(self, *, report_date, projection_instance_key, expected_projection_revision, expected_source_version, runtime, collector_status) -> dict[str, Any]: ...
-    def list_selectable_projects(self) -> list[dict[str, Any]]: ...
-    def list_filter_projects(self) -> list[dict[str, Any]]: ...
     def save_timeline_session_edit(self, report_date, projection_instance_key, projection_revision, request_id, project_id, duration_touched, adjusted_duration_seconds, note) -> dict[str, Any]: ...
     def hide_timeline_session(self, report_date, projection_instance_key, projection_revision, request_id) -> dict[str, Any]: ...
     def merge_timeline_session(self, report_date, projection_instance_key, direction, projection_revision, request_id, target_projection_instance_key, target_projection_revision) -> dict[str, Any]: ...
@@ -276,8 +280,25 @@ class StatisticsApplicationService:
         )
 
 
+class ProjectCatalogApplicationService:
+    """Shared editable/filter project catalogs with optional external identity."""
+
+    def __init__(
+        self, project_identity: ProjectIdentityIntegrationCapability
+    ) -> None:
+        self._project_identity = project_identity
+
+    def list_editing_projects(self):
+        return self._project_identity.list_project_identities(
+            project_api.list_selectable_projects()
+        )
+
+    def list_filter_projects(self):
+        return timeline_api.list_filter_projects()
+
+
 class TimelineApplicationService:
-    """Concrete timeline capability delegating to timeline_api, project_api, view_model_api."""
+    """Concrete timeline capability delegating to timeline_api and view_model_api."""
 
     TIMELINE_NOTE_MAX_LENGTH = timeline_api.TIMELINE_NOTE_MAX_LENGTH
 
@@ -304,12 +325,6 @@ class TimelineApplicationService:
             runtime=runtime,
             collector_status=collector_status,
         )
-
-    def list_selectable_projects(self):
-        return project_api.list_selectable_projects()
-
-    def list_filter_projects(self):
-        return timeline_api.list_filter_projects()
 
     def save_timeline_session_edit(
         self,
@@ -485,6 +500,8 @@ __all__ = [
     "FDWorkCapability",
     "OverviewApplicationService",
     "OverviewCapability",
+    "ProjectCatalogApplicationService",
+    "ProjectCatalogCapability",
     "RulesApplicationService",
     "RulesCapability",
     "SettingsApplicationService",
