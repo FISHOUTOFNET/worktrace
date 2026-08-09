@@ -134,10 +134,17 @@
         selectedLabel: "",
         originalName: "",
         originalBound: false,
+        editingProjectId: null,
+        editorGeneration: 0,
+        projectBusy: false,
         pickerRequestId: null,
-        pickerDrawerSession: null,
+        pickerEditorGeneration: null,
         pickerPending: false,
-        pickerCounter: 0
+        pickerCounter: 0,
+        host: {
+            onStateChanged: function () {},
+            onBindingChanged: function () {}
+        }
     };
 
     function identityEnabled() {
@@ -145,9 +152,24 @@
     }
 
     function refreshRulesWriteState() {
-        if (typeof App.refreshRulesPanelWriteState === "function") {
-            App.refreshRulesPanelWriteState();
-        }
+        try { identityState.host.onStateChanged(); } catch (_error) {}
+    }
+
+    function notifyBindingChanged() {
+        try {
+            var pending = identityState.host.onBindingChanged();
+            if (pending && typeof pending.catch === "function") pending.catch(function () {});
+        } catch (_error) {}
+    }
+
+    function bindIdentityHost(host) {
+        host = host || {};
+        identityState.host = {
+            onStateChanged: typeof host.onStateChanged === "function"
+                ? host.onStateChanged : function () {},
+            onBindingChanged: typeof host.onBindingChanged === "function"
+                ? host.onBindingChanged : function () {}
+        };
     }
 
     function showIdentityStatus(message, isError) {
@@ -159,12 +181,15 @@
     }
 
     function resetIdentityEditor() {
+        identityState.editorGeneration += 1;
         identityState.selectionProof = null;
         identityState.selectedLabel = "";
         identityState.originalName = "";
         identityState.originalBound = false;
+        identityState.editingProjectId = null;
+        identityState.projectBusy = false;
         identityState.pickerRequestId = null;
-        identityState.pickerDrawerSession = null;
+        identityState.pickerEditorGeneration = null;
         identityState.pickerPending = false;
         var selected = document.getElementById("rules-panel-fd-work-selected-label");
         if (selected) selected.value = "";
@@ -173,6 +198,9 @@
 
     function prepareIdentityEditor(project) {
         resetIdentityEditor();
+        var projectId = Number(project && project.id);
+        identityState.editingProjectId = Number.isInteger(projectId) && projectId > 0
+            ? projectId : null;
         identityState.originalName = project ? App.safeText(project.name, "") : "";
         identityState.originalBound = !!(project && project.fd_work_bound === true);
         var selected = document.getElementById("rules-panel-fd-work-selected-label");
@@ -186,27 +214,28 @@
         if (pick) pick.textContent = project ? "更换案件" : "选择案件";
     }
 
-    function isCurrentPickerRequest(requestId, drawerSession) {
+    function isCurrentPickerRequest(requestId, editorGeneration) {
         return requestId === identityState.pickerRequestId
-            && drawerSession === identityState.pickerDrawerSession
-            && drawerSession === App.rulesPanelSessionToken;
+            && editorGeneration === identityState.pickerEditorGeneration
+            && editorGeneration === identityState.editorGeneration;
     }
 
     function openIdentityPicker() {
-        if (identityState.pickerPending || App.rulesCreatingPanelProject) return;
+        if (identityState.pickerPending || identityState.projectBusy) return;
         if (!identityEnabled()) return;
-        var drawerSession = App.rulesPanelSessionToken;
-        var requestId = "rules-picker-" + drawerSession + "-" + (++identityState.pickerCounter);
+        var editorGeneration = identityState.editorGeneration;
+        var requestId = "rules-picker-" + editorGeneration + "-" + (++identityState.pickerCounter);
         identityState.pickerPending = true;
         identityState.pickerRequestId = requestId;
-        identityState.pickerDrawerSession = drawerSession;
+        identityState.pickerEditorGeneration = editorGeneration;
         showIdentityStatus("正在打开 FD Work 案件选择器……", false);
         refreshRulesWriteState();
         App.bridge.openFDWorkCasePicker(requestId).then(function (result) {
-            if (!isCurrentPickerRequest(requestId, drawerSession)) return;
+            if (!isCurrentPickerRequest(requestId, editorGeneration)) return;
             if (!result || result.ok === false) {
                 identityState.pickerPending = false;
                 identityState.pickerRequestId = null;
+                identityState.pickerEditorGeneration = null;
                 showIdentityStatus(result && result.message || "打开案件选择器失败", true);
                 refreshRulesWriteState();
                 return;
@@ -218,9 +247,10 @@
                 false
             );
         }).catch(function () {
-            if (!isCurrentPickerRequest(requestId, drawerSession)) return;
+            if (!isCurrentPickerRequest(requestId, editorGeneration)) return;
             identityState.pickerPending = false;
             identityState.pickerRequestId = null;
+            identityState.pickerEditorGeneration = null;
             showIdentityStatus("打开案件选择器失败", true);
             refreshRulesWriteState();
         });
@@ -228,14 +258,13 @@
 
     function clearIdentitySelection() {
         if (identityState.pickerPending) return;
-        if (identityState.originalBound && App.rulesPanelEditingProjectId) {
-            var drawerSession = App.rulesPanelSessionToken;
+        if (identityState.originalBound && identityState.editingProjectId) {
+            var editorGeneration = identityState.editorGeneration;
+            var editingProjectId = identityState.editingProjectId;
             identityState.pickerPending = true;
             refreshRulesWriteState();
-            App.bridge.clearFDWorkBindingForRules(
-                App.rulesPanelEditingProjectId
-            ).then(function (result) {
-                if (drawerSession !== App.rulesPanelSessionToken) return;
+            App.bridge.clearFDWorkBindingForRules(editingProjectId).then(function (result) {
+                if (editorGeneration !== identityState.editorGeneration) return;
                 identityState.pickerPending = false;
                 if (!result || result.ok === false) {
                     showIdentityStatus(result && result.error || "取消关联失败", true);
@@ -244,10 +273,10 @@
                 }
                 identityState.originalBound = false;
                 showIdentityStatus("已取消 FD Work 关联", false);
-                if (App.loadProjectRules) App.loadProjectRules();
+                notifyBindingChanged();
                 refreshRulesWriteState();
             }).catch(function () {
-                if (drawerSession !== App.rulesPanelSessionToken) return;
+                if (editorGeneration !== identityState.editorGeneration) return;
                 identityState.pickerPending = false;
                 showIdentityStatus("取消关联失败", true);
                 refreshRulesWriteState();
@@ -264,10 +293,11 @@
 
     function receiveIdentityPickerResult(result) {
         if (!result || typeof result !== "object") return false;
-        var drawerSession = identityState.pickerDrawerSession;
-        if (!isCurrentPickerRequest(result.request_id, drawerSession)) return false;
+        var editorGeneration = identityState.pickerEditorGeneration;
+        if (!isCurrentPickerRequest(result.request_id, editorGeneration)) return false;
         identityState.pickerPending = false;
         identityState.pickerRequestId = null;
+        identityState.pickerEditorGeneration = null;
         if (result.ok !== true) {
             showIdentityStatus(
                 result.error === "picker_canceled" ? "案件选择已取消" : "案件选择已失效",
@@ -350,24 +380,25 @@
     }
 
     function updateIdentityControls(projectBusy) {
+        identityState.projectBusy = !!projectBusy;
         var pending = identityState.pickerPending;
         var pick = document.getElementById("rules-panel-fd-work-pick");
         var clear = document.getElementById("rules-panel-fd-work-clear");
         if (pick) {
-            pick.disabled = projectBusy || pending;
+            pick.disabled = identityState.projectBusy || pending;
             pick.textContent = pending
                 ? "正在打开……"
                 : (identityState.originalName || identityState.selectedLabel ? "更换案件" : "选择案件");
         }
         if (clear) {
-            clear.disabled = projectBusy || pending;
+            clear.disabled = identityState.projectBusy || pending;
             clear.hidden = !(identityState.selectionProof || identityState.originalBound);
         }
         return {
             pending: pending,
             hasName: identityEnabled()
                 ? !!(identityState.selectionProof
-                    || (App.rulesPanelEditingProjectId && identityState.originalName))
+                    || (identityState.editingProjectId && identityState.originalName))
                 : true
         };
     }
@@ -387,6 +418,7 @@
 
     App.projectIdentity = Object.freeze({
         bindEvents: bindIdentityEvents,
+        bindHost: bindIdentityHost,
         buildSavePayload: buildIdentitySave,
         enabled: identityEnabled,
         prepareEditor: prepareIdentityEditor,
