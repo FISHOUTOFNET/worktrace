@@ -391,9 +391,6 @@
         trapFocus(event, drawer.querySelector(".drawer"));
     });
 
-    applyStaticConciseCopy();
-    document.addEventListener("DOMContentLoaded", function () {
-        applyConciseCopyPolicy();
-        installConciseCopyObservers();
-    });
+    applyConciseCopyPolicy();
+    installConciseCopyObservers();
 })();
