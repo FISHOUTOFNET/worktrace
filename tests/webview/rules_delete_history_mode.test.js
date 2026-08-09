@@ -48,20 +48,21 @@ function harness(choice) {
   return { App, getDialogOptions: () => dialogOptions, deleteCalls };
 }
 
-test("rule delete dialog offers only preserve history and restore original state", async () => {
+test("rule delete dialog offers only preserve history and treat-rule-as-absent choices", async () => {
   const { App, getDialogOptions } = harness(false);
 
   await App.openProjectRuleDeleteModal("keyword", 7, null);
 
   const options = getDialogOptions();
   assert.ok(options);
+  assert.equal(options.warning, "如何处理已有归类？");
   assert.equal(options.choices.length, 2);
   assert.equal(options.choices[0].value, "preserve");
   assert.equal(options.choices[0].label, "保留已有归类");
+  assert.equal(options.choices[0].description, undefined);
   assert.equal(options.choices[1].value, "restore");
-  assert.equal(options.choices[1].label, "恢复原状");
-  assert.match(options.choices[1].description, /视同这条规则从未存在/);
-  assert.match(options.choices[1].description, /按其他现有规则重新归类/);
+  assert.equal(options.choices[1].label, "视同规则不存在");
+  assert.equal(options.choices[1].description, undefined);
 });
 
 test("preserve history deletes the rule without historical reinference", async () => {
@@ -71,15 +72,15 @@ test("preserve history deletes the rule without historical reinference", async (
 
   assert.equal(ok, true);
   assert.deepEqual(deleteCalls, [["keyword", 7, false]]);
-  assert.match(App.lastToast, /已有历史归类保持不变/);
+  assert.equal(App.lastToast, "规则已删除");
 });
 
-test("restore original state deletes the rule and requests normal historical reinference", async () => {
+test("treat-rule-as-absent still requests normal historical reinference", async () => {
   const { App, deleteCalls } = harness("restore");
 
   const ok = await App.openProjectRuleDeleteModal("folder", 3, null);
 
   assert.equal(ok, true);
   assert.deepEqual(deleteCalls, [["folder", 3, true]]);
-  assert.match(App.lastToast, /按其余规则恢复/);
+  assert.equal(App.lastToast, "规则已删除");
 });
