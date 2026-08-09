@@ -83,6 +83,19 @@ def test_fd_work_status_owner_notifies_host_instead_of_pages() -> None:
     assert "App.projectIdentity.syncStatus" in composition
 
 
+def test_settings_presentation_does_not_coordinate_timeline_or_restore_prefixes() -> None:
+    source = read_js("settings.js")
+    fd_work_toggle = func_body(source, "renderFDWorkToggle")
+    status = func_body(source, "renderSettingsStatus")
+
+    assert "App.updateFDWorkEntryButton" not in fd_work_toggle
+    assert 'status.export_path_configured ? "已配置" : "未配置"' in status
+    assert 'noticeStatus.textContent = accepted ? "已确认" : "未确认"' in status
+    assert "导出目录：已配置" not in status
+    assert "导出目录：未配置" not in status
+    assert "隐私说明：" not in status
+
+
 def test_fd_work_copy_is_concise_at_its_owner_boundary() -> None:
     source = read_js("fd_work_v5.js")
 
