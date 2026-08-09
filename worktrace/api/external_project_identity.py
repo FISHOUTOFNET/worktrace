@@ -104,14 +104,16 @@ class OptionalProjectIdentityCapability:
         external_identity_proof: str | None,
     ) -> dict[str, Any]:
         if external_identity_proof is not None:
-            return self._external_result(
-                self._external.create_bound_project(
+            try:
+                external_result = self._external.create_bound_project(
                     name,
                     description,
                     language,
                     external_identity_proof,
                 )
-            )
+            except Exception as exc:
+                return self._coded_external_failure(exc)
+            return self._external_result(external_result)
         result = self._create_project(name, description, language)
         if result.get("ok") is True:
             result["external_identity_binding"] = {"bound": False}
@@ -126,15 +128,17 @@ class OptionalProjectIdentityCapability:
         external_identity_proof: str | None,
     ) -> dict[str, Any]:
         if external_identity_proof is not None:
-            return self._external_result(
-                self._external.rebind_project(
+            try:
+                external_result = self._external.rebind_project(
                     int(project_id),
                     name,
                     description,
                     language,
                     external_identity_proof,
                 )
-            )
+            except Exception as exc:
+                return self._coded_external_failure(exc)
+            return self._external_result(external_result)
 
         current = self._project_reader(int(project_id))
         was_bound = self._is_bound(int(project_id))
@@ -177,6 +181,13 @@ class OptionalProjectIdentityCapability:
             return project_id in self._external.list_bound_project_ids()
         except Exception:
             return False
+
+    @staticmethod
+    def _coded_external_failure(exc: Exception) -> dict[str, Any]:
+        code = getattr(exc, "code", None)
+        if isinstance(code, str) and code:
+            return {"ok": False, "error": code}
+        raise exc
 
     @staticmethod
     def _external_result(result: dict[str, Any]) -> dict[str, Any]:
