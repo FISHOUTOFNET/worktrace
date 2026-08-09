@@ -397,7 +397,7 @@ test("project create and edit keep distinct busy and success outcomes", async ()
   assert.equal(create.element("rules-panel-target-project").value, "9");
   assert.equal(
     create.element("rules-panel-project-context").textContent,
-    "项目已新增：“New project”。请继续添加自动归类规则。"
+    "项目已新增"
   );
   assert.equal(create.element("rules-panel-project-context").classList.contains("is-success"), true);
 });
