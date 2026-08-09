@@ -153,7 +153,7 @@ test("explicit picker click opens once and disables the button while pending", a
   assert.equal(calls.picker.length, 1);
   assert.equal(element("rules-panel-fd-work-pick").disabled, true);
   await tick();
-  assert.match(element("rules-panel-fd-work-status").textContent, /原生案件框/);
+  assert.equal(element("rules-panel-fd-work-status").textContent, "请在 FD Work 中选择案件");
 });
 
 test("picker result must match the current Drawer request and writes shared name", async () => {
@@ -193,7 +193,8 @@ test("manual editing after picker selection intentionally creates a local projec
   App.savePanelProject();
 
   assert.deepEqual(calls.create[0], ["Manual project", "", "中文", null]);
-  assert.match(element("rules-panel-fd-work-status").textContent, /本地项目/);
+  assert.equal(element("rules-panel-fd-work-status").textContent, "");
+  assert.equal(element("rules-panel-fd-work-status").hidden, true);
 });
 
 test("FD Work create success waits for verified binding and project-list readback", async () => {
