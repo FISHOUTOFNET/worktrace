@@ -10,6 +10,7 @@ from worktrace.api.application_lifecycle import ApplicationDataLifecycle
 from worktrace.api.application_capabilities import (
     BackupApplicationService,
     OverviewApplicationService,
+    ProjectCatalogApplicationService,
     RulesApplicationService,
     SettingsApplicationService,
     StatisticsApplicationService,
@@ -736,6 +737,7 @@ def build_test_application_services(
         ),
         backup=backup if backup is not None else BackupApplicationService(data_lifecycle),
         statistics=statistics if statistics is not None else StatisticsApplicationService(),
+        projects=ProjectCatalogApplicationService(project_identity=local_identity),
         timeline=timeline if timeline is not None else TimelineApplicationService(),
         fd_work=fd_work if fd_work is not None else FakeFDWorkCapability(),
         rules=(
