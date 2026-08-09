@@ -28,17 +28,15 @@
             trigger: trigger,
             title: "删除规则",
             objectLabel: kind === "folder" ? "当前文件夹规则" : "当前关键词规则",
-            warning: "删除后，该规则将不再用于新的自动归类。请选择如何处理它已经产生的历史归类。",
+            warning: "如何处理已有归类？",
             choices: [
                 {
                     value: "preserve",
-                    label: "保留已有归类",
-                    description: "删除规则，但保留现有历史归类。"
+                    label: "保留已有归类"
                 },
                 {
                     value: "restore",
-                    label: "恢复原状",
-                    description: "视同这条规则从未存在，按其他现有规则重新归类；没有匹配时为“未归类”。"
+                    label: "视同规则不存在"
                 }
             ],
             defaultChoice: "preserve",
@@ -66,9 +64,7 @@
             }
             return App.loadProjectRules().then(function () {
                 App.clearRulesError();
-                if (App.showToast) App.showToast(restoreHistory
-                    ? "规则已删除，历史归类已按其余规则恢复"
-                    : "规则已删除，已有历史归类保持不变");
+                if (App.showToast) App.showToast("规则已删除");
                 return true;
             });
         }).catch(function () {
