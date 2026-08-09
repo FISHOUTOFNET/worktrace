@@ -20,6 +20,7 @@
             .concat(rules.map(function (rule) { return (rule.target || "") + " " + visibleRuleDetail(rule); }))
             .join(" ").toLocaleLowerCase();
         var projectDescription = String((project && project.description) || "").trim();
+        var lastUsedAt = String((project && project.last_used_at) || "").trim();
         return '<article class="rules-project-card" data-project-id="' + count(id)
             + '" data-rules-search="' + text(searchable, "") + '">'
             + '<div class="rules-project-head">'
@@ -28,8 +29,10 @@
             + App.iconMarkup("chevron-right") + '</button>'
             + '<div class="rules-project-title-group"><div class="rules-project-title">'
             + text(project && project.name, "未命名项目") + '</div>'
-            + '<div class="rules-project-description' + (projectDescription ? "" : " is-empty") + '">'
-            + text(projectDescription || "无描述", "无描述") + '</div></div>'
+            + (projectDescription
+                ? '<div class="rules-project-description">' + text(projectDescription, "") + '</div>'
+                : '')
+            + '</div>'
             + '<div class="rules-project-side"><div class="rules-project-actions">'
             + '<button class="rules-project-add-rule-button icon-button compact-icon-button inline-icon-button" type="button" data-project-id="' + count(id)
             + '" aria-label="新建规则" data-tooltip="新建规则">' + App.iconMarkup("plus") + '</button>'
@@ -37,9 +40,11 @@
             + '" aria-label="编辑项目" data-tooltip="编辑项目">' + App.iconMarkup("pencil") + '</button>'
             + '<button class="rules-project-delete-button icon-button compact-icon-button inline-icon-button danger-icon-button" type="button" data-project-id="' + count(id)
             + '" aria-label="删除项目" data-tooltip="删除项目">' + App.iconMarkup("trash") + '</button>'
-            + '</div><div class="rules-project-meta"><span>上次使用：'
-            + text(project && project.last_used_at, "暂无使用记录")
-            + '</span></div></div></div><div class="rules-row-list" hidden>' + rows + '</div></article>';
+            + '</div>'
+            + (lastUsedAt
+                ? '<div class="rules-project-meta"><span>上次使用：' + text(lastUsedAt, "") + '</span></div>'
+                : '')
+            + '</div></div><div class="rules-row-list" style="overflow:visible" hidden>' + rows + '</div></article>';
     }
     App.renderProjectRuleProject = renderProjectRuleProject;
 
@@ -49,9 +54,9 @@
         var detail = visibleRuleDetail(rule);
         return '<div class="rules-row"><span class="rules-kind-badge rules-kind-' + ruleKind + '">'
             + text(rule && rule.kind_label, "规则") + '</span><div class="rules-row-main"><div class="rules-target">'
-            + text(rule && rule.target, "未设置") + '</div>'
-            + (detail ? '<div class="rules-detail">' + text(detail, "") + '</div>' : '')
-            + '</div><button class="rules-' + ruleKind + '-delete-button icon-button compact-icon-button danger-icon-button" type="button" data-rule-kind="'
+            + text(rule && rule.target, "未设置")
+            + (detail ? '<span class="rules-detail"> · ' + text(detail, "") + '</span>' : '')
+            + '</div></div><button class="rules-' + ruleKind + '-delete-button icon-button compact-icon-button danger-icon-button" type="button" data-rule-kind="'
             + ruleKind + '" data-rule-id="' + count(id) + '" aria-label="删除规则" data-tooltip="删除规则">'
             + App.iconMarkup("trash") + '</button></div>';
     }
