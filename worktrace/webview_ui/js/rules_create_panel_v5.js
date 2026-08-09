@@ -154,8 +154,7 @@
         clearPanelStatus();
         if (panel && App.openManagedDrawer) {
             var focus = document.getElementById(mode === "project"
-                ? (App.projectIdentity.enabled()
-                    ? "rules-panel-fd-work-pick" : "rules-panel-project-name")
+                ? "rules-panel-project-name"
                 : "rules-panel-choose-folder");
             App.openManagedDrawer(
                 panel,
