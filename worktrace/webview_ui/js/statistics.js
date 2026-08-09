@@ -393,6 +393,16 @@
     }
     App.populateStatisticsProjectFilter = populateProjectFilter;
 
+    function loadStatisticsProjectCatalog() {
+        if (!App.projectCatalog) return Promise.resolve(null);
+        return App.projectCatalog.load().then(function (catalog) {
+            if (!catalog) return null;
+            populateProjectFilter(catalog.filterProjects);
+            return catalog;
+        });
+    }
+    App.loadStatisticsProjectCatalog = loadStatisticsProjectCatalog;
+
     function initStatisticsDefaults() {
         currentSelection();
         syncStatisticsSelection();
@@ -415,7 +425,7 @@
                         element(ids[2]).setAttribute("aria-selected", "false"); element(ids[3]).hidden = true;
                     });
                 });
-            if (App.loadProjects) App.loadProjects().then(populateProjectFilter);
+            loadStatisticsProjectCatalog();
         }
     }
     App.initStatisticsDefaults = initStatisticsDefaults;
