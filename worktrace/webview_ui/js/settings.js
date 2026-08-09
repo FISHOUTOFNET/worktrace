@@ -291,9 +291,6 @@
             reconnect.textContent = fdWork.session_state === "error"
                 ? "重新连接" : "登录 FD Work";
         }
-        if (typeof App.updateFDWorkEntryButton === "function") {
-            App.updateFDWorkEntryButton();
-        }
     }
     App.renderFDWorkToggle = renderFDWorkToggle;
 
@@ -328,7 +325,7 @@
         renderFDWorkToggle(status);
         setLineText(
             "export_path_configured",
-            status.export_path_configured ? "导出目录：已配置" : "导出目录：未配置"
+            status.export_path_configured ? "已配置" : "未配置"
         );
         setLineText(
             "maintenance_in_progress",
@@ -389,7 +386,7 @@
             && status.first_run_notice.accepted
         );
         var noticeStatus = element("settings-privacy-notice-status");
-        if (noticeStatus) noticeStatus.textContent = "隐私说明：" + (accepted ? "已确认" : "未确认");
+        if (noticeStatus) noticeStatus.textContent = accepted ? "已确认" : "未确认";
         var statusEl = element("settings-status");
         if (statusEl) statusEl.hidden = false;
     }
