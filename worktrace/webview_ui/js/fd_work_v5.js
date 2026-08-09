@@ -393,20 +393,15 @@
     }
 
     function verifyIdentityPersistence(result, saved, project) {
+        if (identityState.saveIntent !== "external") return true;
         if (!saved
             || String(saved.name || "") !== String(project && project.name || "")) {
             return false;
         }
         var binding = (result && result.fd_work_binding) || {};
-        if (identityState.saveIntent === "external") {
-            return binding.bound === true
-                && binding.verified === true
-                && saved.fd_work_bound === true;
-        }
-        if (identityState.saveIntent === "preserve") {
-            return saved.fd_work_bound === true;
-        }
-        return saved.fd_work_bound !== true && binding.bound !== true;
+        return binding.bound === true
+            && binding.verified === true
+            && saved.fd_work_bound === true;
     }
 
     function syncIdentityStatus() {
