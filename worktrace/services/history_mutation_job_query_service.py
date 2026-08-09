@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from .rule_catalog_command_service import RuleRef
+from .rule_catalog_contracts import RuleRef
 
 _ACTIVE_STATUSES = ("pending", "running")
 
