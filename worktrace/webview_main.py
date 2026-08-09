@@ -50,7 +50,10 @@ def desktop_resource_path(relative: str) -> Path:
 
 
 def _versioned_resource_url(path: Path) -> str:
-    revision = sha256(path.read_bytes()).hexdigest()[:16]
+    canonical_text = (
+        path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    )
+    revision = sha256(canonical_text.encode("utf-8")).hexdigest()[:16]
     return f"{path}?v={revision}"
 
 

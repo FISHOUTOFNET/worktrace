@@ -15,7 +15,10 @@ INDEX = UI_ROOT / "index_fd_work_v5.html"
 
 
 def _revision(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    canonical_text = (
+        path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    )
+    return hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()[:16]
 
 
 def _local_assets(source: str) -> list[str]:
