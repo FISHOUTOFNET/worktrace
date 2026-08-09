@@ -7,10 +7,10 @@ from ..api.application_services import ApplicationServices
 from .bridge_dialogs import BridgeDialogMixin
 from .bridge_fd_work import FDWorkBridgeMixin
 from .bridge_overview import OverviewBridgeMixin
+from .bridge_project_identity_timeline import ProjectIdentityTimelineBridgeMixin
 from .bridge_rules import ProjectRulesBridgeMixin
 from .bridge_settings import SettingsBridgeMixin
 from .bridge_statistics import StatisticsBridgeMixin
-from .bridge_timeline import TimelineBridgeMixin
 
 SHIPPING_METHODS = frozenset(
     {
@@ -63,7 +63,7 @@ class WebViewBridge(
     OverviewBridgeMixin,
     SettingsBridgeMixin,
     StatisticsBridgeMixin,
-    TimelineBridgeMixin,
+    ProjectIdentityTimelineBridgeMixin,
     ProjectRulesBridgeMixin,
 ):
     """Internal bridge controller with explicitly composed API capabilities."""
