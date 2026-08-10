@@ -26,6 +26,8 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 UsedUserAreasWarning=no
 UsePreviousTasks=no
+CloseApplications=yes
+RestartApplications=no
 
 [Tasks]
 Name: startup; Description: "登录 Windows 时自动启动 WorkTrace"; GroupDescription: "启动选项："; Flags: unchecked
