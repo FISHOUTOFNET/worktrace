@@ -13,6 +13,7 @@ const fixturePath = join(
   "fd_work",
   "anonymous_work_shell.html"
 );
+const MAX_ATTEMPTS = 2;
 
 function environmentValue(name) {
   const match = Object.keys(process.env).find(
@@ -227,6 +228,78 @@ async function readFixtureResult(profile) {
   }
 }
 
+async function runAttempt(edge) {
+  const profile = mkdtempSync(join(tmpdir(), "worktrace-fdwork-edge-"));
+  let child = null;
+  let childExited = false;
+  let launchError = null;
+  let stderr = "";
+  try {
+    child = spawn(edge, [
+      "--headless=new",
+      "--disable-gpu",
+      "--disable-extensions",
+      "--disable-background-mode",
+      "--disable-background-networking",
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
+      "--disable-component-update",
+      "--disable-sync",
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--allow-file-access-from-files",
+      `--user-data-dir=${profile}`,
+      "--remote-debugging-port=0",
+      "about:blank",
+    ], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+    child.once("error", (error) => { launchError = error; });
+    child.once("close", () => { childExited = true; });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr = (stderr + chunk).slice(-1024 * 1024);
+    });
+    const result = await withDeadline(
+      readFixtureResult(profile),
+      30000,
+      "edge_timeout"
+    );
+    return { result, error: "", detail: "" };
+  } catch (error) {
+    const code = launchError
+      ? "edge_launch_failed"
+      : String(error && error.message || "edge_fixture_failed");
+    return {
+      result: null,
+      error: code,
+      detail: launchError ? String(launchError.code || "") : `stderr_${stderr.length}`,
+    };
+  } finally {
+    terminateOwnedEdge(profile);
+    if (child && !childExited) terminateProcessTree(child.pid);
+    const resolvedProfile = resolve(profile);
+    const resolvedTemporaryRoot = resolve(tmpdir());
+    if (resolvedProfile.startsWith(`${resolvedTemporaryRoot}\\`)) {
+      try {
+        rmSync(resolvedProfile, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 100,
+        });
+      } catch (_error) {
+        if (existsSync(resolvedProfile)) {
+          return {
+            result: null,
+            error: "edge_cleanup_failed",
+            detail: String(_error && _error.code || ""),
+          };
+        }
+      }
+    }
+  }
+}
+
 if (!existsSync(fixturePath)) {
   fail("fixture_missing");
 } else {
@@ -234,69 +307,20 @@ if (!existsSync(fixturePath)) {
   if (!edge) {
     fail("edge_unavailable", "Microsoft Edge executable was not found");
   } else {
-    const profile = mkdtempSync(join(tmpdir(), "worktrace-fdwork-edge-"));
-    let child = null;
-    let childExited = false;
-    let launchError = null;
-    try {
-      child = spawn(edge, [
-        "--headless=new",
-        "--disable-gpu",
-        "--disable-extensions",
-        "--disable-background-mode",
-        "--disable-background-networking",
-        "--disable-background-timer-throttling",
-        "--disable-backgrounding-occluded-windows",
-        "--disable-renderer-backgrounding",
-        "--disable-component-update",
-        "--disable-sync",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--allow-file-access-from-files",
-        `--user-data-dir=${profile}`,
-        "--remote-debugging-port=0",
-        "about:blank",
-      ], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
-      child.once("error", (error) => { launchError = error; });
-      child.once("close", () => { childExited = true; });
-      let stderr = "";
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("data", (chunk) => {
-        stderr = (stderr + chunk).slice(-1024 * 1024);
-      });
-      try {
-        const result = await withDeadline(
-          readFixtureResult(profile),
-          30000,
-          "edge_timeout"
-        );
-        process.stdout.write(`${JSON.stringify(result)}\n`);
-        if (result.ok !== true) process.exitCode = 1;
-      } catch (error) {
-        const code = launchError
-          ? "edge_launch_failed"
-          : String(error && error.message || "edge_fixture_failed");
-        fail(code, launchError ? String(launchError.code || "") : `stderr_${stderr.length}`);
-      }
-    } finally {
-      terminateOwnedEdge(profile);
-      if (child && !childExited) terminateProcessTree(child.pid);
-      const resolvedProfile = resolve(profile);
-      const resolvedTemporaryRoot = resolve(tmpdir());
-      if (resolvedProfile.startsWith(`${resolvedTemporaryRoot}\\`)) {
-        try {
-          rmSync(resolvedProfile, {
-            recursive: true,
-            force: true,
-            maxRetries: 3,
-            retryDelay: 100,
-          });
-        } catch (_error) {
-          if (existsSync(resolvedProfile) && !process.exitCode) {
-            fail("edge_cleanup_failed", String(_error && _error.code || ""));
-          }
-        }
-      }
+    let finalOutcome = null;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+      const outcome = await runAttempt(edge);
+      finalOutcome = outcome;
+      if (outcome.result && outcome.result.ok === true) break;
+    }
+    if (finalOutcome && finalOutcome.result) {
+      process.stdout.write(`${JSON.stringify(finalOutcome.result)}\n`);
+      if (finalOutcome.result.ok !== true) process.exitCode = 1;
+    } else {
+      fail(
+        finalOutcome && finalOutcome.error || "edge_fixture_failed",
+        finalOutcome && finalOutcome.detail || ""
+      );
     }
   }
 }
