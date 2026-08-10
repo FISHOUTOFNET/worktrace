@@ -332,6 +332,133 @@ jobs:
             throw "dist\WorkTrace-Setup.exe was not generated"
           }
 
+      - name: Exercise installer upgrade runtime path
+        shell: pwsh
+        run: |
+          $setup = (Resolve-Path -LiteralPath "dist\WorkTrace-Setup.exe").Path
+          $installDir = Join-Path $env:RUNNER_TEMP "worktrace-installer-smoke"
+          $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+          $uninstaller = Join-Path $installDir "unins000.exe"
+          $expectedStartup = '"' + (Join-Path $installDir "WorkTrace.exe") + '" --background'
+
+          function Invoke-CheckedProcess {
+            param(
+              [Parameter(Mandatory = $true)][string]$FilePath,
+              [Parameter(Mandatory = $true)][string[]]$Arguments,
+              [Parameter(Mandatory = $true)][string]$Phase
+            )
+            $process = Start-Process `
+              -FilePath $FilePath `
+              -ArgumentList $Arguments `
+              -WindowStyle Hidden `
+              -Wait `
+              -PassThru
+            if ($process.ExitCode -ne 0) {
+              throw "$Phase exited with code $($process.ExitCode)"
+            }
+          }
+
+          if (Test-Path -LiteralPath $installDir) {
+            Remove-Item -Recurse -Force -LiteralPath $installDir
+          }
+          Remove-ItemProperty `
+            -Path $runKey `
+            -Name "WorkTrace" `
+            -ErrorAction SilentlyContinue
+
+          try {
+            Invoke-CheckedProcess `
+              -FilePath $setup `
+              -Phase "First install" `
+              -Arguments @(
+                "/VERYSILENT",
+                "/SUPPRESSMSGBOXES",
+                "/NORESTART",
+                "/CURRENTUSER",
+                "/SP-",
+                "/DIR=`"$installDir`"",
+                "/TASKS=`"startup`""
+              )
+
+            $firstStartup = Get-ItemPropertyValue `
+              -Path $runKey `
+              -Name "WorkTrace" `
+              -ErrorAction Stop
+            if ($firstStartup -ne $expectedStartup) {
+              throw "First install wrote unexpected startup value: $firstStartup"
+            }
+
+            Set-ItemProperty `
+              -Path $runKey `
+              -Name "WorkTrace" `
+              -Value '"C:\legacy\WorkTrace.exe" --background'
+
+            Invoke-CheckedProcess `
+              -FilePath $setup `
+              -Phase "Upgrade install" `
+              -Arguments @(
+                "/VERYSILENT",
+                "/SUPPRESSMSGBOXES",
+                "/NORESTART",
+                "/CURRENTUSER",
+                "/SP-",
+                "/DIR=`"$installDir`""
+              )
+
+            $upgradedStartup = Get-ItemPropertyValue `
+              -Path $runKey `
+              -Name "WorkTrace" `
+              -ErrorAction Stop
+            if ($upgradedStartup -ne $expectedStartup) {
+              throw "Upgrade did not preserve enabled startup state: $upgradedStartup"
+            }
+
+            if (-not (Test-Path -LiteralPath $uninstaller)) {
+              throw "Installer smoke uninstaller was not generated"
+            }
+            Invoke-CheckedProcess `
+              -FilePath $uninstaller `
+              -Phase "Uninstall" `
+              -Arguments @(
+                "/VERYSILENT",
+                "/SUPPRESSMSGBOXES",
+                "/NORESTART"
+              )
+
+            $remainingStartup = Get-ItemPropertyValue `
+              -Path $runKey `
+              -Name "WorkTrace" `
+              -ErrorAction SilentlyContinue
+            if ($null -ne $remainingStartup) {
+              throw "Uninstall left WorkTrace startup value behind"
+            }
+          }
+          finally {
+            if (Test-Path -LiteralPath $uninstaller) {
+              Start-Process `
+                -FilePath $uninstaller `
+                -ArgumentList @(
+                  "/VERYSILENT",
+                  "/SUPPRESSMSGBOXES",
+                  "/NORESTART"
+                ) `
+                -WindowStyle Hidden `
+                -Wait `
+                -ErrorAction SilentlyContinue
+            }
+            Remove-ItemProperty `
+              -Path $runKey `
+              -Name "WorkTrace" `
+              -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $installDir) {
+              Remove-Item `
+                -Recurse `
+                -Force `
+                -LiteralPath $installDir `
+                -ErrorAction SilentlyContinue
+            }
+          }
+
       - name: Upload release smoke artifacts
         if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v6
