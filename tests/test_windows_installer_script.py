@@ -47,12 +47,25 @@ def test_startup_task_writes_only_hkcu_and_is_uninstall_cleaned() -> None:
 def test_upgrade_task_selection_preserves_actual_registry_choice() -> None:
     source = ISS_PATH.read_text(encoding="utf-8")
     assert "IsUpgradeInstall" in source
-    assert "ExistingStartupMatchesInstall" in source
+    assert "ExistingStartupEnabled" in source
     assert "RegQueryStringValue" in source
     assert "WizardSelectTasks('startup')" in source
     assert "WizardSelectTasks('!startup')" in source
-    assert "CompareText" in source
     assert "UsePreviousTasks=no" in source
+
+
+def test_startup_state_detection_does_not_depend_on_app_constant() -> None:
+    source = ISS_PATH.read_text(encoding="utf-8")
+    helper_start = source.index("function ExistingStartupEnabled")
+    helper_end = source.index("procedure InitializeWizard", helper_start)
+    helper = source[helper_start:helper_end]
+
+    assert "RegQueryStringValue" in helper
+    assert "Trim(ExistingValue) <> ''" in helper
+    assert "{app}" not in helper
+    assert "ExpandConstant" not in helper
+    assert "ExpectedValue" not in helper
+    assert "CompareText" not in helper
 
 
 def test_first_postinstall_launch_is_visible_normal_mode() -> None:
