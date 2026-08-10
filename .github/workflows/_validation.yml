@@ -426,10 +426,12 @@ jobs:
                 "/NORESTART"
               )
 
-            $remainingStartup = Get-ItemPropertyValue `
-              -Path $runKey `
-              -Name "WorkTrace" `
-              -ErrorAction SilentlyContinue
+            $remainingStartup = (
+              Get-ItemProperty `
+                -Path $runKey `
+                -Name "WorkTrace" `
+                -ErrorAction SilentlyContinue
+            ).WorkTrace
             if ($null -ne $remainingStartup) {
               throw "Uninstall left WorkTrace startup value behind"
             }
