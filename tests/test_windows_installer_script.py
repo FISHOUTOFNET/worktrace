@@ -142,3 +142,15 @@ def test_ci_waits_for_inno_setup_bootstrap_before_using_iscc() -> None:
     assert "Start-Process" in workflow
     assert "-Wait" in workflow
     assert "ExitCode" in workflow
+
+
+def test_ci_exercises_installer_upgrade_runtime_path() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "_validation.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "Exercise installer upgrade runtime path" in workflow
+    assert "worktrace-installer-smoke" in workflow
+    assert '"C:\\legacy\\WorkTrace.exe" --background' in workflow
+    assert '"Upgrade install"' in workflow
+    assert "unins000.exe" in workflow
+    assert "Get-ItemPropertyValue" in workflow
