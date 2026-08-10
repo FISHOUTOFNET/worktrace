@@ -10,6 +10,7 @@ pytestmark = [pytest.mark.packaging, pytest.mark.contract, pytest.mark.serial]
 ROOT = Path(__file__).resolve().parents[1]
 ISS_PATH = ROOT / "installer" / "WorkTrace.iss"
 BUILD_PATH = ROOT / "scripts" / "build_windows_installer.ps1"
+RELEASE_BUILD_PATH = ROOT / "scripts" / "build_windows_release.ps1"
 
 
 def test_inno_setup_is_per_user_and_never_requests_elevation() -> None:
@@ -20,6 +21,12 @@ def test_inno_setup_is_per_user_and_never_requests_elevation() -> None:
     assert "Program Files" not in source
     assert "HKLM" not in source
     assert "[Service]" not in source
+
+
+def test_upgrade_closes_running_app_without_restart_manager_relaunch() -> None:
+    source = ISS_PATH.read_text(encoding="utf-8")
+    assert "CloseApplications=yes" in source
+    assert "RestartApplications=no" in source
 
 
 def test_startup_task_writes_only_hkcu_and_is_uninstall_cleaned() -> None:
@@ -75,6 +82,24 @@ def test_build_script_locates_iscc_and_keeps_output_contract() -> None:
     assert "$LASTEXITCODE" in source
     assert "windows_installer.py" not in source
     assert "PyInstaller" not in source
+
+
+def test_release_build_never_reuses_old_release_artifacts() -> None:
+    source = RELEASE_BUILD_PATH.read_text(encoding="utf-8")
+    assert 'Join-Path $repoRoot "build"' in source
+    assert 'Join-Path $distPath "WorkTrace.exe"' in source
+    assert 'Join-Path $distPath "WorkTrace-Setup.exe"' in source
+    assert "Remove-Item -Recurse -Force -LiteralPath $buildPath" in source
+    assert "foreach ($artifact in @($exePath, $setupPath))" in source
+    assert "Remove-Item -Force -LiteralPath $artifact" in source
+    assert "python -m PyInstaller --noconfirm --clean WorkTrace.spec" in source
+    assert "build_windows_installer.ps1" in source
+    assert source.index("PyInstaller") < source.index("build_windows_installer.ps1")
+    assert "PyInstaller completed without generating dist\\WorkTrace.exe" in source
+    assert (
+        "Installer build completed without generating dist\\WorkTrace-Setup.exe"
+        in source
+    )
 
 
 def test_retired_copy_installer_is_removed() -> None:
