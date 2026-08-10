@@ -152,5 +152,6 @@ def test_ci_exercises_installer_upgrade_runtime_path() -> None:
     assert "worktrace-installer-smoke" in workflow
     assert '"C:\legacy\WorkTrace.exe" --background' in workflow
     assert '"Upgrade install"' in workflow
+    assert workflow.count('/TASKS=`"startup`"') >= 2
     assert "unins000.exe" in workflow
     assert "Get-ItemPropertyValue" in workflow
