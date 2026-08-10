@@ -402,7 +402,8 @@ jobs:
                 "/NORESTART",
                 "/CURRENTUSER",
                 "/SP-",
-                "/DIR=`"$installDir`""
+                "/DIR=`"$installDir`"",
+                "/TASKS=`"startup`""
               )
 
             $upgradedStartup = Get-ItemPropertyValue `
