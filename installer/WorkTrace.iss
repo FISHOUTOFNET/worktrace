@@ -54,28 +54,25 @@ begin
   );
 end;
 
-function ExistingStartupMatchesInstall: Boolean;
+function ExistingStartupEnabled: Boolean;
 var
   ExistingValue: String;
-  ExpectedValue: String;
 begin
   Result := False;
-  if not RegQueryStringValue(
+  if RegQueryStringValue(
     HKCU,
     'Software\Microsoft\Windows\CurrentVersion\Run',
     'WorkTrace',
     ExistingValue
   ) then
-    exit;
-  ExpectedValue := '"' + ExpandConstant('{app}\WorkTrace.exe') + '" --background';
-  Result := CompareText(Trim(ExistingValue), ExpectedValue) = 0;
+    Result := Trim(ExistingValue) <> '';
 end;
 
 procedure InitializeWizard;
 begin
   if not IsUpgradeInstall then
     WizardSelectTasks('startup')
-  else if ExistingStartupMatchesInstall then
+  else if ExistingStartupEnabled then
     WizardSelectTasks('startup')
   else
     WizardSelectTasks('!startup');
