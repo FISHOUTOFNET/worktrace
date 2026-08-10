@@ -92,9 +92,12 @@ def test_release_build_never_reuses_old_release_artifacts() -> None:
     assert "Remove-Item -Recurse -Force -LiteralPath $buildPath" in source
     assert "foreach ($artifact in @($exePath, $setupPath))" in source
     assert "Remove-Item -Force -LiteralPath $artifact" in source
-    assert "python -m PyInstaller --noconfirm --clean WorkTrace.spec" in source
+    pyinstaller_call = "& python -m PyInstaller --noconfirm --clean WorkTrace.spec"
+    installer_call = "& $installerBuilder @installerArgs"
+    assert pyinstaller_call in source
     assert "build_windows_installer.ps1" in source
-    assert source.index("PyInstaller") < source.index("build_windows_installer.ps1")
+    assert installer_call in source
+    assert source.index(pyinstaller_call) < source.index(installer_call)
     assert "PyInstaller completed without generating dist\\WorkTrace.exe" in source
     assert (
         "Installer build completed without generating dist\\WorkTrace-Setup.exe"
