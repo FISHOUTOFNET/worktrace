@@ -8,7 +8,11 @@ import threading
 from ctypes import wintypes
 
 from ..worker_health import WorkerHealthReporter
-from .base import ActiveWindow, ClipboardTextEvent
+from .base import (
+    ActiveWindow,
+    ClipboardTextEvent,
+    PlatformTemporarilyUnavailableError,
+)
 from .windows_clipboard import ClipboardMonitor
 from .windows_path_resolver import WindowsPathResolver, resolve_title_file_path
 
@@ -29,15 +33,39 @@ class WindowsAdapter:
         import win32gui
         import win32process
 
-        hwnd = win32gui.GetForegroundWindow()
-        title = win32gui.GetWindowText(hwnd) or ""
-        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        try:
+            hwnd = int(win32gui.GetForegroundWindow() or 0)
+            if hwnd <= 0:
+                raise PlatformTemporarilyUnavailableError(
+                    "foreground_window_unavailable"
+                )
+            title = win32gui.GetWindowText(hwnd) or ""
+            _, raw_pid = win32process.GetWindowThreadProcessId(hwnd)
+            pid = int(raw_pid)
+            if pid <= 0:
+                raise PlatformTemporarilyUnavailableError(
+                    "foreground_process_unavailable"
+                )
+        except PlatformTemporarilyUnavailableError:
+            raise
+        except Exception as exc:
+            raise PlatformTemporarilyUnavailableError(
+                "active_window_sampling_failed"
+            ) from exc
+
         process_name = "unknown"
         app_name = "unknown"
         try:
             process = psutil.Process(pid)
             process_name = process.name()
             app_name = process_name
+        except ValueError as exc:
+            # psutil rejects invalid PIDs with ValueError rather than psutil.Error.
+            # A foreground window can disappear between Win32 calls, so this is
+            # an observation race, not a Collector invariant failure.
+            raise PlatformTemporarilyUnavailableError(
+                "foreground_process_unavailable"
+            ) from exc
         except psutil.Error:
             pass
 
