@@ -638,75 +638,93 @@ def test_helper_close_terminalizes_blocked_fill_as_window_closed_and_next_fill_r
     }
 
 
-def test_session_starting_close_emits_terminal_cancellation_and_clears_pending_draft():
-    statuses = []
+def test_non_ready_fill_requires_session_without_owning_or_preparing_auth():
     controller = _Controller()
     controller.status.update({
-        "session_state": "idle",
-        "page_phase": "none",
+        "session_state": "login_required",
+        "page_phase": "login_credentials",
         "ready": False,
-    })
-    coordinator, _controller, _adapter = _coordinator(
-        controller=controller,
-        nonces=["auth-nonce", "next-fill"],
-    )
-    coordinator.bind_status_callback(statuses.append)
-
-    assert coordinator.open_entry(_draft()) == {
-        "ok": True,
-        "operation_status": "session_starting",
-    }
-    assert coordinator.get_status()["operation"] == "user_auth"
-
-    controller.publish(
-        session_state="idle", page_phase="none", ready=False,
-        navigation_generation=5,
-    )
-    controller.close_helper()
-
-    assert coordinator.get_status()["operation"] == "none"
-    assert statuses[-1]["operation_status"] == "operation_canceled"
-    assert statuses[-1]["operation_result_owner"] == "automation_fill"
-    assert statuses[-1]["error_code"] == "window_closed"
-
-
-def test_closed_helper_is_prepared_and_pending_fill_resumes_when_ready():
-    class RecoveringController(_Controller):
-        def prepare_session(self, show_login_if_required=True):
-            self.prepare_calls.append(show_login_if_required)
-            self.window = object()
-            self.publish(
-                session_state="ready",
-                page_phase="work_shell",
-                ready=True,
-                login_required=False,
-                navigation_generation=5,
-            )
-            return {"ok": True, "status": self.get_status()}
-
-    controller = RecoveringController()
-    controller.window = None
-    controller.status.update({
-        "session_state": "idle",
-        "page_phase": "none",
-        "ready": False,
-        "navigation_generation": 4,
+        "login_required": True,
     })
     coordinator, _controller, adapter = _coordinator(
         controller=controller,
-        nonces=["auth", "fill"],
+        nonces=["unused"],
     )
 
-    opening = coordinator.open_entry(_draft())
+    result = coordinator.open_entry(_draft())
 
-    assert opening == {"ok": True, "operation_status": "session_starting"}
-    assert controller.prepare_calls == [True]
-    assert coordinator.get_status()["interaction_owner"] == "automation_fill"
-    assert len(controller.scheduled) == 1
-
-    controller.run_scheduled()
-
-    assert len(adapter.fill_calls) == 1
-    assert controller.hide_calls == [(5, 2)]
+    assert result == {"ok": False, "error": "fd_work_not_ready"}
+    assert controller.prepare_calls == []
+    assert controller.scheduled == []
+    assert adapter.fill_calls == []
     assert coordinator.get_status()["interaction_owner"] == "none"
-    assert coordinator.get_status()["ready"] is True
+
+
+def test_pending_picker_auth_error_releases_owner_and_emits_terminal_failure():
+    results = []
+    statuses = []
+    controller = _Controller()
+    controller.status.update({
+        "session_state": "login_required",
+        "page_phase": "login_credentials",
+        "ready": False,
+        "login_required": True,
+    })
+    coordinator, _controller, adapter = _coordinator(
+        controller=controller,
+        results=results,
+        nonces=["auth-nonce", "next-picker"],
+    )
+    coordinator.bind_status_callback(statuses.append)
+
+    opening = coordinator.open_case_picker("drawer-auth")
+    assert opening["operation_status"] == "authentication_required"
+    assert coordinator.get_status()["interaction_owner"] == "user_auth"
+
+    controller.publish(
+        session_state="error",
+        page_phase="error",
+        ready=False,
+        login_required=False,
+        error_code="page_error",
+    )
+
+    assert adapter.enter_picker_calls == []
+    assert coordinator.get_status()["interaction_owner"] == "none"
+    assert results[-1]["request_id"] == "drawer-auth"
+    assert results[-1]["error"] == "page_error"
+    assert statuses[-1]["operation_status"] == "failed"
+    assert statuses[-1]["operation_result_owner"] == "user_picker"
+    assert statuses[-1]["error_code"] == "page_error"
+
+
+def test_standalone_auth_error_releases_owner_for_next_operation():
+    statuses = []
+    controller = _Controller()
+    controller.status.update({
+        "session_state": "login_required",
+        "page_phase": "login_credentials",
+        "ready": False,
+        "login_required": True,
+    })
+    coordinator, _controller, _adapter = _coordinator(
+        controller=controller,
+        nonces=["auth-nonce", "picker-nonce"],
+    )
+    coordinator.bind_status_callback(statuses.append)
+
+    assert coordinator.prepare_session(True)["ok"] is True
+    assert coordinator.get_status()["interaction_owner"] == "user_auth"
+
+    controller.publish(
+        session_state="error",
+        page_phase="error",
+        ready=False,
+        login_required=False,
+        error_code="page_error",
+    )
+
+    assert coordinator.get_status()["interaction_owner"] == "none"
+    assert statuses[-1]["operation_status"] == "failed"
+    assert statuses[-1]["operation_result_owner"] == "user_auth"
+    assert statuses[-1]["error_code"] == "page_error"
