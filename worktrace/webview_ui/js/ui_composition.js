@@ -3,7 +3,18 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    function syncFDWorkConsumers() {
+    function clearSettledFDWorkAuthOverride(status) {
+        if (!status || status.operation !== "none") return;
+        if (["ready", "idle", "error", "disabled", "shutdown"].indexOf(status.session_state) < 0) {
+            return;
+        }
+        var override = App.fdWorkStatusOverride;
+        var reason = String(override && override.reason || "");
+        if (/登录|连接 FD Work/.test(reason)) App.fdWorkStatusOverride = null;
+    }
+
+    function syncFDWorkConsumers(status) {
+        clearSettledFDWorkAuthOverride(status || App.fdWorkStatus);
         if (typeof App.renderFDWorkToggle === "function") {
             App.renderFDWorkToggle(App.lastSettingsStatus || {});
         }
@@ -44,5 +55,5 @@
     if (App.fdWork && typeof App.fdWork.bindStatusHost === "function") {
         App.fdWork.bindStatusHost({ onStatusChanged: syncFDWorkConsumers });
     }
-    if (App.fdWorkStatus) syncFDWorkConsumers();
+    if (App.fdWorkStatus) syncFDWorkConsumers(App.fdWorkStatus);
 })();
