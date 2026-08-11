@@ -224,7 +224,7 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Run WebView Node tests
+      - name: Run WebView Node behavior tests
         run: node --test tests/webview/*.test.js
 
       - name: Run FD Work Edge DOM fixture
@@ -387,6 +387,8 @@ jobs:
             if ($firstStartup -ne $expectedStartup) {
               throw "First install wrote unexpected startup value: $firstStartup"
             }
+
+            & ".\scripts\smoke_installed_launch.ps1" -InstallDir $installDir
 
             Set-ItemProperty `
               -Path $runKey `
