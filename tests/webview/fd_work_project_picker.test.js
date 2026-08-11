@@ -20,14 +20,14 @@ const html = fs.readFileSync(
   "utf8"
 );
 
-test("project Drawer keeps one editable project-name surface with optional picker", () => {
+test("project Drawer keeps one project-name surface and locks it only while picker is pending", () => {
   assert.match(html, /id="rules-panel-project-name"[^>]*type="text"/);
   assert.doesNotMatch(
     fdWorkSource,
     /label\.textContent\s*=\s*enabled\s*\?\s*"FD Work 案件"/
   );
   assert.match(fdWorkSource, /input\.hidden\s*=\s*false/);
-  assert.match(fdWorkSource, /input\.readOnly\s*=\s*false/);
+  assert.match(fdWorkSource, /input\.readOnly\s*=\s*identityState\.pickerPending/);
   assert.match(fdWorkSource, /rules-panel-fd-work-pick/);
 });
 
@@ -64,6 +64,28 @@ test("bound project rename becomes local while unchanged name preserves binding"
   assert.match(saveBuilder, /identityState\.saveIntent\s*=\s*"preserve"/);
   assert.match(saveBuilder, /identityState\.saveIntent\s*=\s*"local"/);
   assert.match(fdWorkSource, /名称已修改，保存后将取消 FD Work 关联/);
+});
+
+test("picker auth and selection presentation follows shared FD Work operation status", () => {
+  const sync = fdWorkSource.slice(
+    fdWorkSource.indexOf("function syncIdentityStatus"),
+    fdWorkSource.indexOf("function updateIdentityControls")
+  );
+  assert.match(sync, /capability\.operation\s*===\s*"user_auth"/);
+  assert.match(sync, /请登录 FD Work/);
+  assert.match(sync, /请确认登录/);
+  assert.match(sync, /capability\.operation\s*===\s*"user_picker"/);
+  assert.match(sync, /请在 FD Work 中选择案件/);
+});
+
+test("disabled or shutdown capability clears project picker transient state", () => {
+  const sync = fdWorkSource.slice(
+    fdWorkSource.indexOf("function syncIdentityStatus"),
+    fdWorkSource.indexOf("function updateIdentityControls")
+  );
+  assert.match(fdWorkSource, /function clearIdentityPickerTransient\(\)/);
+  assert.match(sync, /!enabled\s*\|\|\s*capability\.session_state\s*===\s*"shutdown"/);
+  assert.match(sync, /clearIdentityPickerTransient\(\)/);
 });
 
 test("timeline gate disables local projects before backend fill is invoked", () => {
