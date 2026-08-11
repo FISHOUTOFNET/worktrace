@@ -81,12 +81,9 @@ begin
     Result := Trim(ExistingValue) <> '';
 end;
 
-function WebView2VersionIsPresent(RootKey: HKEY; const Subkey: String): Boolean;
-var
-  Version: String;
+function IsUsableWebView2Version(const Version: String): Boolean;
 begin
   Result :=
-    RegQueryStringValue(RootKey, Subkey, 'pv', Version) and
     (Trim(Version) <> '') and
     (CompareText(Trim(Version), '0.0.0.0') <> 0);
 end;
@@ -94,13 +91,29 @@ end;
 function IsWebView2RuntimeInstalled: Boolean;
 var
   Subkey: String;
+  Version: String;
 begin
+  Result := False;
   Subkey := 'Software\Microsoft\EdgeUpdate\Clients\' + WebView2ClientGuid;
-  Result :=
-    WebView2VersionIsPresent(HKCU, Subkey) or
-    WebView2VersionIsPresent(HKLM32, Subkey);
-  if (not Result) and IsWin64 then
-    Result := WebView2VersionIsPresent(HKLM64, Subkey);
+
+  if RegQueryStringValue(HKCU, Subkey, 'pv', Version) and
+     IsUsableWebView2Version(Version) then
+  begin
+    Result := True;
+    exit;
+  end;
+
+  if RegQueryStringValue(HKLM32, Subkey, 'pv', Version) and
+     IsUsableWebView2Version(Version) then
+  begin
+    Result := True;
+    exit;
+  end;
+
+  if IsWin64 and
+     RegQueryStringValue(HKLM64, Subkey, 'pv', Version) and
+     IsUsableWebView2Version(Version) then
+    Result := True;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
