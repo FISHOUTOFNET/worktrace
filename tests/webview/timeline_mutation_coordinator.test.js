@@ -62,6 +62,7 @@ function harness() {
     splitTimelineSession: bridgeCall("split_timeline_session"),
     copyTimelineSession: bridgeCall("copy_timeline_session"),
     openFDWorkEntry: bridgeCall("open_fd_work_entry"),
+    showFDWorkLogin: bridgeCall("show_fd_work_login"),
   };
   for (const file of ["fd_work_v5.js", "timeline_request_state.js", "timeline.js"]) {
     vm.runInContext(
@@ -663,7 +664,7 @@ test("FD Work bridge receives only current timeline identity and versions", asyn
   let captured = null;
   App.callBridge = (method, ...args) => {
     if (method === "open_fd_work_entry") captured = args;
-    return Promise.resolve({ ok: true, operation_status: "session_starting" });
+    return Promise.resolve({ ok: true, operation_status: "save_completed" });
   };
 
   assert.equal(await App.openFDWorkEntryForSelection(), true);
@@ -691,7 +692,7 @@ test("dirty Timeline waits for accepted autosave and uses refreshed revision", a
     if (method === "open_fd_work_entry") {
       order.push("open");
       openArgs = args;
-      return Promise.resolve({ ok: true, operation_status: "session_starting" });
+      return Promise.resolve({ ok: true, operation_status: "save_completed" });
     }
     return Promise.resolve({ ok: true });
   };
@@ -751,32 +752,43 @@ test("concurrent FD Work clicks reuse one opening request", async () => {
   assert.equal(openCalls, 0);
   await Promise.resolve();
   assert.equal(openCalls, 1);
-  opening.resolve({ ok: true, operation_status: "session_starting" });
+  opening.resolve({ ok: true, operation_status: "save_completed" });
   assert.equal(await first, true);
 });
 
-test("session_starting is accepted pending and helper close immediately ends Timeline busy state", async () => {
+test("login-required fill prepares the shared session and never opens an entry on the first click", async () => {
   const { App, element } = harness();
   configureFDWorkSession(App, element);
-  App.callBridge = (method) => Promise.resolve(method === "open_fd_work_entry"
-    ? { ok: true, operation_status: "session_starting" }
-    : { ok: true });
-
-  assert.equal(await App.openFDWorkEntryForSelection(), true);
-  assert.match(element("fd-work-status").textContent, /正在填入/);
-
   App.receiveFDWorkStatus({
-    supported: true, enabled: true, session_state: "idle", operation: "none",
-    interaction_owner: "none", ready: false, login_required: false,
-    error_code: "window_closed", operation_status: "operation_canceled",
-    operation_result_owner: "automation_fill",
+    supported: true, enabled: true, session_state: "login_required", operation: "none",
+    interaction_owner: "none", ready: false, login_required: true,
+    error_code: "login_required", page_phase: "login_credentials",
     operation_generation: 2, navigation_generation: 5,
   });
+  let loginCalls = 0;
+  let entryCalls = 0;
+  App.callBridge = (method) => {
+    if (method === "show_fd_work_login") {
+      loginCalls += 1;
+      return Promise.resolve({
+        ok: true,
+        capability_status: {
+          supported: true, enabled: true, session_state: "login_required",
+          operation: "user_auth", interaction_owner: "user_auth",
+          ready: false, login_required: true, error_code: "login_required",
+          page_phase: "login_credentials", operation_generation: 3,
+          navigation_generation: 5,
+        },
+      });
+    }
+    if (method === "open_fd_work_entry") entryCalls += 1;
+    return Promise.resolve({ ok: true });
+  };
 
-  assert.equal(App.fdWorkOpenPromise, null);
-  assert.doesNotMatch(element("fd-work-status").textContent, /正在填入|已保存/);
-  assert.match(element("fd-work-status").textContent, /已取消|关闭/);
-  assert.equal(element("fd-work-entry-btn").disabled, false);
+  assert.equal(await App.openFDWorkEntryForSelection(), false);
+  assert.equal(loginCalls, 1);
+  assert.equal(entryCalls, 0);
+  assert.match(element("fd-work-status").textContent, /登录/);
 });
 
 test("automation fill terminal status shows saved only for explicit save_completed", () => {
@@ -894,14 +906,15 @@ test("closed idle helper remains actionable so the next fill can prepare it", ()
   App.updateFDWorkEntryButton();
 
   assert.equal(availability.state, "ready");
-  assert.match(availability.reason, /自动连接/);
+  assert.match(availability.reason, /先打开 FD Work|连接 FD Work/);
   assert.equal(element("fd-work-entry-btn").disabled, false);
 });
 
 test("FD Work lifecycle failures have distinct actionable Chinese messages", () => {
   const { App, element } = harness();
+  configureFDWorkSession(App, element);
   const cases = [
-    ["login_required", null, /请先登录/],
+    ["login_required", null, /先打开 FD Work|登录/],
     ["error", "renderer_unavailable", /WebView2 不可用/],
     ["error", "session_start_timeout", /连接超时/],
     ["error", "page_contract_changed", /页面不可用/],
@@ -927,7 +940,7 @@ test("FD Work stale response refreshes and retries exactly once with latest sess
     calls.push(args);
     return Promise.resolve(calls.length === 1
       ? { ok: false, error: "stale_selection", message: "stale" }
-      : { ok: true, operation_status: "session_starting" });
+      : { ok: true, operation_status: "save_completed" });
   };
   App.loadTimelineReport = () => {
     refreshes += 1;
