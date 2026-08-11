@@ -51,6 +51,11 @@ Root: HKCU; Subkey: "Software\WorkTrace\InstallBootstrap"; ValueType: none; Valu
 Filename: "{app}\{#MyAppExeName}"; Description: "启动 WorkTrace"; Flags: nowait postinstall skipifsilent
 
 [Code]
+const
+  WebView2ClientGuid = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+  WebView2BootstrapperUrl = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703';
+  WebView2BootstrapperName = 'MicrosoftEdgeWebview2Setup.exe';
+
 var
   FDWorkNotice: TNewStaticText;
 
@@ -74,6 +79,82 @@ begin
     ExistingValue
   ) then
     Result := Trim(ExistingValue) <> '';
+end;
+
+function WebView2VersionIsPresent(RootKey: Integer; const Subkey: String): Boolean;
+var
+  Version: String;
+begin
+  Result :=
+    RegQueryStringValue(RootKey, Subkey, 'pv', Version) and
+    (Trim(Version) <> '') and
+    (CompareText(Trim(Version), '0.0.0.0') <> 0);
+end;
+
+function IsWebView2RuntimeInstalled: Boolean;
+var
+  Subkey: String;
+begin
+  Subkey := 'Software\Microsoft\EdgeUpdate\Clients\' + WebView2ClientGuid;
+  Result :=
+    WebView2VersionIsPresent(HKCU, Subkey) or
+    WebView2VersionIsPresent(HKLM32, Subkey);
+  if (not Result) and IsWin64 then
+    Result := WebView2VersionIsPresent(HKLM64, Subkey);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  BootstrapperPath: String;
+  ResultCode: Integer;
+begin
+  Result := '';
+  if IsWebView2RuntimeInstalled then
+  begin
+    Log('WebView2 Runtime prerequisite already satisfied.');
+    exit;
+  end;
+
+  Log('WebView2 Runtime missing; downloading Microsoft Evergreen Bootstrapper.');
+  try
+    WizardForm.StatusLabel.Caption := '正在安装 Microsoft Edge WebView2 Runtime...';
+    DownloadTemporaryFile(
+      WebView2BootstrapperUrl,
+      WebView2BootstrapperName,
+      '',
+      nil
+    );
+    BootstrapperPath := ExpandConstant('{tmp}\') + WebView2BootstrapperName;
+    if not Exec(
+      BootstrapperPath,
+      '/silent /install',
+      '',
+      SW_HIDE,
+      ewWaitUntilTerminated,
+      ResultCode
+    ) then
+    begin
+      Result :=
+        'WorkTrace 需要 Microsoft Edge WebView2 Runtime，但安装器无法启动其官方安装程序。' + #13#10 +
+        '请检查当前用户权限后重试。';
+      exit;
+    end;
+
+    if not IsWebView2RuntimeInstalled then
+    begin
+      Result :=
+        'WorkTrace 需要 Microsoft Edge WebView2 Runtime，但自动安装未完成（退出代码 ' +
+        IntToStr(ResultCode) + '）。' + #13#10 +
+        '请检查网络或组织策略，安装 Microsoft Edge WebView2 Runtime 后重新运行 WorkTrace 安装程序。';
+      exit;
+    end;
+    Log('WebView2 Runtime prerequisite installed successfully.');
+  except
+    Result :=
+      'WorkTrace 需要 Microsoft Edge WebView2 Runtime，但自动安装失败。' + #13#10 +
+      '请检查网络或组织策略后重试。' + #13#10 +
+      GetExceptionMessage;
+  end;
 end;
 
 procedure InitializeWizard;
