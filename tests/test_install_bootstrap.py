@@ -165,6 +165,7 @@ def test_composition_root_consumes_intent_before_authorized_startup() -> None:
 def test_installer_exposes_desktop_and_fd_work_tasks_with_warning() -> None:
     source = (ROOT / "installer" / "WorkTrace.iss").read_text(encoding="utf-8")
 
+    assert 'GroupDescription: "附加任务："' in source
     assert 'Name: desktopicon; Description: "创建桌面快捷方式"' in source
     assert 'Name: fdwork; Description: "启用 FD Work 插件"' in source
     assert (
@@ -177,5 +178,7 @@ def test_installer_exposes_desktop_and_fd_work_tasks_with_warning() -> None:
     assert "Tasks: fdwork" in source
     assert "Tasks: not fdwork" in source
     assert "FD Work 插件仅方达律师事务所可用。" in source
+    assert "FDWorkNotice.Parent := WizardForm.SelectTasksPage;" in source
+    assert "FDWorkNotice.Parent := WizardForm.SelectTasksPage.Surface;" not in source
     assert "FDWorkNotice.Font.Color := clRed" in source
     assert "FDWorkNotice.Font.Style := [fsBold]" in source
