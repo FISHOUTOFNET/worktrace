@@ -224,7 +224,7 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Run WebView Node behavior tests
+      - name: Run WebView Node tests
         run: node --test tests/webview/*.test.js
 
       - name: Run FD Work Edge DOM fixture
