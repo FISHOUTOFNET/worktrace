@@ -176,11 +176,9 @@ class WindowsPathResolver:
         )
 
     def privacy_path_required(self, process_name: str, title: str) -> bool:
-        if not extract_file_name_from_title(title):
-            return False
         process_key = str(process_name or "").strip().casefold()
         if process_key in _EXTRA_LOCAL_FILE_PROCESSES:
-            return True
+            return bool(extract_file_name_from_title(title))
         return any(
             _process_matches_entry(process_name, entry)
             for entry in self._catalog
