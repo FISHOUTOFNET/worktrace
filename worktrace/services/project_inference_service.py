@@ -242,6 +242,70 @@ def sync_persisted_open_activity_project(activity_id: int) -> dict:
     return assign_project_for_activity(activity_id)
 
 
+def sync_persisted_open_activity_from_current_folder_index(activity_id: int) -> dict:
+    """Use the current index snapshot only for an open auto-unclassified row.
+
+    Historic inference deliberately honors ``folder_rule_index_state.valid_from``.
+    This narrow convergence path is different: the activity is still open when a
+    freshly rebuilt index publishes a file that may have been created after the
+    previous snapshot. It may therefore consult the current generation without
+    weakening historical backfill boundaries.
+    """
+
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
+        conn = uow.connection
+        activity = conn.execute(
+            "SELECT * FROM activity_log WHERE id = ?",
+            (int(activity_id),),
+        ).fetchone()
+        if activity is None:
+            return {}
+        if (
+            int(activity["is_hidden"] or 0)
+            or int(activity["is_deleted"] or 0)
+            or activity["end_time"] is not None
+            or str(activity["status"] or "") != STATUS_NORMAL
+        ):
+            return _assignment_dict(conn, activity_id)
+
+        existing = conn.execute(
+            "SELECT source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
+            (int(activity_id),),
+        ).fetchone()
+        if existing is not None and int(existing["is_manual"] or 0):
+            return _assignment_dict(conn, activity_id)
+        source = str(existing["source"] or "") if existing is not None else ""
+        if source and source not in _OPEN_ROW_UNCLASSIFIED_SOURCES:
+            return _assignment_dict(conn, activity_id)
+
+        resource = _resource_for_activity(conn, activity_id)
+        path_hint = str(resource.get("path_hint") or "").strip()
+        display_name = str(resource.get("display_name") or "").strip()
+        if path_hint or not bool(resource.get("is_anchor")) or not display_name:
+            return _assignment_dict(conn, activity_id)
+
+        rule = folder_index_query_service.find_matching_folder_rule_for_file_name(
+            display_name,
+            None,
+            conn=conn,
+        )
+        if not rule:
+            return _assignment_dict(conn, activity_id)
+
+        changed = assignment_command_service.upsert_assignment(
+            conn,
+            activity_id=int(activity_id),
+            project_id=int(rule["project_id"]),
+            source="folder_rule",
+            confidence=85,
+            source_rule_type="folder",
+            source_rule_id=int(rule["id"]),
+        )
+        if changed:
+            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
+        return _assignment_dict(conn, activity_id)
+
+
 def _resource_for_activity(conn, activity_id: int) -> dict:
     """Load the durable resource fact; historic inference never synthesizes it."""
 
@@ -532,5 +596,6 @@ __all__ = [
     "get_assignment_for_activity",
     "invalidate_keyword_rule_cache",
     "keyword_pattern_matches",
+    "sync_persisted_open_activity_from_current_folder_index",
     "sync_persisted_open_activity_project",
 ]
