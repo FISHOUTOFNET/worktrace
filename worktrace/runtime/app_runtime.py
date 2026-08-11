@@ -28,6 +28,7 @@ from ..services import (
 )
 from ..services.settings_service import set_setting
 from ..worker_health import WorkerHealthRegistry, WorkerHealthReporter
+from .collector_supervisor import CollectorSupervisor
 from .contracts import RuntimeStartResult as _RuntimeStartResult
 from .contracts import WorkerStartupState as _WorkerStartupState
 from .contracts import WorkerStartupStatus as _WorkerStartupStatus
@@ -176,6 +177,7 @@ class AppRuntime:
         self._collector_stop_event: threading.Event | None = None
         self._collector_generation = 0
         self._worker_handles: dict[str, WorkerHandle] = {}
+        self.collector_supervisor = CollectorSupervisor(self)
         self._worker_specs = self._build_worker_specs()
         self._initialized = False
         self._shutdown = False
@@ -219,6 +221,12 @@ class AppRuntime:
                 name="startup_recovery",
                 thread_name="WorkTraceStartupRecovery",
                 target=recovery_service.run_startup_recovery_worker,
+                args_factory=lambda stop: (stop,),
+            ),
+            "collector_supervisor": WorkerSpec(
+                name="collector_supervisor",
+                thread_name="WorkTraceCollectorSupervisor",
+                target=self.collector_supervisor.run_worker,
                 args_factory=lambda stop: (stop,),
             ),
         }
