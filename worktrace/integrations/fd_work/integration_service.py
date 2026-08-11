@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import secrets
 import threading
 import time
-from typing import Any, Callable, Iterable, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 from ...api.external_project_identity import ProjectCreate, ProjectReader, ProjectUpdate
 from ...services.settings_service import get_bool_setting, set_setting
@@ -72,7 +72,7 @@ class _Selection:
 
 
 class FDWorkIntegrationService:
-    """Own plugin settings, session operations, and ephemeral case proofs."""
+    """Own plugin settings, session operations, case proofs and FD Work bindings."""
 
     def __init__(
         self,
@@ -414,99 +414,6 @@ class FDWorkIntegrationService:
             project_reader=self._require_project_reader(),
         ).execute(project_id, name, description, language, selection_token)
 
-    def list_project_identities(
-        self, projects: Iterable[Mapping[str, Any]]
-    ) -> list[dict[str, Any]]:
-        result = [dict(project) for project in projects]
-        try:
-            enabled = self.get_settings_status().get("enabled") is True
-            bound_ids = self.list_bound_project_ids() if enabled else set()
-        except Exception:
-            bound_ids = set()
-        for project in result:
-            project["external_identity_bound"] = (
-                int(project.get("id") or 0) in bound_ids
-            )
-        return result
-
-    def create_project(
-        self,
-        name: str,
-        description: str,
-        language: str,
-        external_identity_proof: str | None,
-    ) -> dict[str, Any]:
-        if self.get_settings_status().get("enabled") is True:
-            if external_identity_proof is None:
-                return {"ok": False, "error": "case_selection_required"}
-            try:
-                return self._external_identity_result(
-                    self.create_bound_project(
-                        name, description, language, external_identity_proof
-                    )
-                )
-            except FDWorkEntryError as exc:
-                return {"ok": False, "error": exc.code}
-            except Exception:
-                return {"ok": False, "error": "fd_work_persistence_unconfirmed"}
-        if external_identity_proof is not None:
-            self.discard_case_selection(external_identity_proof)
-            return {"ok": False, "error": "fd_work_disabled"}
-        result = self._require_project_creator()(name, description, language)
-        if result.get("ok") is True:
-            result["external_identity_binding"] = {"bound": False}
-        return result
-
-    def update_project(
-        self,
-        project_id: int,
-        name: str,
-        description: str,
-        language: str,
-        external_identity_proof: str | None,
-    ) -> dict[str, Any]:
-        reader = self._require_project_reader()
-        current = reader(int(project_id))
-        name_changed = bool(current) and normalize_case_label(
-            current.get("name")
-        ) != normalize_case_label(name)
-        enabled = self.get_settings_status().get("enabled") is True
-        if enabled and name_changed and external_identity_proof is None:
-            return {"ok": False, "error": "case_selection_required"}
-        if external_identity_proof is not None:
-            if not enabled:
-                self.discard_case_selection(external_identity_proof)
-                return {"ok": False, "error": "fd_work_disabled"}
-            try:
-                return self._external_identity_result(
-                    self.rebind_project(
-                        int(project_id),
-                        name,
-                        description,
-                        language,
-                        external_identity_proof,
-                    )
-                )
-            except FDWorkEntryError as exc:
-                return {"ok": False, "error": exc.code}
-            except Exception:
-                return {"ok": False, "error": "fd_work_persistence_unconfirmed"}
-        result = self._require_project_updater()(
-            int(project_id), name, description, language
-        )
-        if result.get("ok") is True:
-            if name_changed and not enabled:
-                result["external_identity_binding"] = self.after_project_deleted(
-                    int(project_id)
-                )
-            else:
-                try:
-                    bound = int(project_id) in self.list_bound_project_ids()
-                except Exception:
-                    bound = False
-                result["external_identity_binding"] = {"bound": bound}
-        return result
-
     def clear_project_identity(self, project_id: int) -> dict[str, Any]:
         try:
             self.clear_project_binding(int(project_id))
@@ -763,13 +670,6 @@ class FDWorkIntegrationService:
         if self._project_reader is None:
             raise FDWorkEntryError("project_persistence_unavailable")
         return self._project_reader
-
-    @staticmethod
-    def _external_identity_result(result: dict[str, Any]) -> dict[str, Any]:
-        binding = result.pop("fd_work_binding", None)
-        if binding is not None:
-            result["external_identity_binding"] = binding
-        return result
 
     def _navigation_generation_locked(self) -> int:
         value = self._controller_status.get("navigation_generation")
