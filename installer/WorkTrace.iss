@@ -87,7 +87,7 @@ begin
 
   WizardForm.TasksList.Height := WizardForm.TasksList.Height - ScaleY(30);
   FDWorkNotice := TNewStaticText.Create(WizardForm);
-  FDWorkNotice.Parent := WizardForm.SelectTasksPage.Surface;
+  FDWorkNotice.Parent := WizardForm.SelectTasksPage;
   FDWorkNotice.Left := WizardForm.TasksList.Left;
   FDWorkNotice.Top := WizardForm.TasksList.Top + WizardForm.TasksList.Height + ScaleY(8);
   FDWorkNotice.Caption := 'FD Work 插件仅方达律师事务所可用。';
