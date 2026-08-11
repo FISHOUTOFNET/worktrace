@@ -138,6 +138,32 @@
         return "尚未连接";
     };
 
+    function ensureSession() {
+        if (!App.bridge || typeof App.bridge.showFDWorkLogin !== "function") {
+            return Promise.resolve({
+                ok: false,
+                error: "fd_work_window_unavailable",
+                message: "打开 FD Work 失败"
+            });
+        }
+        return App.bridge.showFDWorkLogin().then(function (result) {
+            if (result && result.capability_status && App.receiveFDWorkStatus) {
+                App.receiveFDWorkStatus(result.capability_status);
+            }
+            return result || {
+                ok: false,
+                error: "fd_work_window_unavailable",
+                message: "打开 FD Work 失败"
+            };
+        }).catch(function () {
+            return {
+                ok: false,
+                error: "fd_work_window_unavailable",
+                message: "打开 FD Work 失败"
+            };
+        });
+    }
+
     var identityState = {
         selectionProof: null,
         selectedLabel: "",
@@ -201,6 +227,12 @@
         if (row) row.hidden = true;
     }
 
+    function clearIdentityPickerTransient() {
+        identityState.pickerRequestId = null;
+        identityState.pickerEditorGeneration = null;
+        identityState.pickerPending = false;
+    }
+
     function resetIdentityEditor() {
         identityState.editorGeneration += 1;
         identityState.selectionProof = null;
@@ -209,9 +241,7 @@
         identityState.originalBound = false;
         identityState.editingProjectId = null;
         identityState.projectBusy = false;
-        identityState.pickerRequestId = null;
-        identityState.pickerEditorGeneration = null;
-        identityState.pickerPending = false;
+        clearIdentityPickerTransient();
         identityState.saveIntent = "local";
         showIdentityStatus("", false);
     }
@@ -250,24 +280,20 @@
         App.bridge.openFDWorkCasePicker(requestId).then(function (result) {
             if (!isCurrentPickerRequest(requestId, editorGeneration)) return;
             if (!result || result.ok === false) {
-                identityState.pickerPending = false;
-                identityState.pickerRequestId = null;
-                identityState.pickerEditorGeneration = null;
+                clearIdentityPickerTransient();
                 showIdentityStatus(result && result.message || "打开案件选择器失败", true);
                 refreshRulesWriteState();
                 return;
             }
             showIdentityStatus(
                 result.operation_status === "authentication_required"
-                    ? "请登录 FD Work 并选择案件"
+                    ? "请登录 FD Work"
                     : "请在 FD Work 中选择案件",
                 false
             );
         }).catch(function () {
             if (!isCurrentPickerRequest(requestId, editorGeneration)) return;
-            identityState.pickerPending = false;
-            identityState.pickerRequestId = null;
-            identityState.pickerEditorGeneration = null;
+            clearIdentityPickerTransient();
             showIdentityStatus("打开案件选择器失败", true);
             refreshRulesWriteState();
         });
@@ -310,9 +336,7 @@
         if (!result || typeof result !== "object") return false;
         var editorGeneration = identityState.pickerEditorGeneration;
         if (!isCurrentPickerRequest(result.request_id, editorGeneration)) return false;
-        identityState.pickerPending = false;
-        identityState.pickerRequestId = null;
-        identityState.pickerEditorGeneration = null;
+        clearIdentityPickerTransient();
         if (result.ok !== true) {
             showIdentityStatus(
                 result.error === "picker_canceled" ? "案件选择已取消" : "案件选择已失效",
@@ -410,6 +434,7 @@
     }
 
     function syncIdentityStatus() {
+        var capability = App.fdWorkStatus || {};
         var enabled = identityEnabled();
         var label = document.getElementById("rules-panel-project-name-label");
         var help = document.getElementById("rules-panel-fd-work-help");
@@ -419,16 +444,32 @@
             help.hidden = true;
             help.textContent = "";
         }
-        if (input) {
-            input.hidden = false;
-            input.readOnly = false;
-        }
         var picker = document.getElementById("rules-panel-fd-work-picker");
         if (picker) picker.hidden = !enabled;
         hideLegacySelectedCaseField();
-        if (!enabled) {
+        if (!enabled || capability.session_state === "shutdown") {
             identityState.selectionProof = null;
             identityState.selectedLabel = "";
+            if (identityState.pickerPending) clearIdentityPickerTransient();
+            showIdentityStatus("", false);
+        } else if (identityState.pickerPending) {
+            if (capability.operation === "user_auth") {
+                showIdentityStatus(
+                    capability.page_phase === "login_confirmation"
+                        ? "请确认登录"
+                        : "请登录 FD Work",
+                    false
+                );
+            } else if (capability.operation === "user_picker") {
+                showIdentityStatus("请在 FD Work 中选择案件", false);
+            } else if (capability.session_state === "error") {
+                clearIdentityPickerTransient();
+                showIdentityStatus(App.fdWorkStatusText(capability), true);
+            }
+        }
+        if (input) {
+            input.hidden = false;
+            input.readOnly = identityState.pickerPending;
         }
         refreshRulesWriteState();
     }
@@ -438,7 +479,9 @@
         var pending = identityState.pickerPending;
         var pick = document.getElementById("rules-panel-fd-work-pick");
         var clear = document.getElementById("rules-panel-fd-work-clear");
-        var name = String((projectNameInput() || {}).value || "").trim();
+        var input = projectNameInput();
+        var name = String((input || {}).value || "").trim();
+        if (input) input.readOnly = pending;
         if (pick) {
             pick.disabled = identityState.projectBusy || pending || !identityEnabled();
             pick.textContent = pending
@@ -581,6 +624,7 @@
     App.receiveFDWorkCasePickerResult = receiveIdentityPickerResult;
     App.fdWork = Object.freeze({
         bindStatusHost: bindStatusHost,
+        ensureSession: ensureSession,
         resetGeneration: resetIdentityEditor
     });
 })();
