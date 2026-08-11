@@ -6,6 +6,7 @@ import pytest
 
 from worktrace.api import project_api
 from worktrace.api.application_capabilities import RulesApplicationService
+from worktrace.api.external_project_identity import OptionalProjectIdentityCapability
 from worktrace.integrations.fd_work.binding_repository import FDWorkBindingRepository
 from worktrace.integrations.fd_work.binding_service import FDWorkBindingService
 from worktrace.integrations.fd_work.integration_service import FDWorkIntegrationService
@@ -93,6 +94,19 @@ def _integration(state_path):
     return service, coordinator, delivered
 
 
+def _project_identity(integration):
+    return OptionalProjectIdentityCapability(
+        external=integration,
+        create_project=project_api.create_project_for_rules,
+        update_project=project_api.update_project_for_rules,
+        project_reader=project_api.get_project,
+    )
+
+
+def _rules(integration):
+    return RulesApplicationService(project_identity=_project_identity(integration))
+
+
 def _deliver_selection(service, coordinator, delivered, *, request_id, label):
     opened = service.open_case_picker(request_id)
     assert opened["ok"] is True
@@ -114,7 +128,7 @@ def test_real_picker_to_project_binding_golden_path_survives_restart_and_deletes
         request_id="drawer-golden",
         label="TEST MATTER A",
     )
-    rules = RulesApplicationService(project_identity=integration)
+    rules = _rules(integration)
 
     created = rules.create_project_for_rules(
         "TEST MATTER A", "test description", "中文", token
@@ -151,7 +165,7 @@ def test_real_picker_to_project_binding_golden_path_survives_restart_and_deletes
         project_updater=project_api.update_project_for_rules,
         project_reader=project_api.get_project,
     )
-    restarted_rules = RulesApplicationService(project_identity=restarted_integration)
+    restarted_rules = _rules(restarted_integration)
     restarted = restarted_rules.list_project_bindings()
     restart_readback = next(item for item in restarted if item["id"] == project_id)
     assert restart_readback["external_identity_bound"] is True
@@ -187,7 +201,7 @@ def test_real_sidecar_binding_failure_never_returns_project_success(temp_db, tmp
             """
         )
 
-    result = RulesApplicationService(project_identity=integration).create_project_for_rules(
+    result = _rules(integration).create_project_for_rules(
         "TEST MATTER B", "", "中文", token
     )
 
@@ -218,9 +232,7 @@ def test_real_sidecar_binding_failure_never_returns_project_success(temp_db, tmp
         project_updater=project_api.update_project_for_rules,
         project_reader=project_api.get_project,
     )
-    deleted = RulesApplicationService(
-        project_identity=restarted_integration
-    ).delete_project_for_rules(project["id"])
+    deleted = _rules(restarted_integration).delete_project_for_rules(project["id"])
     assert deleted["ok"] is True
     assert restarted_bindings.repository.get_binding(project["id"]) is None
     assert restarted_bindings.repository.list_pending_operations() == []
