@@ -10,6 +10,7 @@ from typing import Any
 
 from . import config
 from .collector.single_instance import get_application_instance_coordinator
+from .desktop.install_bootstrap import consume_fd_work_install_intent
 from .desktop.shell import DesktopShellController
 from .desktop.windows_tray import WindowsTrayHost
 from .integrations.fd_work.helper_bridge import FDWorkHelperBridge
@@ -223,6 +224,8 @@ def main(*, background: bool = False) -> int:
         )
         services.fd_work.bind_status_callback(fd_work_main_sink.status_changed)
         services.fd_work.bind_picker_result_callback(fd_work_main_sink.picker_result)
+        if consume_fd_work_install_intent(services.fd_work):
+            logging.info("FD Work enabled from installer bootstrap")
         app_control = services.app_control
         startup_result: dict[str, Any] = {"ok": False}
         try:
@@ -288,6 +291,7 @@ def main(*, background: bool = False) -> int:
             shell.start()
             webview_profile_path = paths.base_dir / "webview-profile"
             webview_profile_path.mkdir(parents=True, exist_ok=True)
+
             def handle_webview_initialized() -> None:
                 renderer = str(getattr(webview, "renderer", "") or "").lower()
                 safe_renderer = (
