@@ -81,7 +81,7 @@ begin
     Result := Trim(ExistingValue) <> '';
 end;
 
-function WebView2VersionIsPresent(RootKey: Integer; const Subkey: String): Boolean;
+function WebView2VersionIsPresent(RootKey: HKEY; const Subkey: String): Boolean;
 var
   Version: String;
 begin
