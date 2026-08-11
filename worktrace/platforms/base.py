@@ -7,6 +7,10 @@ from typing import Protocol
 from ..worker_health import WorkerHealthReporter
 
 
+class PlatformTemporarilyUnavailableError(RuntimeError):
+    """One observation could not be sampled because the platform changed underneath it."""
+
+
 @dataclass(frozen=True)
 class ActiveWindow:
     app_name: str
@@ -61,5 +65,6 @@ __all__ = [
     "ActiveWindow",
     "ClipboardTextEvent",
     "PlatformAdapter",
+    "PlatformTemporarilyUnavailableError",
     "RuntimePlatformAdapter",
 ]
