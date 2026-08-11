@@ -11,6 +11,7 @@ import sqlite3
 from dataclasses import dataclass
 from enum import Enum
 
+from ..platforms.base import PlatformTemporarilyUnavailableError
 from ..write_gate import DATABASE_MAINTENANCE_ERROR
 
 
@@ -50,6 +51,12 @@ class TransientCollectorError(RuntimeError):
 
 def classify_collector_failure(exc: BaseException) -> CollectorFailureDisposition:
     """Return a safe, closed taxonomy for one raw Collector exception."""
+
+    if isinstance(exc, PlatformTemporarilyUnavailableError):
+        return CollectorFailureDisposition(
+            CollectorFailureCode.ADAPTER_TEMPORARILY_UNAVAILABLE,
+            True,
+        )
 
     if isinstance(exc, TransientCollectorError):
         return CollectorFailureDisposition(exc.code, True)
