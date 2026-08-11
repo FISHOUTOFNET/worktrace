@@ -71,7 +71,6 @@ class FDWorkInteractionCoordinator:
         self._operation_deadline_ms: int | None = None
         self._active_request_id: str | None = None
         self._pending_picker_request_id: str | None = None
-        self._pending_entry_draft: FDWorkEntryDraft | None = None
         self._current_window: Any | None = None
         self._pending_picker_command: tuple[str, str, str, int, int] | None = None
         self._shutdown = False
@@ -120,7 +119,9 @@ class FDWorkInteractionCoordinator:
                 if self._interaction_owner == "user_auth":
                     self._clear_operation_locked()
                     public_status = self._status_locked(
-                        error_code=str(result.get("error") or "session_start_failed")
+                        error_code=str(result.get("error") or "session_start_failed"),
+                        operation_status="failed",
+                        operation_result_owner="user_auth",
                     )
                 else:
                     public_status = self._status_locked()
@@ -257,40 +258,12 @@ class FDWorkInteractionCoordinator:
             if self._interaction_owner != "none":
                 return {"ok": False, "error": "fd_work_busy"}
             if self._controller_status.get("ready") is not True:
-                self._reserve_operation_locked("user_auth", None)
-                self._pending_entry_draft = draft
-                public_status = self._status_locked()
-                activate = False
-            else:
-                self._reserve_operation_locked("automation_fill", None)
-                public_status = self._status_locked()
-                activate = True
+                return {"ok": False, "error": "fd_work_not_ready"}
+            self._reserve_operation_locked("automation_fill", None)
+            public_status = self._status_locked()
             operation_nonce = str(self._operation_nonce)
             operation_generation = self._operation_generation
         self._emit_status(public_status)
-        if not activate:
-            try:
-                prepared = dict(
-                    self._controller.prepare_session(show_login_if_required=True)
-                )
-            except Exception:
-                prepared = {"ok": False, "error": "session_start_failed"}
-            if prepared.get("ok") is not True:
-                with self._lock:
-                    if self._operation_is_current_locked(
-                        "user_auth", operation_nonce, operation_generation
-                    ):
-                        self._clear_operation_locked()
-                        public_status = self._status_locked(
-                            error_code=str(
-                                prepared.get("error") or "session_start_failed"
-                            )
-                        )
-                    else:
-                        public_status = self._status_locked()
-                self._emit_status(public_status)
-                return prepared
-            return {"ok": True, "operation_status": "session_starting"}
         return self._execute_entry(draft, operation_nonce, operation_generation)
 
     def _execute_entry(
@@ -659,11 +632,11 @@ class FDWorkInteractionCoordinator:
 
     def _accept_controller_status(self, status: Mapping[str, Any]) -> None:
         activate_picker = False
-        resume_entry: tuple[FDWorkEntryDraft, str, int] | None = None
         complete_auth: tuple[int, int, str] | None = None
         picker_result = None
         terminal_operation_status = None
         terminal_error = None
+        terminal_result_owner = None
         with self._lock:
             previous_generation = self._navigation_generation_locked()
             self._controller_status = dict(status)
@@ -686,19 +659,6 @@ class FDWorkInteractionCoordinator:
                 activate_picker = True
             elif (
                 self._interaction_owner == "user_auth"
-                and self._pending_entry_draft is not None
-                and status.get("ready") is True
-            ):
-                draft = self._pending_entry_draft
-                self._pending_entry_draft = None
-                self._reserve_operation_locked("automation_fill", None)
-                resume_entry = (
-                    draft,
-                    str(self._operation_nonce),
-                    self._operation_generation,
-                )
-            elif (
-                self._interaction_owner == "user_auth"
                 and status.get("ready") is True
                 and self._operation_nonce
             ):
@@ -707,6 +667,17 @@ class FDWorkInteractionCoordinator:
                     self._operation_generation,
                     self._operation_nonce,
                 )
+            elif (
+                self._interaction_owner == "user_auth"
+                and status.get("session_state") == "error"
+            ):
+                terminal_error = str(status.get("error_code") or "authentication_failed")
+                terminal_operation_status = "failed"
+                terminal_result_owner = (
+                    "user_picker" if self._pending_picker_request_id else "user_auth"
+                )
+                picker_result = self._picker_cancellation_locked(terminal_error)
+                self._clear_operation_locked()
             elif (
                 previous_generation != current_generation
                 and self._interaction_owner == "automation_fill"
@@ -720,12 +691,11 @@ class FDWorkInteractionCoordinator:
                     self._clear_operation_locked()
                     terminal_operation_status = "operation_canceled"
                     terminal_error = "lookup_superseded"
+                    terminal_result_owner = "automation_fill"
             public_status = self._status_locked(
                 error_code=terminal_error,
                 operation_status=terminal_operation_status,
-                operation_result_owner=(
-                    "automation_fill" if terminal_operation_status else None
-                ),
+                operation_result_owner=terminal_result_owner,
             )
         if picker_result:
             self._emit_picker_result(picker_result)
@@ -747,15 +717,6 @@ class FDWorkInteractionCoordinator:
         self._emit_status(public_status)
         if activate_picker:
             self._activate_picker()
-        if resume_entry is not None:
-            draft, nonce, operation_generation = resume_entry
-            scheduled = self._controller.schedule_callback(
-                lambda: self._execute_entry(draft, nonce, operation_generation)
-            )
-            if not scheduled:
-                self._finish_fill_failure(
-                    "executor_rejected", nonce, operation_generation
-                )
 
     def _on_helper_closed(self, navigation_generation: int) -> None:
         with self._lock:
@@ -763,11 +724,6 @@ class FDWorkInteractionCoordinator:
                 return
             had_operation = self._interaction_owner != "none"
             terminal_owner = self._interaction_owner
-            if (
-                terminal_owner == "user_auth"
-                and self._pending_entry_draft is not None
-            ):
-                terminal_owner = "automation_fill"
             picker_result = self._picker_cancellation_locked("window_closed")
             self._clear_operation_locked()
             public_status = self._status_locked(
@@ -871,7 +827,6 @@ class FDWorkInteractionCoordinator:
         self._active_request_id = request_id
         self._current_window = None
         self._pending_picker_command = None
-        self._pending_entry_draft = None
 
     def _clear_operation_locked(self) -> None:
         self._operation_generation += 1
@@ -881,7 +836,6 @@ class FDWorkInteractionCoordinator:
         self._operation_deadline_ms = None
         self._active_request_id = None
         self._pending_picker_request_id = None
-        self._pending_entry_draft = None
         self._current_window = None
         self._pending_picker_command = None
 
