@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ISS_PATH = ROOT / "installer" / "WorkTrace.iss"
 BUILD_PATH = ROOT / "scripts" / "build_windows_installer.ps1"
 RELEASE_BUILD_PATH = ROOT / "scripts" / "build_windows_release.ps1"
+INSTALLED_LAUNCH_SMOKE_PATH = ROOT / "scripts" / "smoke_installed_launch.ps1"
 
 
 def test_inno_setup_is_per_user_and_never_requests_elevation() -> None:
@@ -19,8 +20,22 @@ def test_inno_setup_is_per_user_and_never_requests_elevation() -> None:
     assert r"DefaultDirName={localappdata}\Programs\WorkTrace" in source
     assert "DefaultGroupName=WorkTrace" in source
     assert "Program Files" not in source
-    assert "HKLM" not in source
+    assert "Root: HKLM" not in source
     assert "[Service]" not in source
+
+
+def test_webview2_prerequisite_is_detected_and_installed_per_user() -> None:
+    source = ISS_PATH.read_text(encoding="utf-8")
+    assert "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" in source
+    assert "https://go.microsoft.com/fwlink/p/?LinkId=2124703" in source
+    assert "IsWebView2RuntimeInstalled" in source
+    assert "WebView2VersionIsPresent(HKCU" in source
+    assert "WebView2VersionIsPresent(HKLM32" in source
+    assert "PrepareToInstall" in source
+    assert "DownloadTemporaryFile" in source
+    assert "MicrosoftEdgeWebview2Setup.exe" in source
+    assert "'/silent /install'" in source
+    assert "PrivilegesRequired=lowest" in source
 
 
 def test_upgrade_closes_running_app_without_restart_manager_relaunch() -> None:
@@ -57,7 +72,7 @@ def test_upgrade_task_selection_preserves_actual_registry_choice() -> None:
 def test_startup_state_detection_does_not_depend_on_app_constant() -> None:
     source = ISS_PATH.read_text(encoding="utf-8")
     helper_start = source.index("function ExistingStartupEnabled")
-    helper_end = source.index("procedure InitializeWizard", helper_start)
+    helper_end = source.index("function WebView2VersionIsPresent", helper_start)
     helper = source[helper_start:helper_end]
 
     assert "RegQueryStringValue" in helper
@@ -155,3 +170,17 @@ def test_ci_exercises_installer_upgrade_runtime_path() -> None:
     assert workflow.count('/TASKS=`"startup`"') >= 2
     assert "unins000.exe" in workflow
     assert "Get-ItemPropertyValue" in workflow
+
+
+def test_ci_launches_the_freshly_installed_application() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "_validation.yml").read_text(
+        encoding="utf-8"
+    )
+    smoke = INSTALLED_LAUNCH_SMOKE_PATH.read_text(encoding="utf-8")
+
+    assert 'smoke_installed_launch.ps1" -InstallDir $installDir' in workflow
+    assert 'Join-Path $InstallDir "WorkTrace.exe"' in smoke
+    assert "Start-Process -FilePath $exe -PassThru" in smoke
+    assert 'SimpleMatch "webview ui startup"' in smoke
+    assert "$env:LOCALAPPDATA = $smokeRoot" in smoke
+    assert "taskkill.exe /PID $process.Id /T /F" in smoke
