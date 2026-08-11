@@ -1,4 +1,4 @@
-"""Process-scoped supervision for an authorized Collector runtime."""
+"""Process-scoped supervision policy for an authorized Collector runtime."""
 
 from __future__ import annotations
 
@@ -6,10 +6,13 @@ import logging
 import threading
 import time
 from collections import deque
-from typing import Callable, Protocol
+from typing import TYPE_CHECKING, Callable, Protocol
 
 from ..services import database_maintenance_service, privacy_gate_service
 from ..services.settings_service import get_bool_setting
+
+if TYPE_CHECKING:
+    from ..worker_health import WorkerHealthReporter
 
 _SUPERVISOR_POLL_SECONDS = 5.0
 _RESTART_WINDOW_SECONDS = 60.0
@@ -31,7 +34,7 @@ class CollectorRuntimeCapability(Protocol):
 
 
 class CollectorSupervisor:
-    """Keep an authorized Collector alive without bypassing AppRuntime ownership."""
+    """Keep an authorized Collector alive without owning a second thread lifecycle."""
 
     def __init__(
         self,
@@ -66,7 +69,6 @@ class CollectorSupervisor:
         self._recovery_blocked_reader = recovery_blocked_reader
         self._monotonic = monotonic_func
         self._lock = threading.RLock()
-        self._thread: threading.Thread | None = None
         self._privacy_authorized = False
         self._restart_attempts: deque[float] = deque()
         self._rate_limit_logged_until = 0.0
@@ -76,23 +78,31 @@ class CollectorSupervisor:
             self._privacy_authorized = bool(authorized)
 
     def prepare_after_privacy(self, *, pre_start: bool) -> None:
-        del pre_start
-        if self._privacy_authorized:
-            self.start()
+        """Privacy participant hook; AppRuntime already owns and runs the worker."""
 
-    def start(self) -> None:
-        with self._lock:
-            if self._thread is not None and self._thread.is_alive():
-                return
+        del pre_start
+
+    def run_worker(
+        self,
+        stop_event: threading.Event,
+        *,
+        health: "WorkerHealthReporter",
+    ) -> None:
+        """Run the supervision loop inside AppRuntime's worker registry."""
+
+        logging.info("collector supervisor worker loop enter")
+        health.succeeded()
+        while not stop_event.wait(self._poll_seconds):
             if self._runtime.stop_event.is_set():
-                return
-            thread = threading.Thread(
-                target=self._run,
-                name="WorkTraceCollectorSupervisor",
-                daemon=True,
-            )
-            self._thread = thread
-            thread.start()
+                break
+            try:
+                self.check_once()
+            except Exception:
+                health.failed("collector_supervisor_iteration_failed")
+                logging.exception("collector supervisor check failed")
+            else:
+                health.succeeded()
+        logging.info("collector supervisor worker loop exit")
 
     def check_once(self) -> bool:
         """Run one bounded liveness check; return True only when restart is attempted."""
@@ -128,15 +138,6 @@ class CollectorSupervisor:
                 str(result.get("error") or "collector_start_failed"),
             )
         return True
-
-    def _run(self) -> None:
-        while not self._runtime.stop_event.wait(self._poll_seconds):
-            try:
-                self.check_once()
-            except Exception:
-                # The supervisor must not become a second single point of failure.
-                # AppRuntime remains authoritative for all Collector mutations.
-                logging.exception("collector supervisor check failed")
 
     def _restart_allowed(self) -> bool:
         if self._runtime.stop_event.is_set():
