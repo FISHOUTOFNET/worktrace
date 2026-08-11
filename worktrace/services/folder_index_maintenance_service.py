@@ -9,10 +9,19 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timedelta
 
-from ..constants import EXCLUDED_PROJECT, STATUS_NORMAL, UNCATEGORIZED_PROJECT
-from ..data_generation_repository import DataGenerationNamespace, DataGenerationRepository
-from ..db import get_connection, get_db_path
+from ..constants import (
+    EXCLUDED_PROJECT,
+    STATUS_NORMAL,
+    TIME_FORMAT,
+    UNCATEGORIZED_PROJECT,
+)
+from ..data_generation_repository import (
+    DataGenerationNamespace,
+    DataGenerationRepository,
+)
+from ..db import get_connection, get_db_path, now_str
 
 HOT_PROJECT_ACTIVITY_DAYS = 7
 HOT_PROJECT_LIMIT = 10
@@ -60,7 +69,8 @@ def request_refresh_for_project(project_id: int) -> int:
     database_key, replacement_epoch = _replacement_cache_identity()
     cache_key = (database_key, replacement_epoch, value)
     current = time.monotonic()
-    if current - _PROJECT_REFRESH_TIMES.get(cache_key, 0.0) < PROJECT_REFRESH_COOLDOWN_SECONDS:
+    elapsed = current - _PROJECT_REFRESH_TIMES.get(cache_key, 0.0)
+    if elapsed < PROJECT_REFRESH_COOLDOWN_SECONDS:
         return 0
 
     with get_connection() as conn:
@@ -97,6 +107,13 @@ def request_refresh_for_hot_projects() -> int:
     refresh marker and are therefore not redundantly re-requested here.
     """
 
+    current = datetime.strptime(now_str(), TIME_FORMAT)
+    activity_cutoff = (current - timedelta(days=HOT_PROJECT_ACTIVITY_DAYS)).strftime(
+        TIME_FORMAT
+    )
+    freshness_cutoff = (
+        current - timedelta(minutes=HOT_INDEX_FRESHNESS_MINUTES)
+    ).strftime(TIME_FORMAT)
     with get_connection() as conn:
         rows = conn.execute(
             """
@@ -113,7 +130,7 @@ def request_refresh_for_hot_projects() -> int:
             hot_projects AS (
                 SELECT project_id
                 FROM last_used
-                WHERE last_used_at >= datetime('now', ?)
+                WHERE last_used_at >= ?
                 UNION
                 SELECT project_id
                 FROM (
@@ -139,23 +156,23 @@ def request_refresh_for_hot_projects() -> int:
               AND COALESCE(state.build_status, '') <> 'indexing'
               AND (
                     state.last_indexed_at IS NULL
-                    OR state.last_indexed_at <= datetime('now', ?)
+                    OR state.last_indexed_at <= ?
               )
             ORDER BY fpr.id
             """,
             (
-                f"-{HOT_PROJECT_ACTIVITY_DAYS} days",
+                activity_cutoff,
                 HOT_PROJECT_LIMIT,
                 UNCATEGORIZED_PROJECT,
                 EXCLUDED_PROJECT,
-                f"-{HOT_INDEX_FRESHNESS_MINUTES} minutes",
+                freshness_cutoff,
             ),
         ).fetchall()
     return _queue_rule_ids([int(row["id"]) for row in rows])
 
 
 def reconcile_open_unclassified_activities() -> int:
-    """Re-run inference only for open, automatic, still-unclassified rows."""
+    """Converge open auto-unclassified rows after a new index is published."""
 
     with get_connection() as conn:
         rows = conn.execute(
@@ -190,13 +207,15 @@ def reconcile_open_unclassified_activities() -> int:
     for row in rows:
         activity_id = int(row["id"])
         try:
-            project_inference_service.sync_persisted_open_activity_project(activity_id)
+            project_inference_service.sync_persisted_open_activity_from_current_folder_index(
+                activity_id
+            )
             reconciled += 1
         except Exception:
             # Index maintenance is best-effort. A classification retry must not
             # make the folder-index worker unhealthy or roll back a ready index.
             logging.exception(
-                "open activity reinference after folder index refresh failed activity_id=%s",
+                "open activity convergence after folder index refresh failed activity_id=%s",
                 activity_id,
             )
     return reconciled
