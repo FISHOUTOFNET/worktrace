@@ -16,7 +16,11 @@ from ..db import dict_rows, get_connection, get_db_path, now_str
 from ..path_utils import normalize_path_key
 from ..resources.title_parsing import normalize_file_name
 from ..write_gate import DATABASE_WRITE_GATE
-from . import folder_index_state_repository, privacy_gate_service
+from . import (
+    folder_index_maintenance_service,
+    folder_index_state_repository,
+    privacy_gate_service,
+)
 
 if TYPE_CHECKING:
     from ..worker_health import WorkerHealthReporter
@@ -29,6 +33,7 @@ INDEX_STATUS_ERROR = "error"
 
 _SCAN_BATCH_SIZE = 250
 _WORKER_IDLE_SECONDS = 5.0
+_HOT_REFRESH_CHECK_SECONDS = 60.0
 _MISS_REFRESH_COOLDOWN_SECONDS = 60.0
 _GC_PENDING_CODE = "folder_index_gc_pending"
 
@@ -313,6 +318,7 @@ def run_folder_index_worker(
     """Run iterations only; AppRuntime owns thread started/stopped state."""
 
     logging.info("folder index worker loop enter")
+    next_hot_refresh_at = 0.0
     try:
         ensure_index_states_for_folder_rules()
         recover_interrupted_indexes()
@@ -343,10 +349,25 @@ def run_folder_index_worker(
             health.maintenance_paused(False)
             ensure_index_states_for_folder_rules()
             _retry_pending_gc()
+
+            monotonic_now = time.monotonic()
+            if monotonic_now >= next_hot_refresh_at:
+                folder_index_maintenance_service.request_refresh_for_hot_projects()
+                next_hot_refresh_at = monotonic_now + _HOT_REFRESH_CHECK_SECONDS
+
+            rebuilt_any = False
             for rule_id in _pending_rule_ids():
                 if stop_event.is_set() or DATABASE_WRITE_GATE.writes_blocked():
                     break
-                rebuild_folder_index(rule_id, stop_event)
+                if rebuild_folder_index(rule_id, stop_event):
+                    rebuilt_any = True
+            if rebuilt_any:
+                try:
+                    folder_index_maintenance_service.reconcile_open_unclassified_activities()
+                except Exception:
+                    # A ready index remains authoritative even if post-refresh
+                    # project convergence fails; retry on a later rebuild.
+                    logging.exception("folder index post-refresh reconciliation failed")
             health.succeeded()
             _wait_for_worker()
         except Exception:
