@@ -1428,20 +1428,21 @@
             return { enabled: false, state: "hidden", reason: "" };
         }
         var capability = App.fdWorkStatus || {};
-        if (capability.login_required === true) {
-            return { enabled: true, state: "disabled", reason: "请先登录 FD Work" };
-        }
         if (capability.session_state === "probing") {
             return { enabled: true, state: "busy", reason: "正在连接 FD Work…" };
         }
         if (capability.session_state === "error") {
             return { enabled: true, state: "error", reason: App.fdWorkStatusText(capability) };
         }
-        if (capability.ready !== true && capability.session_state !== "idle") {
-            return { enabled: true, state: "disabled", reason: "FD Work 尚未准备完成" };
-        }
         if (capability.interaction_owner && capability.interaction_owner !== "none") {
             return { enabled: true, state: "busy", reason: App.fdWorkStatusText(capability) };
+        }
+        if (
+            capability.ready !== true
+            && capability.session_state !== "idle"
+            && capability.session_state !== "login_required"
+        ) {
+            return { enabled: true, state: "disabled", reason: "FD Work 尚未准备完成" };
         }
         if (!session) {
             return { enabled: true, state: "disabled", reason: "请选择一个已结束的时间段" };
@@ -1506,9 +1507,9 @@
         return {
             enabled: true,
             state: "ready",
-            reason: capability.session_state === "idle"
-                ? "填入时将自动连接 FD Work，并在校验后保存。"
-                : "将项目、日期、时长和描述填入并保存到 FD Work。"
+            reason: capability.ready === true
+                ? "将项目、日期、时长和描述填入并保存到 FD Work。"
+                : "填入前将先打开 FD Work。"
         };
     }
     App.getFDWorkAvailability = getFDWorkAvailability;
@@ -1577,6 +1578,43 @@
             updateFDWorkEntryButton();
             return Promise.resolve(false);
         }
+        var capability = App.fdWorkStatus || {};
+        if (capability.ready !== true) {
+            if (!App.fdWork || typeof App.fdWork.ensureSession !== "function") {
+                showFDWorkStatus("打开 FD Work 失败", true);
+                return Promise.resolve(false);
+            }
+            showFDWorkStatus(
+                capability.login_required === true ? "请登录 FD Work" : "正在连接 FD Work…",
+                false
+            );
+            var sessionOperation = App.fdWork.ensureSession().then(function (result) {
+                if (!result || result.ok !== true) {
+                    showFDWorkStatus(result && result.message || "打开 FD Work 失败", true);
+                    return false;
+                }
+                var latest = App.fdWorkStatus || {};
+                if (latest.ready === true) {
+                    showFDWorkStatus("FD Work 已连接，请再次点击填入", false);
+                } else if (latest.operation === "user_auth") {
+                    showFDWorkStatus(
+                        latest.page_phase === "login_confirmation"
+                            ? "请确认登录"
+                            : "请登录 FD Work",
+                        false
+                    );
+                } else {
+                    showFDWorkStatus("正在连接 FD Work…", false);
+                }
+                return false;
+            }).finally(function () {
+                if (App.fdWorkOpenPromise === sessionOperation) App.fdWorkOpenPromise = null;
+                updateFDWorkEntryButton();
+            });
+            App.fdWorkOpenPromise = sessionOperation;
+            updateFDWorkEntryButton();
+            return sessionOperation;
+        }
         var transaction = beginFDWorkFillTransaction();
         showFDWorkStatus(
             isEditDirty() || App.editSaving ? "正在保存时间段…" : "正在填入 FD Work…",
@@ -1644,14 +1682,11 @@
                 if (result.operation_status === "save_completed") {
                     settleFDWorkFillTransaction(transaction, "save_completed");
                     showFDWorkStatus("已保存到 FD Work", false);
-                } else if (result.operation_status === "session_starting") {
-                    showFDWorkStatus("正在填入 FD Work…", false);
-                } else {
-                    settleFDWorkFillTransaction(transaction, "failed");
-                    showFDWorkStatus("FD Work 操作结果未确认，请重试", true);
-                    return false;
+                    return true;
                 }
-                return true;
+                settleFDWorkFillTransaction(transaction, "failed");
+                showFDWorkStatus("FD Work 操作结果未确认，请重试", true);
+                return false;
             }
             if (result && result.error === "stale_selection" && allowStaleRecovery) {
                 showFDWorkStatus("时间段已更新，正在刷新…", false);
