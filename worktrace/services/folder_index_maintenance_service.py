@@ -8,6 +8,7 @@ command boundary. Ordinary filename-index misses never call this module.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from datetime import datetime, timedelta
 
@@ -26,9 +27,13 @@ from ..db import get_connection, get_db_path, now_str
 HOT_PROJECT_ACTIVITY_DAYS = 7
 HOT_PROJECT_LIMIT = 10
 HOT_INDEX_FRESHNESS_MINUTES = 15
+HOT_REFRESH_QUERY_COOLDOWN_SECONDS = 300.0
 PROJECT_REFRESH_COOLDOWN_SECONDS = 60.0
+_MAX_REFRESH_CACHE_ENTRIES = 256
 
+_REFRESH_CACHE_LOCK = threading.Lock()
 _PROJECT_REFRESH_TIMES: dict[tuple[str, int, int], float] = {}
+_HOT_REFRESH_TIMES: dict[tuple[str, int], float] = {}
 
 
 def _replacement_cache_identity() -> tuple[str, int]:
@@ -39,6 +44,23 @@ def _replacement_cache_identity() -> tuple[str, int]:
             DataGenerationNamespace.DATABASE_REPLACEMENT,
         )
     return database_key, replacement_epoch
+
+
+def _reserve_refresh(
+    cache: dict,
+    key: tuple,
+    *,
+    cooldown_seconds: float,
+) -> bool:
+    current = time.monotonic()
+    with _REFRESH_CACHE_LOCK:
+        elapsed = current - cache.get(key, 0.0)
+        if elapsed < cooldown_seconds:
+            return False
+        if len(cache) >= _MAX_REFRESH_CACHE_ENTRIES:
+            cache.clear()
+        cache[key] = current
+    return True
 
 
 def _queue_rule_ids(rule_ids: list[int]) -> int:
@@ -68,9 +90,11 @@ def request_refresh_for_project(project_id: int) -> int:
         return 0
     database_key, replacement_epoch = _replacement_cache_identity()
     cache_key = (database_key, replacement_epoch, value)
-    current = time.monotonic()
-    elapsed = current - _PROJECT_REFRESH_TIMES.get(cache_key, 0.0)
-    if elapsed < PROJECT_REFRESH_COOLDOWN_SECONDS:
+    if not _reserve_refresh(
+        _PROJECT_REFRESH_TIMES,
+        cache_key,
+        cooldown_seconds=PROJECT_REFRESH_COOLDOWN_SECONDS,
+    ):
         return 0
 
     with get_connection() as conn:
@@ -89,13 +113,7 @@ def request_refresh_for_project(project_id: int) -> int:
             """,
             (value, UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT),
         ).fetchall()
-    rule_ids = [int(row["id"]) for row in rows]
-    if not rule_ids:
-        return 0
-    queued = _queue_rule_ids(rule_ids)
-    if queued:
-        _PROJECT_REFRESH_TIMES[cache_key] = current
-    return queued
+    return _queue_rule_ids([int(row["id"]) for row in rows])
 
 
 def request_refresh_for_hot_projects() -> int:
@@ -103,9 +121,17 @@ def request_refresh_for_hot_projects() -> int:
 
     Hot projects are the union of projects used during the last seven days and
     the ten most recently used projects. A ready index is not rebuilt more often
-    than every 15 minutes. New/pending rules are already covered by their durable
-    refresh marker and are therefore not redundantly re-requested here.
+    than every 15 minutes. The historical last-used aggregation itself is
+    throttled to once per five minutes per database generation.
     """
+
+    database_key, replacement_epoch = _replacement_cache_identity()
+    if not _reserve_refresh(
+        _HOT_REFRESH_TIMES,
+        (database_key, replacement_epoch),
+        cooldown_seconds=HOT_REFRESH_QUERY_COOLDOWN_SECONDS,
+    ):
+        return 0
 
     current = datetime.strptime(now_str(), TIME_FORMAT)
     activity_cutoff = (current - timedelta(days=HOT_PROJECT_ACTIVITY_DAYS)).strftime(
@@ -225,6 +251,7 @@ __all__ = [
     "HOT_INDEX_FRESHNESS_MINUTES",
     "HOT_PROJECT_ACTIVITY_DAYS",
     "HOT_PROJECT_LIMIT",
+    "HOT_REFRESH_QUERY_COOLDOWN_SECONDS",
     "PROJECT_REFRESH_COOLDOWN_SECONDS",
     "reconcile_open_unclassified_activities",
     "request_refresh_for_hot_projects",
