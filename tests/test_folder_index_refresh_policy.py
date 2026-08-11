@@ -64,7 +64,10 @@ def test_manual_project_refresh_targets_only_selected_project(temp_db):
     assert states[rule_b] == 0
 
 
-def test_hot_refresh_uses_recent_projects_and_respects_freshness(temp_db):
+def test_hot_refresh_uses_recent_projects_and_respects_freshness(
+    temp_db,
+    monkeypatch,
+):
     hot_project = project_service.create_project("Hot")
     fresh_project = project_service.create_project("Fresh")
     cold_project = project_service.create_project("Cold")
@@ -91,6 +94,14 @@ def test_hot_refresh_uses_recent_projects_and_respects_freshness(temp_db):
     _clear_refresh_marker(fresh_rule, last_indexed_at=current)
     _clear_refresh_marker(cold_rule, last_indexed_at="2000-01-01 00:00:00")
 
+    # This test verifies candidate selection/freshness rather than the independent
+    # process-level query throttle. A concurrently exercised runtime worker may
+    # legitimately reserve the same per-database throttle during the full suite.
+    monkeypatch.setattr(
+        folder_index_maintenance_service,
+        "_reserve_refresh",
+        lambda *args, **kwargs: True,
+    )
     queued = folder_index_maintenance_service.request_refresh_for_hot_projects()
 
     assert queued == 1
