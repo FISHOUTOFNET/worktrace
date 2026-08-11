@@ -181,6 +181,6 @@ def test_ci_launches_the_freshly_installed_application() -> None:
     assert 'smoke_installed_launch.ps1" -InstallDir $installDir' in workflow
     assert 'Join-Path $InstallDir "WorkTrace.exe"' in smoke
     assert "Start-Process -FilePath $exe -PassThru" in smoke
-    assert 'SimpleMatch "webview ui startup"' in smoke
+    assert 'SimpleMatch "desktop shell window loaded"' in smoke
     assert "$env:LOCALAPPDATA = $smokeRoot" in smoke
     assert "taskkill.exe /PID $process.Id /T /F" in smoke
