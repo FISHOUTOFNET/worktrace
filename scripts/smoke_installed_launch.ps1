@@ -39,7 +39,7 @@ try {
     }
 
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-    $startupObserved = $false
+    $windowLoaded = $false
 
     while ([DateTime]::UtcNow -lt $deadline) {
         $process.Refresh()
@@ -48,32 +48,32 @@ try {
         }
 
         if (Test-Path -LiteralPath $appLog) {
-            $startupObserved = [bool](Select-String `
+            $windowLoaded = [bool](Select-String `
                 -LiteralPath $appLog `
-                -SimpleMatch "webview ui startup" `
+                -SimpleMatch "desktop shell window loaded" `
                 -Quiet `
                 -ErrorAction SilentlyContinue)
-            if ($startupObserved) {
+            if ($windowLoaded) {
                 break
             }
         }
         Start-Sleep -Milliseconds 500
     }
 
-    if (-not $startupObserved) {
+    if (-not $windowLoaded) {
         $startupLogHint = if (Test-Path -LiteralPath $startupLog) {
             $startupLog
         }
         else {
             "not created"
         }
-        throw "Installed WorkTrace did not reach WebView startup within $TimeoutSeconds seconds; startup log: $startupLogHint"
+        throw "Installed WorkTrace did not load its WebView window within $TimeoutSeconds seconds; startup log: $startupLogHint"
     }
 
     Start-Sleep -Seconds 2
     $process.Refresh()
     if ($process.HasExited) {
-        throw "Installed WorkTrace exited immediately after WebView startup with code $($process.ExitCode)."
+        throw "Installed WorkTrace exited immediately after its WebView window loaded with code $($process.ExitCode)."
     }
 
     Write-Host "installed_launch_smoke=passed pid=$($process.Id)"
