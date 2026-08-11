@@ -90,6 +90,7 @@ class DesktopShellController:
     def handle_window_loaded(self) -> None:
         with self._lock:
             self._window_loaded = True
+            logger.info("desktop shell window loaded")
             if self.state is ShellState.EXITING:
                 return
             if self.state is ShellState.VISIBLE:
