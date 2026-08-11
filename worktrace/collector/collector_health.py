@@ -4,7 +4,6 @@ import logging
 import re
 import sys
 import threading
-import traceback
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -249,19 +248,22 @@ def _safe_health_code(code: str) -> str:
 
 
 def _current_exception_diagnostic() -> tuple[str, str]:
-    """Return exception type and code-location stack without exception text."""
+    """Return exception type and code locations without exception text."""
 
-    exc_type, _exc_value, exc_traceback = sys.exc_info()
-    if exc_type is None or exc_traceback is None:
+    exc_type, _exc_value, tb = sys.exc_info()
+    if exc_type is None or tb is None:
         return "none", "none"
-    frames = traceback.extract_tb(exc_traceback)[-6:]
-    locations = []
-    for frame in frames:
-        normalized = str(frame.filename or "").replace("\\", "/")
+    locations: list[str] = []
+    while tb is not None:
+        frame = tb.tb_frame
+        normalized = str(frame.f_code.co_filename or "").replace("\\", "/")
         parts = [part for part in normalized.split("/") if part]
         safe_path = "/".join(parts[-3:]) or "unknown"
-        locations.append(f"{safe_path}:{frame.lineno}:{frame.name}")
-    return exc_type.__name__, ">".join(locations) or "none"
+        locations.append(
+            f"{safe_path}:{tb.tb_lineno}:{frame.f_code.co_name}"
+        )
+        tb = tb.tb_next
+    return exc_type.__name__, ">".join(locations[-6:]) or "none"
 
 
 def format_time(value: datetime | str | None = None) -> str:
