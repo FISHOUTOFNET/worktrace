@@ -8,11 +8,12 @@ from worktrace.platforms.windows_path_resolver import WindowsPathResolver
 pytestmark = [pytest.mark.unit, pytest.mark.collector_runtime]
 
 
-def test_com_capable_word_requires_path_even_without_extension_in_title():
+def test_com_capable_word_probes_without_expanding_privacy_requirement():
     resolver = WindowsPathResolver()
 
-    assert resolver.privacy_path_required("WINWORD.EXE", "Legal Opinion - Word") is True
-    assert resolver.privacy_path_required("Code.exe", "Visual Studio Code") is False
+    assert resolver.should_probe_path("WINWORD.EXE", "Legal Opinion - Word") is True
+    assert resolver.privacy_path_required("WINWORD.EXE", "Legal Opinion - Word") is False
+    assert resolver.should_probe_path("Code.exe", "Visual Studio Code") is False
 
 
 def test_word_com_probe_resolves_full_path_from_stem_only_title(monkeypatch):
