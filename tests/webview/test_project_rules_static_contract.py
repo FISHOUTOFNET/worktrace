@@ -95,7 +95,7 @@ def test_fd_work_case_semantics_are_enabled_only_by_shared_capability_status():
     identity_source = read_js("fd_work_v5.js")
     presentation = func_body(identity_source, "syncIdentityStatus")
     assert "input.hidden = false" in presentation
-    assert "input.readOnly = false" in presentation
+    assert "input.readOnly = identityState.pickerPending" in presentation
     assert "picker.hidden = !enabled" in presentation
     assert "App.projectIdentity = Object.freeze" in identity_source
     assert "App.projectIdentity.syncStatus()" in source
