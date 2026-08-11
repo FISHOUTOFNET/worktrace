@@ -212,6 +212,18 @@ test("a stale transaction cannot overwrite a newer fill transaction", async () =
   closeFill(App, 2, 2);
   assert.equal(App.fdWorkOpenPromise, null);
 
+  App.receiveFDWorkStatus({
+    supported: true,
+    enabled: true,
+    session_state: "ready",
+    operation: "none",
+    interaction_owner: "none",
+    ready: true,
+    login_required: false,
+    error_code: null,
+    operation_generation: 2,
+    navigation_generation: 3,
+  });
   const second = App.openFDWorkEntryForSelection();
   await flushBridgeDispatch();
   App.receiveFDWorkStatus({
