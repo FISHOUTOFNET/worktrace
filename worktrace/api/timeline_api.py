@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from ..domain_limits import (
@@ -10,6 +11,7 @@ from ..domain_limits import (
     normalize_timeline_duration_override_seconds,
 )
 from ..services import (
+    folder_index_maintenance_service,
     project_service,
     report_session_operation_service,
     timeline_service,
@@ -43,13 +45,23 @@ def save_timeline_session_edit(
     adjusted_duration_seconds: int | None,
     note: str,
 ) -> dict[str, Any]:
+    validated_date = _validate_report_date(report_date)
+    validated_key = _validate_projection_instance_key(projection_instance_key)
+    validated_revision = _validate_projection_revision(expected_projection_revision)
+    validated_project_id = _validate_optional_project_id(project_id)
     touched = _validate_duration_touched(duration_touched)
+    refresh_project_id = _manual_project_refresh_target(
+        validated_date,
+        validated_key,
+        validated_revision,
+        validated_project_id,
+    )
     result = report_session_operation_service.edit_session(
-        _validate_report_date(report_date),
-        _validate_projection_instance_key(projection_instance_key),
-        _validate_projection_revision(expected_projection_revision),
+        validated_date,
+        validated_key,
+        validated_revision,
         _validate_request_id(request_id),
-        project_id=_validate_optional_project_id(project_id),
+        project_id=validated_project_id,
         duration_touched=touched,
         adjusted_duration_seconds=(
             _validate_adjusted_duration(adjusted_duration_seconds)
@@ -58,7 +70,20 @@ def save_timeline_session_edit(
         ),
         note=_validate_note(note),
     )
-    return _operation_result(result)
+    public_result = _operation_result(result)
+    if refresh_project_id is not None and result.outcome_type == "operation_committed":
+        try:
+            folder_index_maintenance_service.request_refresh_for_project(
+                refresh_project_id
+            )
+        except Exception:
+            # Timeline commit is authoritative. Folder maintenance is best-effort
+            # and must never make a successful user edit appear to have failed.
+            logging.exception(
+                "manual Timeline project correction index refresh failed project_id=%s",
+                refresh_project_id,
+            )
+    return public_result
 
 
 def hide_timeline_session(
@@ -157,6 +182,24 @@ def hide_timeline_session_activity(
             _validate_request_id(request_id),
         )
     )
+
+
+def _manual_project_refresh_target(
+    report_date: str,
+    projection_instance_key: str,
+    expected_projection_revision: str,
+    project_id: int | None,
+) -> int | None:
+    if project_id is None:
+        return None
+    for session in timeline_service.get_project_sessions_by_date(report_date):
+        if str(session.get("projection_instance_key") or "") != projection_instance_key:
+            continue
+        if str(session.get("projection_revision") or "") != expected_projection_revision:
+            return None
+        current_project_id = int(session.get("project_id") or 0)
+        return project_id if current_project_id != project_id else None
+    return None
 
 
 def _validate_project_id(project_id: int) -> int:
