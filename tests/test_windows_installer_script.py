@@ -29,8 +29,9 @@ def test_webview2_prerequisite_is_detected_and_installed_per_user() -> None:
     assert "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" in source
     assert "https://go.microsoft.com/fwlink/p/?LinkId=2124703" in source
     assert "IsWebView2RuntimeInstalled" in source
-    assert "WebView2VersionIsPresent(HKCU" in source
-    assert "WebView2VersionIsPresent(HKLM32" in source
+    assert "RegQueryStringValue(HKCU" in source
+    assert "RegQueryStringValue(HKLM32" in source
+    assert "RegQueryStringValue(HKLM64" in source
     assert "PrepareToInstall" in source
     assert "DownloadTemporaryFile" in source
     assert "MicrosoftEdgeWebview2Setup.exe" in source
@@ -72,7 +73,7 @@ def test_upgrade_task_selection_preserves_actual_registry_choice() -> None:
 def test_startup_state_detection_does_not_depend_on_app_constant() -> None:
     source = ISS_PATH.read_text(encoding="utf-8")
     helper_start = source.index("function ExistingStartupEnabled")
-    helper_end = source.index("function WebView2VersionIsPresent", helper_start)
+    helper_end = source.index("function IsUsableWebView2Version", helper_start)
     helper = source[helper_start:helper_end]
 
     assert "RegQueryStringValue" in helper
