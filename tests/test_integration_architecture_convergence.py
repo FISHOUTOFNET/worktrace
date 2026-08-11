@@ -67,6 +67,30 @@ def test_concrete_fd_work_is_instantiated_only_by_composition_root() -> None:
     assert violations == []
 
 
+def test_fd_work_integration_does_not_own_generic_project_routing() -> None:
+    source = _source("worktrace/integrations/fd_work/integration_service.py")
+    tree = ast.parse(source)
+    service = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "FDWorkIntegrationService"
+    )
+    methods = {
+        node.name
+        for node in service.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert methods.isdisjoint(
+        {"create_project", "update_project", "list_project_identities"}
+    )
+    assert {
+        "create_bound_project",
+        "rebind_project",
+        "list_bound_project_ids",
+        "clear_project_identity",
+    }.issubset(methods)
+
+
 def test_privacy_coordinator_is_integration_agnostic() -> None:
     source = _source("worktrace/runtime/post_privacy_startup.py")
     assert "fd_work" not in source
