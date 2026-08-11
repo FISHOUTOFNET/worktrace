@@ -70,8 +70,9 @@ class WindowsAdapter:
             pass
 
         requires_path = self._path_resolver.privacy_path_required(process_name, title)
+        should_probe_path = self._path_resolver.should_probe_path(process_name, title)
         file_path_hint = resolve_title_file_path(title)
-        if not file_path_hint and requires_path:
+        if not file_path_hint and should_probe_path:
             file_path_hint = self._path_resolver.resolve(
                 (hwnd, pid, process_name, title),
                 process_name,
