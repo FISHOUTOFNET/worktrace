@@ -22,7 +22,6 @@ from ..integrations.fd_work.binding_service import FDWorkBindingService
 from ..integrations.fd_work.draft_builder import FDWorkEntryDraftBuilder
 from ..integrations.fd_work.integration_service import FDWorkIntegrationService
 from .app_runtime import AppRuntime
-from .collector_supervisor import CollectorSupervisor
 from .post_privacy_startup import PostPrivacyStartupCoordinator
 
 
@@ -59,10 +58,9 @@ def build_application_services(
     )
     data_lifecycle = ApplicationDataLifecycle((fd_work,))
     base_app_control = ApplicationControlService(runtime, maintenance)
-    collector_supervisor = CollectorSupervisor(runtime)
     app_control = PostPrivacyStartupCoordinator(
         base_app_control,
-        participants=(fd_work, collector_supervisor),
+        participants=(fd_work, runtime.collector_supervisor),
     )
     return ApplicationServices(
         app_control=app_control,
