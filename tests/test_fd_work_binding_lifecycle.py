@@ -98,7 +98,10 @@ def test_main_database_and_backup_versions_are_unchanged():
 
 
 def test_composition_root_injects_exact_lazy_sidecar_path(tmp_path):
-    runtime = SimpleNamespace(paths=SimpleNamespace(base_dir=tmp_path))
+    runtime = SimpleNamespace(
+        paths=SimpleNamespace(base_dir=tmp_path),
+        collector_supervisor=SimpleNamespace(),
+    )
 
     services = build_application_services(runtime)
     path = services.fd_work._binding_service.repository.path
