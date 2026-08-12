@@ -9,9 +9,11 @@
     App.rulesPanelLastCreatedProjectId = null;
     App.rulesPanelOriginalLanguage = null;
     App.rulesPanelSessionToken = 0;
+    App.rulesPanelTargetMissing = false;
     App.rulesChoosingFolder = false;
     App.rulesCreatingPanelProject = false;
     App.rulesCreatingPanelRule = false;
+    App.rulesDeletingProjectId = null;
 
     function initRulesPanelEvents() {
         bindClick("rules-open-create-rule", function () { openRulesPanel("rule", { ruleType: "folder" }); });
@@ -107,7 +109,22 @@
         openRulesPanel("project", { project: project, trigger: button });
     }
 
+    function setProjectDeleting(projectId) {
+        App.rulesDeletingProjectId = parsePositiveInt(projectId) || null;
+        var buttons = document.querySelectorAll(".rules-project-delete-button");
+        Array.prototype.forEach.call(buttons, function (button) {
+            var currentId = parsePositiveInt(button.getAttribute("data-project-id"));
+            var busy = currentId === App.rulesDeletingProjectId;
+            button.disabled = !!App.rulesDeletingProjectId;
+            button.classList.toggle("is-busy", busy);
+            button.setAttribute("aria-label", busy ? "正在删除项目" : "删除项目");
+            button.setAttribute("data-tooltip", busy ? "正在删除" : "删除项目");
+        });
+    }
+    App.setProjectDeleting = setProjectDeleting;
+
     function deleteProject(button) {
+        if (App.rulesDeletingProjectId) return;
         var projectId = parsePositiveInt(button.getAttribute("data-project-id"));
         var project = findProject(projectId);
         if (!projectId || !App.openDeleteDialog) return;
@@ -121,19 +138,34 @@
             twoStep: true,
             confirmLabel: "删除项目"
         }).then(function (confirmed) {
-            if (!confirmed) return null;
+            if (!confirmed || App.rulesDeletingProjectId) return null;
+            setProjectDeleting(projectId);
+            App.clearRulesError();
             return App.bridge.deleteProjectForRules(projectId);
         }).then(function (result) {
-            if (!result) return;
+            if (!result) return false;
             if (result && result.ok === false) {
                 App.showRulesError(result.error || "删除项目失败");
-                return;
+                return false;
             }
-            return App.loadProjectRules().then(function () {
+            var reload = App.reloadProjectRules
+                ? App.reloadProjectRules()
+                : App.loadProjectRules({ forceFresh: true });
+            return reload.then(function (readback) {
+                if (!readback) {
+                    App.showRulesError("项目已删除，但列表刷新失败，请刷新后检查");
+                    return false;
+                }
                 App.clearRulesError();
                 if (App.showToast) App.showToast("项目已删除");
+                return true;
             });
-        }).catch(function () { App.showRulesError("删除项目失败"); });
+        }).catch(function () {
+            App.showRulesError("删除项目失败");
+            return false;
+        }).finally(function () {
+            setProjectDeleting(null);
+        });
     }
 
     function openRulesPanel(mode, options) {
@@ -154,8 +186,7 @@
         clearPanelStatus();
         if (panel && App.openManagedDrawer) {
             var focus = document.getElementById(mode === "project"
-                ? "rules-panel-project-name"
-                : "rules-panel-choose-folder");
+                ? "rules-panel-project-name" : "rules-panel-choose-folder");
             App.openManagedDrawer(
                 panel,
                 options.trigger || document.activeElement,
@@ -180,6 +211,7 @@
         App.rulesPanelEditingProjectId = null;
         App.rulesPanelLastCreatedProjectId = null;
         App.rulesPanelOriginalLanguage = null;
+        App.rulesPanelTargetMissing = false;
         fillProjectFields(null);
         setValue("rules-panel-folder-path", "");
         setValue("rules-panel-keyword", "");
@@ -306,6 +338,8 @@
     function refreshRulesPanelTargets(preferredProjectId) {
         var select = document.getElementById("rules-panel-target-project");
         if (!select) return;
+        var currentProjectId = parsePositiveInt(select.value);
+        var requestedProjectId = parsePositiveInt(preferredProjectId) || currentProjectId;
         var projects = ((App.lastProjectRulesData && App.lastProjectRulesData.projects) || []).filter(function (p) {
             return p && !p.is_system && !p.is_excluded && parsePositiveInt(p.id) > 0;
         });
@@ -316,8 +350,26 @@
             option.textContent = App.safeText(projects[i].name, "未命名项目");
             select.appendChild(option);
         }
-        if (preferredProjectId) select.value = String(preferredProjectId);
-        select.disabled = !projects.length || App.rulesCreatingPanelRule;
+        App.rulesPanelTargetMissing = false;
+        if (requestedProjectId) {
+            select.value = String(requestedProjectId);
+            if (parsePositiveInt(select.value) !== requestedProjectId) {
+                var missing = document.createElement("option");
+                missing.value = "";
+                missing.textContent = "项目已不存在";
+                missing.disabled = true;
+                missing.selected = true;
+                select.appendChild(missing);
+                select.value = "";
+                App.rulesPanelTargetMissing = true;
+                var panel = document.getElementById("rules-create-panel");
+                if (panel && !panel.hidden && App.rulesPanelMode === "rule") {
+                    showPanelStatus("所选项目已不存在，请重新选择", true);
+                }
+            }
+        }
+        select.disabled = !projects.length || App.rulesCreatingPanelRule || App.rulesPanelTargetMissing;
+        refreshPanelWriteState();
     }
     App.refreshRulesPanelTargets = refreshRulesPanelTargets;
 
@@ -367,7 +419,10 @@
                 }
                 return null;
             }
-            return App.loadProjectRules().then(function (readback) {
+            var reload = App.reloadProjectRules
+                ? App.reloadProjectRules()
+                : App.loadProjectRules({ forceFresh: true });
+            return reload.then(function (readback) {
                 if (!isCurrentRulesPanelSession(sessionToken)) return;
                 var projects = (readback && readback.projects) || [];
                 var saved = projects.find(function (candidate) {
@@ -410,7 +465,7 @@
         var sessionToken = App.rulesPanelSessionToken;
         var projectSelect = document.getElementById("rules-panel-target-project");
         var projectId = projectSelect ? parsePositiveInt(projectSelect.value) : 0;
-        if (!projectId) {
+        if (!projectId || App.rulesPanelTargetMissing) {
             showPanelStatus("请选择有效的项目", true);
             return;
         }
@@ -440,31 +495,54 @@
             var rule = (result && result.rule) || {};
             var ruleKind = isFolder ? "folder" : "keyword";
             var ruleId = parsePositiveInt(rule.id);
-            if (applyToHistory && ruleId && App.backfillCreatedRule) {
-                return App.backfillCreatedRule(ruleKind, ruleId).then(function (ok) {
-                    if (!ok && isCurrentRulesPanelSession(sessionToken)) {
-                        showPanelStatus("规则已新增，但应用到历史记录失败", true);
-                        return null;
-                    }
-                    if (isCurrentRulesPanelSession(sessionToken)) {
-                        showPanelStatus("规则已新增，并已应用到历史记录。", false);
-                    }
-                    return true;
-                });
+            var outcome = {
+                created: true,
+                backfillFailed: false,
+                successMessage: "规则已新增"
+            };
+            if (!applyToHistory) return outcome;
+            if (!ruleId || !App.backfillCreatedRule) {
+                outcome.backfillFailed = true;
+                return outcome;
             }
-            if (isCurrentRulesPanelSession(sessionToken)) {
-                showPanelStatus("规则已新增。", false);
-            }
-            return true;
-        }).then(function () {
-            return App.loadProjectRules();
+            return App.backfillCreatedRule(ruleKind, ruleId).then(function (ok) {
+                outcome.backfillFailed = !ok;
+                if (ok) outcome.successMessage = "规则已新增，并已应用到历史记录";
+                return outcome;
+            }).catch(function () {
+                outcome.backfillFailed = true;
+                return outcome;
+            });
+        }).then(function (outcome) {
+            if (!outcome || outcome.created !== true) return false;
+            var reload = App.reloadProjectRules
+                ? App.reloadProjectRules()
+                : App.loadProjectRules({ forceFresh: true });
+            return reload.then(function (readback) {
+                var currentSession = isCurrentRulesPanelSession(sessionToken);
+                if (currentSession) closeRulesPanel();
+                if (!readback) {
+                    App.showRulesError("规则已新增，但列表刷新失败，请刷新后检查");
+                    return false;
+                }
+                if (outcome.backfillFailed) {
+                    App.showRulesError("规则已新增，但应用到历史记录失败");
+                    if (App.showToast) App.showToast("规则已新增");
+                    return false;
+                }
+                App.clearRulesError();
+                if (App.showToast) App.showToast(outcome.successMessage);
+                return true;
+            });
         }).catch(function () {
             if (isCurrentRulesPanelSession(sessionToken)) {
                 showPanelStatus("新增规则失败", true);
             }
-        }).then(function () {
+            return false;
+        }).then(function (ok) {
             App.rulesCreatingPanelRule = false;
             refreshPanelWriteState();
+            return ok;
         });
     }
 
@@ -513,7 +591,7 @@
         var projectBusy = !!App.rulesCreatingPanelProject;
         var ruleBusy = !!App.rulesCreatingPanelRule;
         syncProjectPanelPresentation();
-        setDisabled("rules-panel-save-rule", ruleBusy);
+        setDisabled("rules-panel-save-rule", ruleBusy || App.rulesPanelTargetMissing);
         setDisabled("rules-panel-project-name", projectBusy);
         var identityControls = App.projectIdentity.updateControls(projectBusy);
         var saveProject = document.getElementById("rules-panel-save-project");
@@ -527,7 +605,7 @@
         setDisabled("rules-panel-project-description", projectBusy);
         setDisabled("rules-panel-project-language", projectBusy);
         setDisabled("rules-panel-project-language-other", projectBusy);
-        setDisabled("rules-panel-target-project", ruleBusy);
+        setDisabled("rules-panel-target-project", ruleBusy || App.rulesPanelTargetMissing);
         setDisabled("rules-panel-folder-path", ruleBusy);
         setDisabled("rules-panel-choose-folder", ruleBusy || App.rulesChoosingFolder);
         setDisabled("rules-panel-folder-recursive", ruleBusy);
