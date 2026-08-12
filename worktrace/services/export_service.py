@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import dataclass
 import errno
 import logging
 import os
@@ -35,6 +36,19 @@ _FORMULA_INJECTION_PREFIXES = ("=", "+", "-", "@", "\t")
 _DERIVED_RUNTIME_TABLES = frozenset(
     {"folder_rule_index_state", "folder_rule_file_index"}
 )
+
+
+@dataclass(frozen=True)
+class PreparedStatisticsCsvExport:
+    """Opaque point-in-time statistics export prepared before path selection."""
+
+    date_from: str
+    date_to: str
+    project_id: str | int | None
+    snapshot: object
+    activity_count: int
+    export_row_count: int
+    duration_seconds: int
 
 
 class ExportFileError(OSError):
@@ -101,32 +115,7 @@ def _escape_csv_cell(value) -> str:
     return text
 
 
-def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
-    from .report_projection_snapshot_service import build_visible_snapshot
-    from .statistics_projection import iter_statistics_export_records
-
-    statistics_service.validate_statistics_date_range(date_from, date_to)
-    snapshot = build_visible_snapshot(date_from, date_to)
-    return list(iter_statistics_export_records(snapshot))
-
-
-def write_statistics_csv(
-    date_from: str,
-    date_to: str,
-    output_path,
-    expected_export_ticket_revision: str,
-    project_id: str | int | None = None,
-) -> dict:
-    """Write the exact accepted closed-record projection to CSV.
-
-    Builds exactly one canonical snapshot and uses it for both the export
-    ticket validation and the CSV record iteration so that the checked state
-    and the written state are the same object. Records are streamed row by
-    row instead of being fully materialised in memory.
-    """
-
-    date_from, date_to = statistics_service.resolve_statistics_date_range(date_from, date_to)
-    statistics_service.validate_statistics_project_scope(project_id)
+def _normalized_csv_path(output_path) -> Path:
     path = Path(output_path)
     if path.exists() and path.is_dir():
         raise ValueError("invalid_path")
@@ -137,6 +126,121 @@ def write_statistics_csv(
     parent = path.parent
     if not parent.exists() or not parent.is_dir():
         raise ValueError("invalid_path")
+    return path
+
+
+def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
+    from .report_projection_snapshot_service import build_visible_snapshot
+    from .statistics_projection import iter_statistics_export_records
+
+    statistics_service.validate_statistics_date_range(date_from, date_to)
+    snapshot = build_visible_snapshot(date_from, date_to)
+    return list(iter_statistics_export_records(snapshot))
+
+
+def prepare_statistics_csv(
+    date_from: str,
+    date_to: str,
+    project_id: str | int | None = None,
+) -> PreparedStatisticsCsvExport:
+    """Freeze the exact as-of Statistics projection before opening a save dialog."""
+
+    date_from, date_to = statistics_service.resolve_statistics_date_range(
+        date_from, date_to
+    )
+    statistics_service.validate_statistics_project_scope(project_id)
+
+    from .page_read_context import page_read_scope
+    from .report_as_of_snapshot_service import build_statistics_as_of_snapshot
+    from .statistics_projection import build_statistics_summary_projection
+
+    with page_read_scope():
+        as_of = build_statistics_as_of_snapshot(date_from, date_to)
+        summary = build_statistics_summary_projection(
+            as_of.snapshot,
+            project_id=project_id,
+        )
+    if int(summary.export_row_count) <= 0:
+        raise ValueError("empty_data")
+    return PreparedStatisticsCsvExport(
+        date_from=date_from,
+        date_to=date_to,
+        project_id=project_id,
+        snapshot=as_of.snapshot,
+        activity_count=int(summary.activity_count),
+        export_row_count=int(summary.export_row_count),
+        duration_seconds=int(summary.total_duration_seconds),
+    )
+
+
+def write_prepared_statistics_csv(
+    prepared: PreparedStatisticsCsvExport,
+    output_path,
+) -> dict:
+    """Write a previously frozen Statistics snapshot without rereading runtime/DB."""
+
+    if not isinstance(prepared, PreparedStatisticsCsvExport):
+        raise ValueError("invalid_input")
+    path = _normalized_csv_path(output_path)
+    from .statistics_projection import iter_statistics_export_records
+
+    headers = [header for _key, header in _CSV_COLUMNS]
+    keys = [key for key, _header in _CSV_COLUMNS]
+    row_count = 0
+    total_seconds = 0
+    try:
+        with AtomicFileOutput(path, resource="statistics_csv") as output:
+            with open(
+                output.temporary_path,
+                "w",
+                newline="",
+                encoding="utf-8-sig",
+            ) as handle:
+                writer = csv.writer(handle)
+                writer.writerow(headers)
+                for row in iter_statistics_export_records(
+                    prepared.snapshot,
+                    project_id=prepared.project_id,
+                ):
+                    writer.writerow(
+                        [_escape_csv_cell(row.get(key, "")) for key in keys]
+                    )
+                    row_count += 1
+                    total_seconds += int(row.get("duration_seconds") or 0)
+                if row_count == 0:
+                    raise ValueError("empty_data")
+                handle.flush()
+                os.fsync(handle.fileno())
+            output.commit()
+    except PermissionError:
+        raise
+    except (OSError, TemporaryFileError) as exc:
+        _raise_export_file_error(exc, stage="statistics_csv")
+    return {
+        "activity_count": int(prepared.activity_count),
+        "export_row_count": row_count,
+        "duration_seconds": total_seconds,
+        "filename": path.name,
+    }
+
+
+def write_statistics_csv(
+    date_from: str,
+    date_to: str,
+    output_path,
+    expected_export_ticket_revision: str,
+    project_id: str | int | None = None,
+) -> dict:
+    """Legacy ticket-bound closed-record writer retained for compatibility.
+
+    New WebView exports use ``prepare_statistics_csv`` followed by
+    ``write_prepared_statistics_csv`` so the frozen instant is the click time,
+    not the later save-dialog completion time.
+    """
+
+    date_from, date_to = statistics_service.resolve_statistics_date_range(date_from, date_to)
+    statistics_service.validate_statistics_project_scope(project_id)
+    path = _normalized_csv_path(output_path)
 
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import (
@@ -280,10 +384,13 @@ def clear_all_local_data(confirm: bool) -> None:
 
 __all__ = [
     "ExportFileError",
+    "PreparedStatisticsCsvExport",
     "build_statistics_csv_rows",
     "classify_export_os_error",
     "clear_all_local_data",
     "export_all_local_data",
     "export_excel",
+    "prepare_statistics_csv",
+    "write_prepared_statistics_csv",
     "write_statistics_csv",
 ]

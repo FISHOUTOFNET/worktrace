@@ -81,6 +81,19 @@ def _build_summary_projection(start_date: str, end_date: str, project_id=None):
     )
 
 
+def _scoped_live_target(live_target, projection) -> dict | None:
+    if not isinstance(live_target, dict) or live_target.get("enabled") is not True:
+        return None
+    project_keys = {str(group.get("key") or "") for group in projection.by_project}
+    target = dict(live_target)
+    target["enabled"] = bool(
+        target.get("includes_today") is True
+        and str(target.get("project_key") or "") in project_keys
+    )
+    target.pop("includes_today", None)
+    return target if target["enabled"] else None
+
+
 def get_statistics_export_summary(
     date_from: str,
     date_to: str,
@@ -88,7 +101,25 @@ def get_statistics_export_summary(
 ) -> dict:
     date_from, date_to = resolve_statistics_date_range(date_from, date_to)
     validate_statistics_project_scope(project_id)
-    projection = _build_summary_projection(date_from, date_to, project_id)
+
+    # Statistics is a read surface, so it can safely freeze the verified open
+    # activity at the request sample without changing mutation revisions or the
+    # durable canonical projection used by Timeline operations.
+    from .page_read_context import page_read_scope
+    from .report_as_of_snapshot_service import build_statistics_as_of_snapshot
+    from .statistics_projection import build_statistics_summary_projection
+
+    with page_read_scope():
+        as_of = build_statistics_as_of_snapshot(date_from, date_to)
+        projection = build_statistics_summary_projection(
+            as_of.snapshot,
+            project_id=project_id,
+        )
+        live_target = _scoped_live_target(
+            dict(as_of.live_target) if as_of.live_target is not None else None,
+            projection,
+        )
+
     normalized_scope = normalize_statistics_project_scope(project_id)
     ticket_revision = compute_statistics_export_ticket_revision(
         projection.snapshot_revision,
@@ -116,6 +147,7 @@ def get_statistics_export_summary(
         "by_project": list(projection.by_project),
         "by_app": list(projection.by_app),
         "by_status": list(projection.by_status),
+        "live_target": live_target,
         "export_preview": {
             "date_from": date_from,
             "date_to": date_to,
@@ -137,7 +169,11 @@ def compute_statistics_export_ticket_revision(
     date_to: str,
     normalized_scope: str,
 ) -> str:
-    """Compute a ticket revision binding snapshot, date range, scope, format and schema."""
+    """Compute a compatibility ticket for the accepted page snapshot.
+
+    Realtime export no longer relies on this token for write admission; it is
+    retained in the bridge payload so older frontend callers remain compatible.
+    """
 
     return stable_json_hash(
         {

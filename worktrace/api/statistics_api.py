@@ -100,6 +100,24 @@ def _group_payload(group: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _live_target_payload(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict) or value.get("enabled") is not True:
+        return None
+    return {
+        "enabled": True,
+        "ticking": value.get("ticking") is True,
+        "sampled_at_epoch_ms": int(value.get("sampled_at_epoch_ms") or 0),
+        "elapsed_seconds_at_sample": int(value.get("elapsed_seconds_at_sample") or 0),
+        "project_key": str(value.get("project_key") or ""),
+        "app_key": str(value.get("app_key") or ""),
+        "status_key": str(value.get("status_key") or ""),
+        "is_concrete_project": value.get("is_concrete_project") is True,
+        "is_uncategorized": value.get("is_uncategorized") is True,
+        "contributes_project_duration": value.get("contributes_project_duration") is True,
+        "is_excluded_status": value.get("is_excluded_status") is True,
+    }
+
+
 def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
     by_project = [
         _group_payload(group) for group in (summary.get("by_project") or [])
@@ -119,6 +137,9 @@ def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
         "total_duration": format_duration(total_seconds),
         "project_duration_seconds": project_seconds,
         "project_duration": format_duration(project_seconds),
+        "classified_duration_seconds": int(summary.get("classified_duration_seconds") or 0),
+        "uncategorized_duration_seconds": int(summary.get("uncategorized_duration_seconds") or 0),
+        "excluded_duration_seconds": int(summary.get("excluded_duration_seconds") or 0),
         "activity_count": int(summary.get("activity_count") or 0),
         "session_count": int(summary.get("session_count") or 0),
         "export_row_count": int(summary.get("export_row_count") or 0),
@@ -127,6 +148,7 @@ def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
         "by_project": by_project,
         "by_app": by_app,
         "by_status": by_status,
+        "live_target": _live_target_payload(summary.get("live_target")),
         "export_preview": {
             "date_from": str(preview.get("date_from") or ""),
             "date_to": str(preview.get("date_to") or ""),

@@ -1,0 +1,137 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+
+function formatDuration(value) {
+  value = Math.max(0, Number(value) || 0);
+  const h = String(Math.floor(value / 3600)).padStart(2, "0");
+  const m = String(Math.floor(value % 3600 / 60)).padStart(2, "0");
+  const s = String(Math.floor(value % 60)).padStart(2, "0");
+  return `${h}:${m}:${s}`;
+}
+
+function harness() {
+  const listeners = {};
+  const document = {
+    addEventListener(name, handler) { listeners[name] = handler; },
+  };
+  const window = {
+    document,
+    setTimeout,
+    WorkTraceApp: {
+      formatDuration,
+      applyLocalTicker() {},
+      refreshAll() { return Promise.resolve("base"); },
+      acceptRefreshStateRuntime() { return true; },
+      liveRuntimeStore: { get() { return null; } },
+    },
+  };
+  const context = {
+    window,
+    document,
+    Promise,
+    Date,
+    Math,
+    Number,
+    String,
+    Array,
+    Object,
+    JSON,
+    parseInt,
+    setTimeout,
+    clearTimeout,
+  };
+  vm.createContext(context);
+  vm.runInContext(
+    fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/ui_composition.js"), "utf8"),
+    context,
+    { filename: "ui_composition.js" }
+  );
+  return { App: window.WorkTraceApp, listeners };
+}
+
+test("statistics live math adds only post-sample delta and recomputes every share", () => {
+  const { App } = harness();
+  const base = {
+    total_duration_seconds: 100,
+    total_duration: "00:01:40",
+    project_duration_seconds: 80,
+    project_duration: "00:01:20",
+    classified_duration_seconds: 80,
+    uncategorized_duration_seconds: 20,
+    excluded_duration_seconds: 0,
+    by_project: [
+      { key: "A", display_name: "A", duration_seconds: 80, duration: "00:01:20", percentage: 80 },
+      { key: "未归类", display_name: "未归类", duration_seconds: 20, duration: "00:00:20", percentage: 20 },
+    ],
+    by_app: [
+      { key: "Word", display_name: "Word", duration_seconds: 80, duration: "00:01:20", percentage: 80 },
+      { key: "Edge", display_name: "Edge", duration_seconds: 20, duration: "00:00:20", percentage: 20 },
+    ],
+    by_status: [{ key: "normal", display_name: "正常", duration_seconds: 100, duration: "00:01:40", percentage: 100 }],
+    export_preview: { included_duration_seconds: 100, included_duration: "00:01:40" },
+    live_target: {
+      enabled: true,
+      ticking: true,
+      sampled_at_epoch_ms: 100000,
+      elapsed_seconds_at_sample: 30,
+      project_key: "A",
+      app_key: "Word",
+      status_key: "normal",
+      contributes_project_duration: true,
+      is_uncategorized: false,
+      is_excluded_status: false,
+    },
+  };
+
+  const live = App.statisticsLiveSummaryAtNow(base, 110000);
+  assert.equal(live.total_duration_seconds, 110);
+  assert.equal(live.project_duration_seconds, 90);
+  assert.equal(live.by_project.find((row) => row.key === "A").duration_seconds, 90);
+  assert.equal(live.by_project.find((row) => row.key === "未归类").duration_seconds, 20);
+  assert.equal(live.by_app.find((row) => row.key === "Word").duration_seconds, 90);
+  assert.equal(live.by_status[0].duration_seconds, 110);
+  assert.equal(live.by_project.find((row) => row.key === "A").percentage, 81.8);
+  assert.equal(live.by_project.find((row) => row.key === "未归类").percentage, 18.2);
+  assert.equal(live.export_preview.included_duration_seconds, 110);
+  assert.equal(base.total_duration_seconds, 100);
+  assert.equal(base.by_project[0].duration_seconds, 80);
+});
+
+test("manual refresh is routed to the active composed page", async () => {
+  const { App } = harness();
+  let rules = 0;
+  let statistics = 0;
+  let settings = 0;
+  App.loadProjectRules = () => { rules += 1; return Promise.resolve(); };
+  App.loadStatisticsExportSummary = () => { statistics += 1; return Promise.resolve(); };
+  App.loadSettingsPrivacyStatus = () => { settings += 1; return Promise.resolve(); };
+
+  App.currentPage = "rules";
+  await App.refreshAll();
+  App.currentPage = "statistics";
+  await App.refreshAll();
+  App.currentPage = "settings";
+  await App.refreshAll();
+
+  assert.deepEqual([rules, statistics, settings], [1, 1, 1]);
+});
+
+test("timeline structural refresh is held while editing and drains when clean", async () => {
+  const { App } = harness();
+  let editing = true;
+  let refreshes = 0;
+  App.currentPage = "timeline";
+  App.timelineStructuralRefreshPending = true;
+  App._timelineEditingActive = () => editing;
+  App.refreshTimeline = () => { refreshes += 1; return Promise.resolve(); };
+
+  assert.equal(await App.drainTimelineStructuralRefresh(), false);
+  assert.equal(refreshes, 0);
+  editing = false;
+  assert.equal(await App.drainTimelineStructuralRefresh(), true);
+  assert.equal(refreshes, 1);
+  assert.equal(App.timelineStructuralRefreshPending, false);
+});
