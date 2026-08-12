@@ -78,6 +78,7 @@ class TimelineBridgeMixin:
                     "id": int(project.get("id") or 0),
                     "name": str(project.get("name") or ""),
                     "description": str(project.get("description") or ""),
+                    "last_used_at": project.get("last_used_at"),
                 }
                 for project in editing_projects
             ]
@@ -86,6 +87,7 @@ class TimelineBridgeMixin:
                     "id": int(project.get("id") or 0),
                     "name": str(project.get("name") or ""),
                     "description": str(project.get("description") or ""),
+                    "last_used_at": project.get("last_used_at"),
                 }
                 for project in filter_projects
             ]
