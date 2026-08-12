@@ -11,6 +11,7 @@ import logging
 import threading
 import time
 
+from ..constants import EXCLUDED_PROJECT
 from ..db import get_connection
 from ..write_gate import DATABASE_WRITE_GATE
 from . import folder_index_service as _core
@@ -94,6 +95,45 @@ def validate_ready_indexes(stop_event: threading.Event | None = None) -> None:
     _CORE_VALIDATE_READY_INDEXES(stop_event)
 
 
+def request_refresh_for_enabled_rules(include_excluded: bool = False) -> None:
+    """Compatibility refresh path whose cooldown records successful work only."""
+
+    database_key, replacement_epoch = _core._replacement_cache_identity()
+    cache_key = (database_key, replacement_epoch, bool(include_excluded))
+    current = time.monotonic()
+    if (
+        current - _core._MISS_REFRESH_TIMES.get(cache_key, 0.0)
+        < _core._MISS_REFRESH_COOLDOWN_SECONDS
+    ):
+        return
+
+    project_clause = "" if include_excluded else "AND p.name <> ?"
+    params: list[object] = [] if include_excluded else [EXCLUDED_PROJECT]
+    with get_connection() as conn:
+        rule_ids = [
+            int(row["id"])
+            for row in conn.execute(
+                f"""
+                SELECT fpr.id
+                FROM folder_project_rule fpr
+                JOIN project p ON p.id = fpr.project_id
+                WHERE fpr.enabled = 1
+                  AND p.enabled = 1
+                  AND COALESCE(p.is_archived, 0) = 0
+                  AND COALESCE(p.is_deleted, 0) = 0
+                  {project_clause}
+                ORDER BY fpr.id
+                """,
+                params,
+            ).fetchall()
+        ]
+    for rule_id in rule_ids:
+        _core.request_rebuild_for_rule(rule_id)
+
+    # A failed database read or enqueue must not suppress the next retry.
+    _core._MISS_REFRESH_TIMES[cache_key] = time.monotonic()
+
+
 def run_folder_index_worker(
     stop_event: threading.Event,
     *,
@@ -160,6 +200,7 @@ __all__ = [
     "ensure_index_states_for_folder_rules",
     "rebuild_folder_index",
     "reconcile_index_eligibility",
+    "request_refresh_for_enabled_rules",
     "run_folder_index_worker",
     "validate_ready_indexes",
 ]

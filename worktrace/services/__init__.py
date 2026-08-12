@@ -6,6 +6,7 @@ from . import folder_index_runtime_service as _folder_index_runtime_service
 for _name in (
     "ensure_index_states_for_folder_rules",
     "rebuild_folder_index",
+    "request_refresh_for_enabled_rules",
     "run_folder_index_worker",
     "validate_ready_indexes",
 ):
