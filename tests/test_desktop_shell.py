@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
+from types import SimpleNamespace
 
+from worktrace.desktop import shell as shell_module
 from worktrace.desktop.shell import DesktopShellController, ShellState
 
 
 class FakeWindow:
-    def __init__(self, *, fail_hide: bool = False) -> None:
+    def __init__(self, *, fail_hide: bool = False, focus: bool = True) -> None:
         self.calls: list[str] = []
         self.fail_hide = fail_hide
+        self.focus = focus
+        self.native = None
 
     def hide(self) -> None:
         self.calls.append("hide")
@@ -65,7 +70,10 @@ def _shell(
     tray_starts: bool = True,
     fail_hide: bool = False,
 ) -> tuple[DesktopShellController, FakeWindow, FakeTray, ManualWindowActions]:
-    window = FakeWindow(fail_hide=fail_hide)
+    window = FakeWindow(
+        fail_hide=fail_hide,
+        focus=not initial_hidden,
+    )
     tray = FakeTray(starts=tray_starts)
     actions = ManualWindowActions()
     shell = DesktopShellController(
@@ -171,6 +179,7 @@ def test_initial_hidden_tray_failure_shows_after_loaded() -> None:
     assert window.calls == []
     actions.run_all()
 
+    assert window.focus is True
     assert window.calls[:2] == ["show", "restore"]
     assert "setShellVisibility(true)" in window.calls[-1]
 
@@ -190,6 +199,7 @@ def test_activation_before_loaded_records_show_intent_only() -> None:
 
     assert shell.show_window() is True
     assert shell.state is ShellState.VISIBLE
+    assert window.focus is False
     assert window.calls == []
     assert actions.pending == []
 
@@ -197,8 +207,54 @@ def test_activation_before_loaded_records_show_intent_only() -> None:
     assert window.calls == []
     actions.run_all()
 
+    assert window.focus is True
     assert window.calls[:2] == ["show", "restore"]
     assert "setShellVisibility(true)" in window.calls[-1]
+
+
+def test_background_show_clears_noactivate_style_before_native_show(monkeypatch) -> None:
+    operations: list[str] = []
+    styles = {4242: shell_module._WS_EX_NOACTIVATE | 0x20}
+
+    class _Handle:
+        @staticmethod
+        def ToInt32() -> int:
+            return 4242
+
+    fake_win32gui = SimpleNamespace(
+        GetWindowLong=lambda hwnd, index: styles[hwnd],
+        SetWindowLong=lambda hwnd, index, value: (
+            operations.append("clear_noactivate"),
+            styles.__setitem__(hwnd, value),
+        )[-1],
+        SetWindowPos=lambda *_args: operations.append("refresh_style"),
+        ShowWindow=lambda *_args: operations.append("restore_native"),
+        SetForegroundWindow=lambda *_args: operations.append("foreground"),
+        FindWindow=lambda *_args: 0,
+    )
+
+    monkeypatch.setattr(shell_module.sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "win32gui", fake_win32gui)
+
+    shell, window, _tray, actions = _shell(initial_hidden=True)
+    window.native = SimpleNamespace(Handle=_Handle())
+    original_show = window.show
+
+    def show() -> None:
+        operations.append("show")
+        original_show()
+
+    window.show = show
+    shell.start()
+    shell.show_window()
+    shell.handle_window_loaded()
+    actions.run_all()
+
+    assert window.focus is True
+    assert styles[4242] & shell_module._WS_EX_NOACTIVATE == 0
+    assert operations.index("clear_noactivate") < operations.index("show")
+    assert "refresh_style" in operations
+    assert operations[-2:] == ["restore_native", "foreground"]
 
 
 def test_tray_exit_only_requests_one_real_window_exit() -> None:

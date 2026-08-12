@@ -2,12 +2,22 @@
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 from collections.abc import Callable
 from enum import Enum
 from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
+
+_GWL_EXSTYLE = -20
+_WS_EX_NOACTIVATE = 0x08000000
+_SW_RESTORE = 9
+_SWP_NOSIZE = 0x0001
+_SWP_NOMOVE = 0x0002
+_SWP_NOZORDER = 0x0004
+_SWP_NOACTIVATE = 0x0010
+_SWP_FRAMECHANGED = 0x0020
 
 
 class ShellState(str, Enum):
@@ -242,6 +252,7 @@ class DesktopShellController:
                     or not self._window_loaded
                 ):
                     return
+            self._make_window_activatable()
             try:
                 self._window.show()
             except Exception:
@@ -280,15 +291,80 @@ class DesktopShellController:
                 exc_info=True,
             )
 
-    @staticmethod
-    def _focus_native_window() -> None:
+    def _make_window_activatable(self) -> None:
+        # pywebview maps ``focus=False`` to WS_EX_NOACTIVATE on WinForms. That is
+        # useful only while a background-started window is hidden; leaving it in
+        # place makes later mouse clicks unable to activate WorkTrace.
         try:
-            import win32con
+            self._window.focus = True
+        except Exception:
+            logger.debug("desktop shell failed to enable pywebview focus", exc_info=True)
+
+        if not sys.platform.startswith("win"):
+            return
+
+        try:
             import win32gui
 
-            hwnd = win32gui.FindWindow(None, "WorkTrace")
+            hwnd = self._native_window_handle()
+            if hwnd <= 0:
+                return
+            ex_style = int(win32gui.GetWindowLong(hwnd, _GWL_EXSTYLE))
+            if ex_style & _WS_EX_NOACTIVATE:
+                win32gui.SetWindowLong(
+                    hwnd,
+                    _GWL_EXSTYLE,
+                    ex_style & ~_WS_EX_NOACTIVATE,
+                )
+                set_window_pos = getattr(win32gui, "SetWindowPos", None)
+                if callable(set_window_pos):
+                    set_window_pos(
+                        hwnd,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        _SWP_NOSIZE
+                        | _SWP_NOMOVE
+                        | _SWP_NOZORDER
+                        | _SWP_NOACTIVATE
+                        | _SWP_FRAMECHANGED,
+                    )
+        except Exception:
+            logger.debug(
+                "desktop shell failed to clear no-activate window style",
+                exc_info=True,
+            )
+
+    def _native_window_handle(self) -> int:
+        native = getattr(self._window, "native", None)
+        handle = getattr(native, "Handle", None)
+        to_int32 = getattr(handle, "ToInt32", None)
+        if callable(to_int32):
+            try:
+                hwnd = int(to_int32())
+                if hwnd > 0:
+                    return hwnd
+            except Exception:
+                logger.debug("desktop shell native handle lookup failed", exc_info=True)
+
+        try:
+            import win32gui
+
+            return int(win32gui.FindWindow(None, "WorkTrace") or 0)
+        except Exception:
+            return 0
+
+    def _focus_native_window(self) -> None:
+        if not sys.platform.startswith("win"):
+            return
+        try:
+            import win32gui
+
+            hwnd = self._native_window_handle()
             if hwnd:
-                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                win32gui.ShowWindow(hwnd, _SW_RESTORE)
                 win32gui.SetForegroundWindow(hwnd)
         except Exception:
             logger.debug("desktop shell foreground request failed", exc_info=True)
