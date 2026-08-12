@@ -77,7 +77,14 @@
                 App.showRulesError(result.error || "删除规则失败");
                 return false;
             }
-            return App.loadProjectRules().then(function () {
+            var reload = App.reloadProjectRules
+                ? App.reloadProjectRules()
+                : App.loadProjectRules({ forceFresh: true });
+            return reload.then(function (readback) {
+                if (!readback) {
+                    App.showRulesError("规则已删除，但列表刷新失败，请刷新后检查");
+                    return false;
+                }
                 App.clearRulesError();
                 if (App.showToast) App.showToast("规则已删除");
                 return true;
