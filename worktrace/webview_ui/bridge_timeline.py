@@ -91,13 +91,22 @@ class TimelineBridgeMixin:
                 }
                 for project in filter_projects
             ]
+            legacy_dto = [
+                {
+                    "id": project["id"],
+                    "name": project["name"],
+                    "description": project["description"],
+                }
+                for project in editing_dto
+            ]
             return {
                 "ok": True,
-                # ``projects`` is kept for backward compatibility. New
-                # consumers should use ``editing_projects`` (edit dropdown,
+                # ``projects`` preserves the legacy safe-field contract.
+                # New consumers should use ``editing_projects`` (edit input,
                 # includes the system ``未归类``) or ``filter_projects``
-                # (filter dropdowns, excludes the system project).
-                "projects": editing_dto,
+                # (filter inputs, excludes the system project). Those richer
+                # catalogs include last-used metadata for local autocomplete.
+                "projects": legacy_dto,
                 "editing_projects": editing_dto,
                 "filter_projects": filter_dto,
             }
