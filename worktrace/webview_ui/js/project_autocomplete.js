@@ -173,7 +173,8 @@
             menu: menu,
             items: [],
             activeIndex: -1,
-            dirty: false
+            dirty: false,
+            catalogRefreshPromise: null
         };
         select._projectAutocomplete = state;
 
@@ -188,6 +189,50 @@
         function restoreSelectionLabel() {
             input.value = selectedSourceLabel(select);
             state.dirty = false;
+        }
+
+        function dispatchSourceChange() {
+            if (typeof Event === "function") {
+                select.dispatchEvent(new Event("change", { bubbles: true }));
+            } else if (document.createEvent) {
+                var event = document.createEvent("Event");
+                event.initEvent("change", true, false);
+                select.dispatchEvent(event);
+            }
+        }
+
+        function appendSourceOption(value, label) {
+            var option = document.createElement("option");
+            option.value = String(value || "");
+            option.textContent = String(label || "");
+            select.appendChild(option);
+            return option;
+        }
+
+        function syncFilterSourceOptions(projects) {
+            if (select.id === "edit-project-select") return;
+            var previous = String(select.value || "");
+            select.innerHTML = "";
+            appendSourceOption("", "全部项目");
+            appendSourceOption("unclassified", "未归类");
+            (Array.isArray(projects) ? projects : []).forEach(function (project) {
+                if (!project || parseInt(project.id, 10) <= 0) return;
+                appendSourceOption(project.id, project.name || "未命名项目");
+            });
+            select.value = previous;
+            if (String(select.value || "") !== previous) {
+                select.value = "";
+                dispatchSourceChange();
+            }
+        }
+
+        function ensureSourceOption(candidate) {
+            if (!candidate || candidate.special || !String(candidate.value || "")) return;
+            var value = String(candidate.value);
+            var existing = findSourceOption(select, function (option) {
+                return String(option.value || "") === value;
+            });
+            if (!existing) appendSourceOption(value, candidate.name || "未命名项目");
         }
 
         function setActive(index) {
@@ -210,16 +255,11 @@
 
         function choose(candidate) {
             if (!candidate) return;
+            ensureSourceOption(candidate);
             select.value = String(candidate.value || "");
             restoreSelectionLabel();
             closeMenu();
-            if (typeof Event === "function") {
-                select.dispatchEvent(new Event("change", { bubbles: true }));
-            } else if (document.createEvent) {
-                var event = document.createEvent("Event");
-                event.initEvent("change", true, false);
-                select.dispatchEvent(event);
-            }
+            dispatchSourceChange();
             restoreSelectionLabel();
         }
 
@@ -265,6 +305,24 @@
             input.setAttribute("aria-expanded", "true");
         }
 
+        function refreshCatalogForInteraction() {
+            var catalog = App.projectCatalog;
+            if (!catalog || typeof catalog.load !== "function") return Promise.resolve(null);
+            if (typeof catalog.invalidate === "function") catalog.invalidate();
+            var pending = catalog.load().then(function (snapshot) {
+                if (!snapshot) return null;
+                syncFilterSourceOptions(snapshot.filterProjects || []);
+                if (document.activeElement === input) {
+                    renderCandidates(state.dirty ? input.value : "");
+                }
+                return snapshot;
+            }).catch(function () { return null; }).finally(function () {
+                if (state.catalogRefreshPromise === pending) state.catalogRefreshPromise = null;
+            });
+            state.catalogRefreshPromise = pending;
+            return pending;
+        }
+
         function syncFromSource() {
             input.disabled = !!select.disabled;
             restoreSelectionLabel();
@@ -274,6 +332,7 @@
         input.addEventListener("focus", function () {
             syncFromSource();
             renderCandidates("");
+            refreshCatalogForInteraction();
             if (input.select) input.select();
         });
         input.addEventListener("input", function () {
