@@ -126,11 +126,11 @@ def test_fd_work_binding_cannot_survive_main_database_epoch_change(tmp_path):
     repository = FDWorkBindingRepository(tmp_path / "state.db")
     before = _binding_service(repository, 1)
     before.bind_project(7, "26IP0165 IPDD_Miragene")
-    assert before.is_project_bound(7, "26IP0165 IPDD_Miragene")
+    assert before.is_project_bound(7)
 
     after_restart = _binding_service(repository, 2)
 
-    assert not after_restart.is_project_bound(7, "26IP0165 IPDD_Miragene")
+    assert not after_restart.is_project_bound(7)
     assert repository.get_binding(7) is None
 
 

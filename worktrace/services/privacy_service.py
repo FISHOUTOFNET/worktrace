@@ -94,11 +94,6 @@ def evaluate_exclusion(
     if active_window.privacy_path_required:
         return ExclusionDecision(True, True, True)
     if active_window.path_resolution_uncertain:
-        # An authoritative local-path probe was attempted but produced no
-        # trustworthy path. With folder exclusions enabled, uncertainty is not
-        # permission to persist. Unlike the filename-index fallback above,
-        # rebuilding the folder index cannot resolve a title with no usable file
-        # identity, so this fail-closed decision does not request index work.
         return ExclusionDecision(True, True, False)
     return ExclusionDecision(False, False, False)
 

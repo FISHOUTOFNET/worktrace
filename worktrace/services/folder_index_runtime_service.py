@@ -1,9 +1,8 @@
 """Runtime orchestration for folder-index eligibility and worker lifecycle.
 
 The durable scanner remains in ``folder_index_service``. This layer owns the
-catalog eligibility boundary: disabled/archived/deleted projects and disabled
-folder rules must have no runnable or queryable derived index state. Re-enabling
-naturally recreates a pending state on the next worker iteration.
+catalog eligibility boundary while preserving the original module object and its
+fault-injection seams.
 """
 
 from __future__ import annotations
@@ -17,6 +16,10 @@ from ..write_gate import DATABASE_WRITE_GATE
 from . import folder_index_service as _core
 from . import folder_index_maintenance_service, folder_index_state_repository
 from . import privacy_gate_service
+
+_CORE_ENSURE_INDEX_STATES = _core.ensure_index_states_for_folder_rules
+_CORE_REBUILD_FOLDER_INDEX = _core.rebuild_folder_index
+_CORE_VALIDATE_READY_INDEXES = _core.validate_ready_indexes
 
 
 def _ineligible_rule_ids() -> list[int]:
@@ -54,9 +57,7 @@ def reconcile_index_eligibility() -> int:
 
 
 def ensure_index_states_for_folder_rules() -> None:
-    """Create states using the core writer, then retain eligible rules only."""
-
-    _core.ensure_index_states_for_folder_rules()
+    _CORE_ENSURE_INDEX_STATES()
     reconcile_index_eligibility()
 
 
@@ -82,17 +83,15 @@ def rebuild_folder_index(
     rule_id: int,
     stop_event: threading.Event | None = None,
 ) -> bool:
-    """Race-safe rebuild gate: never scan a rule that became ineligible."""
-
     if not _rule_is_eligible(rule_id):
         _core.delete_index_for_rule(int(rule_id))
         return False
-    return _core.rebuild_folder_index(int(rule_id), stop_event)
+    return _CORE_REBUILD_FOLDER_INDEX(int(rule_id), stop_event)
 
 
 def validate_ready_indexes(stop_event: threading.Event | None = None) -> None:
     reconcile_index_eligibility()
-    _core.validate_ready_indexes(stop_event)
+    _CORE_VALIDATE_READY_INDEXES(stop_event)
 
 
 def run_folder_index_worker(
@@ -100,8 +99,6 @@ def run_folder_index_worker(
     *,
     health,
 ) -> None:
-    """Run the existing scanner behind the catalog eligibility boundary."""
-
     logging.info("folder index worker loop enter")
     next_hot_refresh_at = 0.0
     try:
@@ -157,12 +154,6 @@ def run_folder_index_worker(
             health.failed("folder_index_iteration_failed")
             _core._wait_for_worker()
     logging.info("folder index worker loop exit")
-
-
-def __getattr__(name: str):
-    """Preserve the existing service surface while overriding runtime policy."""
-
-    return getattr(_core, name)
 
 
 __all__ = [

@@ -1,8 +1,18 @@
-"""Service package exports with runtime-safe derived-state orchestration."""
+"""Service package compatibility exports."""
 
-# AppRuntime and other package-level consumers receive the guarded folder-index
-# service. Direct imports of ``worktrace.services.folder_index_service`` remain
-# available as the low-level durable scanner/index writer.
-from . import folder_index_runtime_service as folder_index_service
+from . import folder_index_service as folder_index_service
+from . import folder_index_runtime_service as _folder_index_runtime_service
+
+for _name in (
+    "ensure_index_states_for_folder_rules",
+    "rebuild_folder_index",
+    "run_folder_index_worker",
+    "validate_ready_indexes",
+):
+    setattr(
+        folder_index_service,
+        _name,
+        getattr(_folder_index_runtime_service, _name),
+    )
 
 __all__ = ["folder_index_service"]
