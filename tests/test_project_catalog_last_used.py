@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from worktrace import db
 from worktrace.services import project_service
 
@@ -30,6 +32,7 @@ def _insert_activity(project_id: int, start: str, end: str, *, deleted: bool = F
         )
 
 
+@pytest.mark.db
 def test_selectable_and_filter_catalogs_include_latest_valid_activity_time(temp_db):
     project_id = project_service.create_project("26IP0165", "Miragene")
     _insert_activity(project_id, "2026-08-10 09:00:00", "2026-08-10 10:00:00")
