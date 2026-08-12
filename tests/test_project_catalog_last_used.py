@@ -13,7 +13,7 @@ def _insert_activity(project_id: int, start: str, end: str, *, deleted: bool = F
                 window_title, file_path_hint, status, source, is_deleted, is_hidden,
                 created_at, updated_at
             ) VALUES (?, ?, 60, 'Editor', 'editor.exe', 'Matter', NULL,
-                      'normal', 'test', ?, 0, ?, ?)
+                      'normal', 'manual', ?, 0, ?, ?)
             """,
             (start, end, int(deleted), start, end),
         )
