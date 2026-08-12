@@ -52,22 +52,31 @@ def _reserve_refresh(
     *,
     cooldown_seconds: float,
 ) -> bool:
+    """Return whether a refresh is due without recording success yet.
+
+    The historical name is retained for test/source compatibility. Cooldown is
+    committed only after the candidate query and every rebuild enqueue succeed,
+    so transient failures remain immediately retryable.
+    """
+
     current = time.monotonic()
     with _REFRESH_CACHE_LOCK:
-        elapsed = current - cache.get(key, 0.0)
-        if elapsed < cooldown_seconds:
-            return False
-        if len(cache) >= _MAX_REFRESH_CACHE_ENTRIES:
+        return current - cache.get(key, 0.0) >= cooldown_seconds
+
+
+def _mark_refresh_success(cache: dict, key: tuple) -> None:
+    current = time.monotonic()
+    with _REFRESH_CACHE_LOCK:
+        if len(cache) >= _MAX_REFRESH_CACHE_ENTRIES and key not in cache:
             cache.clear()
         cache[key] = current
-    return True
 
 
 def _queue_rule_ids(rule_ids: list[int]) -> int:
     if not rule_ids:
         return 0
-    # Function-local import avoids a module-import cycle: folder_index_service
-    # calls this maintenance policy from its worker loop.
+    # Function-local import avoids a module-import cycle: folder-index runtime
+    # orchestration calls this maintenance policy from its worker loop.
     from . import folder_index_service
 
     queued = 0
@@ -82,7 +91,8 @@ def request_refresh_for_project(project_id: int) -> int:
 
     This is the strong user-signal path (for example a manual Timeline project
     correction). It deliberately bypasses the normal 15-minute freshness gate,
-    but repeated requests for the same project are coalesced for 60 seconds.
+    but repeated successful requests for the same project are coalesced for 60
+    seconds. Failed attempts do not consume the cooldown.
     """
 
     value = int(project_id)
@@ -113,7 +123,9 @@ def request_refresh_for_project(project_id: int) -> int:
             """,
             (value, UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT),
         ).fetchall()
-    return _queue_rule_ids([int(row["id"]) for row in rows])
+    queued = _queue_rule_ids([int(row["id"]) for row in rows])
+    _mark_refresh_success(_PROJECT_REFRESH_TIMES, cache_key)
+    return queued
 
 
 def request_refresh_for_hot_projects() -> int:
@@ -122,13 +134,15 @@ def request_refresh_for_hot_projects() -> int:
     Hot projects are the union of projects used during the last seven days and
     the ten most recently used projects. A ready index is not rebuilt more often
     than every 15 minutes. The historical last-used aggregation itself is
-    throttled to once per five minutes per database generation.
+    throttled to once per five minutes per database generation, but only after
+    a successful candidate query/enqueue pass.
     """
 
     database_key, replacement_epoch = _replacement_cache_identity()
+    cache_key = (database_key, replacement_epoch)
     if not _reserve_refresh(
         _HOT_REFRESH_TIMES,
-        (database_key, replacement_epoch),
+        cache_key,
         cooldown_seconds=HOT_REFRESH_QUERY_COOLDOWN_SECONDS,
     ):
         return 0
@@ -194,7 +208,9 @@ def request_refresh_for_hot_projects() -> int:
                 freshness_cutoff,
             ),
         ).fetchall()
-    return _queue_rule_ids([int(row["id"]) for row in rows])
+    queued = _queue_rule_ids([int(row["id"]) for row in rows])
+    _mark_refresh_success(_HOT_REFRESH_TIMES, cache_key)
+    return queued
 
 
 def reconcile_open_unclassified_activities() -> int:

@@ -24,6 +24,10 @@ class ActiveWindow:
     # True only when the platform adapter has identified this as a local-file
     # application whose path is required for folder-exclusion privacy.
     privacy_path_required: bool = False
+    # True when the platform deliberately attempted authoritative path
+    # discovery but could not establish a path. This is an observation-state
+    # fact only; it is never persisted as document metadata.
+    path_resolution_uncertain: bool = False
 
 
 @dataclass(frozen=True)

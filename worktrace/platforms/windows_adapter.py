@@ -85,6 +85,14 @@ class WindowsAdapter:
                 pid,
             )
 
+        # ``None`` after an explicit authoritative probe is not proof that the
+        # document has no local path. Keep that uncertainty at the platform /
+        # privacy boundary so folder-exclusion policy can fail closed without
+        # polluting persisted resource facts or report projections.
+        path_resolution_uncertain = bool(
+            should_probe_path and not file_path_hint and not requires_path
+        )
+
         window_class = None
         try:
             window_class = win32gui.GetClassName(hwnd) or None
@@ -99,6 +107,7 @@ class WindowsAdapter:
             hwnd=hwnd,
             window_class=window_class,
             privacy_path_required=requires_path,
+            path_resolution_uncertain=path_resolution_uncertain,
         )
 
     def get_idle_seconds(self) -> int:
