@@ -11,26 +11,30 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _project_catalog_dto(project: dict[str, Any], *, include_binding: bool) -> dict[str, Any]:
+    dto: dict[str, Any] = {
+        "id": int(project.get("id") or 0),
+        "name": str(project.get("name") or ""),
+        "description": str(project.get("description") or ""),
+    }
+    if "last_used_at" in project:
+        dto["last_used_at"] = project.get("last_used_at")
+    if include_binding:
+        dto["fd_work_bound"] = project.get("external_identity_bound") is True
+    return dto
+
+
 class ProjectCatalogBridgeMixin:
     def list_project_catalog(self) -> dict[str, Any]:
         try:
             editing_projects = self._services.projects.list_editing_projects()
             filter_projects = self._services.projects.list_filter_projects()
             editing_dto = [
-                {
-                    "id": int(project.get("id") or 0),
-                    "name": str(project.get("name") or ""),
-                    "description": str(project.get("description") or ""),
-                    "fd_work_bound": project.get("external_identity_bound") is True,
-                }
+                _project_catalog_dto(project, include_binding=True)
                 for project in editing_projects
             ]
             filter_dto = [
-                {
-                    "id": int(project.get("id") or 0),
-                    "name": str(project.get("name") or ""),
-                    "description": str(project.get("description") or ""),
-                }
+                _project_catalog_dto(project, include_binding=False)
                 for project in filter_projects
             ]
             return {
