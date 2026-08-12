@@ -17,11 +17,17 @@ def _project_catalog_dto(project: dict[str, Any], *, include_binding: bool) -> d
         "name": str(project.get("name") or ""),
         "description": str(project.get("description") or ""),
     }
-    if "last_used_at" in project:
-        dto["last_used_at"] = project.get("last_used_at")
     if include_binding:
         dto["fd_work_bound"] = project.get("external_identity_bound") is True
     return dto
+
+
+def _project_last_used_projection(projects: list[dict[str, Any]]) -> dict[str, str]:
+    return {
+        str(int(project.get("id") or 0)): str(project.get("last_used_at") or "")
+        for project in projects
+        if int(project.get("id") or 0) > 0 and project.get("last_used_at")
+    }
 
 
 class ProjectCatalogBridgeMixin:
@@ -41,6 +47,7 @@ class ProjectCatalogBridgeMixin:
                 "ok": True,
                 "editing_projects": editing_dto,
                 "filter_projects": filter_dto,
+                "project_last_used_at": _project_last_used_projection(editing_projects),
             }
         except Exception:
             logger.exception("webview bridge list_project_catalog failed")

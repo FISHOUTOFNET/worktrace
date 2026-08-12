@@ -45,13 +45,23 @@
         }
     }
 
+    function attachLastUsed(projects, projection) {
+        projection = projection && typeof projection === "object" ? projection : {};
+        return (Array.isArray(projects) ? projects : []).map(function (project) {
+            var copy = Object.assign({}, project || {});
+            copy.last_used_at = projection[String(copy.id || "")] || null;
+            return copy;
+        });
+    }
+
     function accept(result, requestGeneration, requestDataEpoch) {
         if (requestGeneration !== generation
                 || requestDataEpoch !== currentDataEpoch()
                 || !result
                 || result.ok === false) return null;
-        editingProjects = Array.isArray(result.editing_projects) ? result.editing_projects : [];
-        filterProjects = Array.isArray(result.filter_projects) ? result.filter_projects : [];
+        var lastUsed = result.project_last_used_at;
+        editingProjects = attachLastUsed(result.editing_projects, lastUsed);
+        filterProjects = attachLastUsed(result.filter_projects, lastUsed);
         acceptedDataEpoch = requestDataEpoch;
         publishLegacyProjection();
         return snapshot();

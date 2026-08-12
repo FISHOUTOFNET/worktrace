@@ -40,20 +40,22 @@ class _ProjectCatalogStub:
         ]
 
 
-def test_shared_project_catalog_exposes_last_used_at_without_losing_binding_state():
+def test_shared_project_catalog_keeps_identity_dto_stable_and_exposes_usage_metadata():
     bridge = ProjectCatalogBridgeMixin()
     bridge._services = SimpleNamespace(projects=_ProjectCatalogStub())
 
     result = bridge.list_project_catalog()
 
     assert result["ok"] is True
-    assert result["editing_projects"][0]["last_used_at"] is None
     assert result["editing_projects"][1] == {
         "id": 2,
         "name": "26IP0165",
         "description": "Miragene",
-        "last_used_at": "2026-08-12 15:30:00",
         "fd_work_bound": True,
     }
-    assert result["filter_projects"][0]["last_used_at"] == "2026-08-12 15:30:00"
-    assert "fd_work_bound" not in result["filter_projects"][0]
+    assert result["filter_projects"][0] == {
+        "id": 2,
+        "name": "26IP0165",
+        "description": "Miragene",
+    }
+    assert result["project_last_used_at"] == {"2": "2026-08-12 15:30:00"}

@@ -33,13 +33,13 @@ function loadApp() {
     document: {
       body: { hidden: false, getAttribute: () => null, parentNode: null },
       getElementById,
-      querySelector: () => null,
+      querySelectorAll: () => [],
       addEventListener: () => {},
     },
   };
   vm.createContext(context);
   const source = fs.readFileSync(
-    path.join(__dirname, "../../worktrace/webview_ui/js/ui_components.js"),
+    path.join(__dirname, "../../worktrace/webview_ui/js/project_autocomplete.js"),
     "utf8"
   );
   vm.runInContext(source, context);
