@@ -101,11 +101,8 @@ class TimelineBridgeMixin:
             ]
             return {
                 "ok": True,
-                # ``projects`` preserves the legacy safe-field contract.
-                # New consumers should use ``editing_projects`` (edit input,
-                # includes the system ``未归类``) or ``filter_projects``
-                # (filter inputs, excludes the system project). Those richer
-                # catalogs include last-used metadata for local autocomplete.
+                # Keep the legacy ``projects`` safe-field shape unchanged;
+                # richer catalogs carry recency metadata for autocomplete.
                 "projects": legacy_dto,
                 "editing_projects": editing_dto,
                 "filter_projects": filter_dto,
