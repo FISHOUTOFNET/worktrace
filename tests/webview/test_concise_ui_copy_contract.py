@@ -22,7 +22,7 @@ def test_shipping_html_contains_final_static_copy() -> None:
     assert "默认匹配该文件夹及全部子文件夹" not in source
     assert ">包含子文件夹<" in source
     assert "统计仅包含已完成时间段" not in source
-    assert "仅统计已完成时段" in source
+    assert "仅统计已完成时段" not in source
     assert ">进行中时段不可编辑<" in source
     assert "新建项目后可添加自动归类规则" not in source
     assert 'id="app-tooltip" role="tooltip" hidden' in source
