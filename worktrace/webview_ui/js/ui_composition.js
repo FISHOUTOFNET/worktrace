@@ -315,9 +315,11 @@
             }
         }, 0);
     }
-    document.addEventListener("click", afterUiInteraction);
-    document.addEventListener("change", afterUiInteraction);
-    document.addEventListener("focusout", afterUiInteraction);
+    if (document && typeof document.addEventListener === "function") {
+        document.addEventListener("click", afterUiInteraction);
+        document.addEventListener("change", afterUiInteraction);
+        document.addEventListener("focusout", afterUiInteraction);
+    }
 
     if (App.fdWork && typeof App.fdWork.bindStatusHost === "function") {
         App.fdWork.bindStatusHost({ onStatusChanged: syncFDWorkConsumers });
