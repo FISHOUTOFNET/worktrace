@@ -44,13 +44,9 @@ def get_uncategorized_duration(start_date: str, end_date: str) -> int:
     return statistics_service.get_uncategorized_duration(start_date, end_date)
 
 
-def get_statistics_export_summary(
-    date_from: str, date_to: str, project_id: str | int | None = None
-) -> dict[str, Any]:
-    """Return the canonical read-only statistics and export-preview facts."""
-
+def _map_statistics_summary(action) -> dict[str, Any]:
     try:
-        return statistics_service.get_statistics_export_summary(date_from, date_to, project_id)
+        return action()
     except StatisticsSummaryError:
         raise
     except ValueError as exc:
@@ -62,14 +58,30 @@ def get_statistics_export_summary(
         raise StatisticsSummaryError("operation_failed")
 
 
+def get_statistics_export_summary(
+    date_from: str, date_to: str, project_id: str | int | None = None
+) -> dict[str, Any]:
+    """Return the durable closed-only service summary."""
+
+    return _map_statistics_summary(
+        lambda: statistics_service.get_statistics_export_summary(
+            date_from, date_to, project_id
+        )
+    )
+
+
 def get_statistics_export_view_model(
     date_from: str,
     date_to: str,
     project_id: str | int | None = None,
 ) -> dict[str, Any]:
-    """Return the complete bridge-facing Statistics display envelope."""
+    """Return the complete bridge-facing realtime Statistics display envelope."""
 
-    summary = get_statistics_export_summary(date_from, date_to, project_id)
+    summary = _map_statistics_summary(
+        lambda: statistics_service.get_statistics_realtime_export_summary(
+            date_from, date_to, project_id
+        )
+    )
     revision = str(summary.get("ticket_revision") or "")
     return {
         "summary": _statistics_summary_payload(summary),
@@ -78,6 +90,7 @@ def get_statistics_export_view_model(
             "date_to": str(summary.get("date_to") or date_to),
             "revision": revision,
             "project_id": str(summary.get("project_id") or ""),
+            "live_target": _live_target_payload(summary.get("live_target")),
         },
     }
 
@@ -137,9 +150,6 @@ def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
         "total_duration": format_duration(total_seconds),
         "project_duration_seconds": project_seconds,
         "project_duration": format_duration(project_seconds),
-        "classified_duration_seconds": int(summary.get("classified_duration_seconds") or 0),
-        "uncategorized_duration_seconds": int(summary.get("uncategorized_duration_seconds") or 0),
-        "excluded_duration_seconds": int(summary.get("excluded_duration_seconds") or 0),
         "activity_count": int(summary.get("activity_count") or 0),
         "session_count": int(summary.get("session_count") or 0),
         "export_row_count": int(summary.get("export_row_count") or 0),
@@ -148,7 +158,6 @@ def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
         "by_project": by_project,
         "by_app": by_app,
         "by_status": by_status,
-        "live_target": _live_target_payload(summary.get("live_target")),
         "export_preview": {
             "date_from": str(preview.get("date_from") or ""),
             "date_to": str(preview.get("date_to") or ""),

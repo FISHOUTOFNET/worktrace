@@ -49,11 +49,11 @@ def _seed_verified_open(project_id: int, *, elapsed_seconds: int) -> tuple[int, 
     return activity_id, day
 
 
-def test_statistics_summary_includes_verified_open_activity_without_persisting_close(temp_db):
+def test_statistics_realtime_summary_includes_verified_open_activity_without_persisting_close(temp_db):
     project_id = project_service.create_project("Live Client")
     activity_id, day = _seed_verified_open(project_id, elapsed_seconds=1800)
 
-    summary = statistics_service.get_statistics_export_summary(day, day)
+    summary = statistics_service.get_statistics_realtime_export_summary(day, day)
 
     assert summary["total_duration_seconds"] == 1800
     assert summary["activity_count"] == 1
@@ -74,12 +74,12 @@ def test_statistics_summary_includes_verified_open_activity_without_persisting_c
     assert int(row["duration_seconds"] or 0) < 1800
 
 
-def test_statistics_project_scope_excludes_other_live_project(temp_db):
+def test_statistics_realtime_project_scope_excludes_other_live_project(temp_db):
     selected_project = project_service.create_project("Selected")
     live_project = project_service.create_project("Live Other")
     _activity_id, day = _seed_verified_open(live_project, elapsed_seconds=900)
 
-    summary = statistics_service.get_statistics_export_summary(
+    summary = statistics_service.get_statistics_realtime_export_summary(
         day,
         day,
         selected_project,

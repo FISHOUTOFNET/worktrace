@@ -94,32 +94,14 @@ def _scoped_live_target(live_target, projection) -> dict | None:
     return target if target["enabled"] else None
 
 
-def get_statistics_export_summary(
+def _statistics_export_summary_from_projection(
+    projection,
     date_from: str,
     date_to: str,
-    project_id: str | int | None = None,
+    project_id,
+    *,
+    live_target=None,
 ) -> dict:
-    date_from, date_to = resolve_statistics_date_range(date_from, date_to)
-    validate_statistics_project_scope(project_id)
-
-    # Statistics is a read surface, so it can safely freeze the verified open
-    # activity at the request sample without changing mutation revisions or the
-    # durable canonical projection used by Timeline operations.
-    from .page_read_context import page_read_scope
-    from .report_as_of_snapshot_service import build_statistics_as_of_snapshot
-    from .statistics_projection import build_statistics_summary_projection
-
-    with page_read_scope():
-        as_of = build_statistics_as_of_snapshot(date_from, date_to)
-        projection = build_statistics_summary_projection(
-            as_of.snapshot,
-            project_id=project_id,
-        )
-        live_target = _scoped_live_target(
-            dict(as_of.live_target) if as_of.live_target is not None else None,
-            projection,
-        )
-
     normalized_scope = normalize_statistics_project_scope(project_id)
     ticket_revision = compute_statistics_export_ticket_revision(
         projection.snapshot_revision,
@@ -163,17 +145,64 @@ def get_statistics_export_summary(
     }
 
 
+def get_statistics_export_summary(
+    date_from: str,
+    date_to: str,
+    project_id: str | int | None = None,
+) -> dict:
+    """Return the durable closed-only Statistics service contract."""
+
+    date_from, date_to = resolve_statistics_date_range(date_from, date_to)
+    validate_statistics_project_scope(project_id)
+    projection = _build_summary_projection(date_from, date_to, project_id)
+    return _statistics_export_summary_from_projection(
+        projection,
+        date_from,
+        date_to,
+        project_id,
+    )
+
+
+def get_statistics_realtime_export_summary(
+    date_from: str,
+    date_to: str,
+    project_id: str | int | None = None,
+) -> dict:
+    """Return the UI read model frozen at one verified runtime/SQLite sample."""
+
+    date_from, date_to = resolve_statistics_date_range(date_from, date_to)
+    validate_statistics_project_scope(project_id)
+
+    from .page_read_context import page_read_scope
+    from .report_as_of_snapshot_service import build_statistics_as_of_snapshot
+    from .statistics_projection import build_statistics_summary_projection
+
+    with page_read_scope():
+        as_of = build_statistics_as_of_snapshot(date_from, date_to)
+        projection = build_statistics_summary_projection(
+            as_of.snapshot,
+            project_id=project_id,
+        )
+        live_target = _scoped_live_target(
+            dict(as_of.live_target) if as_of.live_target is not None else None,
+            projection,
+        )
+    return _statistics_export_summary_from_projection(
+        projection,
+        date_from,
+        date_to,
+        project_id,
+        live_target=live_target,
+    )
+
+
 def compute_statistics_export_ticket_revision(
     snapshot_revision: str,
     date_from: str,
     date_to: str,
     normalized_scope: str,
 ) -> str:
-    """Compute a compatibility ticket for the accepted page snapshot.
-
-    Realtime export no longer relies on this token for write admission; it is
-    retained in the bridge payload so older frontend callers remain compatible.
-    """
+    """Compute a compatibility ticket for the accepted page snapshot."""
 
     return stable_json_hash(
         {

@@ -1,16 +1,14 @@
 """Statistics / Export bridge mixin.
 
-The bridge validates transport shapes, calls API boundaries and maps stable
-error codes. Statistics aggregation and display DTO shaping remain behind the
-API boundary. Unexpected failures are logged internally; no full traceback is
-returned to the WebView caller.
+The bridge validates transport shapes, calls capability boundaries and maps
+stable error codes. Statistics aggregation and display DTO shaping remain
+behind the application-service boundary.
 """
 from __future__ import annotations
 
 import logging
 from typing import Any
 
-from ..api import export_api as statistics_export_api
 from .bridge_common import _DATE_SHAPE_RE
 
 logger = logging.getLogger(__name__)
@@ -83,12 +81,7 @@ class StatisticsBridgeMixin:
         expected_export_ticket_revision: str,
         project_id,
     ) -> dict[str, Any]:
-        """Compatibility path for injected/legacy capabilities.
-
-        Shipping WorkTrace uses the prepared point-in-time path below. This
-        fallback preserves compatibility with capability fakes and older
-        embedders that still implement only the ticket-bound export contract.
-        """
+        """Use the retained ticket-bound capability for legacy embedders/fakes."""
         revision = str(expected_export_ticket_revision or "").strip()
         if not revision:
             return {
@@ -127,14 +120,7 @@ class StatisticsBridgeMixin:
         expected_export_ticket_revision=None,
         project_id=None,
     ) -> dict[str, Any]:
-        """Freeze Statistics at invocation, then ask for a destination path.
-
-        The accepted ticket remains in the transport signature so an older
-        embedded capability can still be used as a compatibility fallback. The
-        shipping path freezes an opaque as-of snapshot *before* opening the
-        native save dialog and writes that same object afterwards, so time spent
-        in the dialog cannot change the exported facts.
-        """
+        """Freeze Statistics at invocation, then ask for a destination path."""
         try:
             if not isinstance(date_from, str) or not isinstance(date_to, str):
                 return {"ok": False, "error": "请选择有效日期", "cancelled": False}
@@ -145,9 +131,6 @@ class StatisticsBridgeMixin:
                 return {"ok": False, "error": "请选择有效日期", "cancelled": False}
             if project_id is not None and not isinstance(project_id, (str, int)):
                 return {"ok": False, "error": "请选择有效项目", "cancelled": False}
-            # Preserve the old fail-fast transport contract for callers that
-            # have not yet loaded a Statistics snapshot. Realtime export does
-            # not compare the ticket after this admission check.
             revision = str(expected_export_ticket_revision or "").strip()
             if not revision:
                 return {
@@ -157,42 +140,26 @@ class StatisticsBridgeMixin:
                 }
 
             try:
-                prepared = statistics_export_api.prepare_statistics_csv(
-                    date_from,
-                    date_to,
-                    None if project_id in (None, "") else project_id,
-                )
-            except statistics_export_api.StatisticsExportError as exc:
-                # A custom/injected capability may intentionally have no real
-                # database behind it (notably transport tests and legacy
-                # embedders). If point-in-time preparation is unavailable, keep
-                # the previous capability contract rather than coupling bridge
-                # transport tests to the production database. Business errors
-                # that prove the request itself is invalid remain authoritative.
-                if exc.code not in {"operation_failed", "empty_data"}:
-                    raise
+                prepare = self._services.statistics.prepare_statistics_csv
+            except AttributeError:
                 return self._legacy_statistics_export(
-                    date_from,
-                    date_to,
-                    revision,
-                    project_id,
+                    date_from, date_to, revision, project_id
                 )
 
+            prepared = prepare(
+                date_from,
+                date_to,
+                None if project_id in (None, "") else project_id,
+            )
             output_path = self._choose_csv_save_path()
             if output_path is None:
                 return {"ok": False, "cancelled": True, "error": "已取消导出"}
-            result = statistics_export_api.write_prepared_statistics_csv(
+            result = self._services.statistics.write_prepared_statistics_csv(
                 prepared,
                 output_path,
             )
             return self._statistics_export_success(result)
         except self._services.statistics.StatisticsExportError as exc:
-            return {
-                "ok": False,
-                "error": _STATISTICS_EXPORT_ERROR_MESSAGES.get(exc.code, "导出失败"),
-                "cancelled": False,
-            }
-        except statistics_export_api.StatisticsExportError as exc:
             return {
                 "ok": False,
                 "error": _STATISTICS_EXPORT_ERROR_MESSAGES.get(exc.code, "导出失败"),

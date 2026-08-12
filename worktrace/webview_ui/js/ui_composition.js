@@ -97,9 +97,9 @@
         return sampledSeconds + Math.max(0, Math.floor((nowMs - sampledAt) / 1000));
     }
 
-    function statisticsLiveSummaryAtNow(baseSummary, nowMs) {
+    function statisticsLiveSummaryAtNow(baseSummary, nowMs, targetOverride) {
         if (!baseSummary || typeof baseSummary !== "object") return baseSummary;
-        var target = baseSummary.live_target;
+        var target = targetOverride || baseSummary.live_target;
         if (!target || target.enabled !== true) return baseSummary;
         var sampledSeconds = nonNegativeInt(target.elapsed_seconds_at_sample);
         var currentSeconds = liveTargetElapsedSeconds(target, nowMs);
@@ -116,12 +116,6 @@
         if (target.contributes_project_duration === true) {
             summary.project_duration_seconds = nonNegativeInt(baseSummary.project_duration_seconds) + delta;
             summary.project_duration = App.formatDuration(summary.project_duration_seconds);
-            summary.classified_duration_seconds = nonNegativeInt(baseSummary.classified_duration_seconds) + delta;
-        } else if (target.is_uncategorized === true) {
-            summary.uncategorized_duration_seconds = nonNegativeInt(baseSummary.uncategorized_duration_seconds) + delta;
-        }
-        if (target.is_excluded_status === true) {
-            summary.excluded_duration_seconds = nonNegativeInt(baseSummary.excluded_duration_seconds) + delta;
         }
 
         updateLiveGroup(summary.by_project, target.project_key, delta, summary.total_duration_seconds);
@@ -158,7 +152,8 @@
         if (!accepted || !accepted.summary || !accepted.filters || typeof App.showStatistics !== "function") return;
         var identity = runtimeRefreshIdentity();
         if (identity) App.statisticsAcceptedRefreshIdentity = identity;
-        var summary = statisticsLiveSummaryAtNow(accepted.summary, Date.now());
+        var liveTarget = accepted.exportTicket && accepted.exportTicket.live_target;
+        var summary = statisticsLiveSummaryAtNow(accepted.summary, Date.now(), liveTarget);
         var delta = nonNegativeInt(summary && summary._live_delta_seconds);
         var renderKey = [
             String(accepted.summary.snapshot_revision || accepted.exportTicket && accepted.exportTicket.revision || ""),
