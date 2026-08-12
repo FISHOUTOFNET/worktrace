@@ -10,8 +10,10 @@
     }
     App.refreshSharedProjectCatalog = refreshSharedProjectCatalog;
 
-    function loadProjectRules() {
-        if (App.rulesLoadPromise) return App.rulesLoadPromise;
+    function loadProjectRules(options) {
+        options = options || {};
+        var forceFresh = options.forceFresh === true;
+        if (App.rulesLoadPromise && !forceFresh) return App.rulesLoadPromise;
         var token = App.requestCoordinator.beginLatest("rules", "home");
         App.setRulesLoading(true);
         App.clearRulesError();
@@ -35,6 +37,9 @@
         return request;
     }
     App.loadProjectRules = loadProjectRules;
+    App.reloadProjectRules = function () {
+        return loadProjectRules({ forceFresh: true });
+    };
 
     function sortProjectsForRulesHome(projects) {
         var list = (projects || []).slice();
