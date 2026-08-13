@@ -50,7 +50,28 @@
 .page-header-compact { align-items: center; }
 
 /* Final cross-page visual consistency layer. */
-:root { --record-start-time-width: 52px; }
+:root {
+    --record-start-time-width: 52px;
+    --font-sans: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+}
+
+body { font-synthesis: none; }
+
+.page-header h1,
+.nav-item.active,
+.topbar-context,
+th,
+.tabs button[aria-selected="true"],
+.tabs button.is-active,
+.current-label,
+.overview-project-hours,
+.recent-project,
+.timeline-item-project,
+.quick-ranges button[aria-pressed="true"],
+.rules-project-title,
+.settings-categories button[aria-current="true"] {
+    font-weight: 700;
+}
 
 .timeline-item {
     grid-template-columns: var(--record-start-time-width) minmax(0, 1fr) var(--record-duration-width);
