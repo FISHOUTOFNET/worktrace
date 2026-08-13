@@ -2,7 +2,11 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$InstallDir,
 
-    [int]$TimeoutSeconds = 30
+    [int]$TimeoutSeconds = 30,
+
+    [switch]$KeepRunning,
+
+    [string]$PidFile
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,6 +27,7 @@ $appLog = Join-Path $appStateRoot "logs\worktrace.log"
 $startupLog = Join-Path $appStateRoot "logs\startup.log"
 $process = $null
 $originalLocalAppData = $env:LOCALAPPDATA
+$launchSucceeded = $false
 
 if (Test-Path -LiteralPath $smokeRoot) {
     Remove-Item -Recurse -Force -LiteralPath $smokeRoot
@@ -76,12 +81,16 @@ try {
         throw "Installed WorkTrace exited immediately after its WebView window loaded with code $($process.ExitCode)."
     }
 
-    Write-Host "installed_launch_smoke=passed pid=$($process.Id)"
+    if ($PidFile) {
+        Set-Content -LiteralPath $PidFile -Value $process.Id -Encoding ascii
+    }
+    $launchSucceeded = $true
+    Write-Host "installed_launch_smoke=passed pid=$($process.Id) keep_running=$($KeepRunning.IsPresent)"
 }
 finally {
     $env:LOCALAPPDATA = $originalLocalAppData
 
-    if ($null -ne $process) {
+    if ($null -ne $process -and (-not $KeepRunning.IsPresent -or -not $launchSucceeded)) {
         try {
             $process.Refresh()
             if (-not $process.HasExited) {
@@ -93,7 +102,7 @@ finally {
         }
     }
 
-    if (Test-Path -LiteralPath $smokeRoot) {
+    if ((-not $KeepRunning.IsPresent -or -not $launchSucceeded) -and (Test-Path -LiteralPath $smokeRoot)) {
         Remove-Item `
             -Recurse `
             -Force `
