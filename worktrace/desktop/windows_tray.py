@@ -23,15 +23,18 @@ class WindowsTrayHost:
         icon_path: Path,
         on_open: Callable[[], object],
         on_exit: Callable[[], object],
+        on_session_end: Callable[[], object] | None = None,
     ) -> None:
         self._icon_path = Path(icon_path)
         self._on_open = on_open
         self._on_exit = on_exit
+        self._on_session_end = on_session_end if on_session_end is not None else on_exit
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
         self._failed = threading.Event()
         self._stop_requested = threading.Event()
+        self._session_end_requested = threading.Event()
         self._hwnd: int | None = None
         self._icon_handle = None
         self._taskbar_created = 0
@@ -46,6 +49,7 @@ class WindowsTrayHost:
                 self._failed.set()
                 return False
             self._stop_requested.clear()
+            self._session_end_requested.clear()
             self._thread = threading.Thread(
                 target=self._run,
                 name="WorkTraceWindowsTray",
@@ -139,6 +143,8 @@ class WindowsTrayHost:
                 self._WM_STOP: self._on_stop,
                 win32con.WM_COMMAND: self._on_command,
                 win32con.WM_DESTROY: self._on_destroy,
+                win32con.WM_QUERYENDSESSION: self._on_query_end_session,
+                win32con.WM_ENDSESSION: self._on_end_session,
                 self._taskbar_created: self._on_taskbar_created,
             }
             class_name = f"WorkTraceTrayHost_{id(self)}"
@@ -225,6 +231,32 @@ class WindowsTrayHost:
             self._on_open()
         elif command == self._CMD_EXIT:
             self._on_exit()
+        return 0
+
+    def _request_session_end(self) -> None:
+        if self._session_end_requested.is_set():
+            return
+        self._session_end_requested.set()
+
+        def request_exit() -> None:
+            try:
+                self._on_session_end()
+            except Exception:
+                logger.exception("Windows session-end shutdown callback failed")
+
+        threading.Thread(
+            target=request_exit,
+            name="WorkTraceSessionEnd",
+            daemon=True,
+        ).start()
+
+    def _on_query_end_session(self, _hwnd, _msg, _wparam, _lparam):
+        self._request_session_end()
+        return 1
+
+    def _on_end_session(self, _hwnd, _msg, wparam, _lparam):
+        if int(wparam):
+            self._request_session_end()
         return 0
 
     def _on_taskbar_created(self, _hwnd, _msg, _wparam, _lparam):
