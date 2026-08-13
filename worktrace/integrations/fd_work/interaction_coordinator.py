@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import _interaction_coordinator_core as _core_module
 from ._interaction_coordinator_core import FDWorkInteractionCoordinator as _CoreCoordinator
+
+# Preserve the public module's historical monkeypatch seam. Both names point to
+# the same stdlib module object, so patching interaction_coordinator.time.time
+# also affects the unchanged core implementation.
+time = _core_module.time
 
 
 class FDWorkInteractionCoordinator(_CoreCoordinator):

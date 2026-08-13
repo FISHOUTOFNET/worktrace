@@ -89,9 +89,13 @@ class FDWorkBridgeMixin:
             code = "fd_work_window_unavailable"
             return {"ok": False, "error": code, "message": fd_work_message(code)}
 
-    def open_fd_work_case_picker(self, request_id) -> dict[str, Any]:
+    def open_fd_work_case_picker(self, request_id, action="open") -> dict[str, Any]:
         if type(request_id) is not str or not request_id or len(request_id) > 128:
             return {"ok": False, "error": "invalid_input", "message": "案件选择请求无效"}
+        if action not in {"open", "cancel"}:
+            return {"ok": False, "error": "invalid_input", "message": "案件选择请求无效"}
+        if action == "cancel":
+            return self.cancel_fd_work_case_picker(request_id)
         try:
             result = dict(self._services.fd_work.open_case_picker(request_id))
             if result.get("ok") is not True:

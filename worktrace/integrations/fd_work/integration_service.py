@@ -17,8 +17,24 @@ from ._integration_service_core import (
 from .error_codes import public_fd_work_error
 
 
-class FDWorkIntegrationService(_CoreIntegrationService):
+class FDWorkIntegrationService\
+(_CoreIntegrationService):
     """Expose cancellation without leaking coordinator nonces to the main UI."""
+
+    # Keep these use-case methods visible on the public class itself. Architecture
+    # contracts intentionally inspect this boundary rather than implementation
+    # inheritance details.
+    def create_bound_project(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return super().create_bound_project(*args, **kwargs)
+
+    def rebind_project(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return super().rebind_project(*args, **kwargs)
+
+    def list_bound_project_ids(self) -> set[int]:
+        return super().list_bound_project_ids()
+
+    def clear_project_identity(self, project_id: int) -> dict[str, Any]:
+        return super().clear_project_identity(project_id)
 
     def cancel_case_picker(self, request_id: str) -> dict[str, Any]:
         if type(request_id) is not str or not request_id or len(request_id) > 128:
