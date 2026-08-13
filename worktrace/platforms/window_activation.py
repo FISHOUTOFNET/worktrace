@@ -15,7 +15,12 @@ SWP_NOACTIVATE = 0x0010
 SWP_FRAMECHANGED = 0x0020
 
 
-def _debug(logger: logging.Logger | None, message: str, *, exc_info: bool = False) -> None:
+def _debug(
+    logger: logging.Logger | None,
+    message: str,
+    *,
+    exc_info: bool = False,
+) -> None:
     if logger is not None:
         logger.debug(message, exc_info=exc_info)
 
@@ -138,7 +143,9 @@ def request_window_foreground(
         if restore:
             win32gui.ShowWindow(hwnd, SW_RESTORE)
         result = win32gui.SetForegroundWindow(hwnd)
-        return result is not False
+        if result is None:
+            return True
+        return bool(result)
     except Exception:
         _debug(logger, "native foreground request failed", exc_info=True)
         return False
