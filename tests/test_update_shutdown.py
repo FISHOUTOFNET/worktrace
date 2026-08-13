@@ -6,7 +6,11 @@ import pytest
 
 from worktrace.desktop.update_shutdown import ApplicationUpdateShutdownCoordinator
 
-pytestmark = [pytest.mark.packaging, pytest.mark.contract]
+pytestmark = [
+    pytest.mark.packaging,
+    pytest.mark.contract,
+    pytest.mark.collector_runtime,
+]
 
 
 class FakeUpdateShutdownKernel:
