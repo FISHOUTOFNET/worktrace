@@ -3,6 +3,11 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
+    // Runtime generations already carry the durable invalidation domains. Keep
+    // background refresh ownership surface-specific instead of treating every
+    // live/page revision as a reason to rebuild the active page.
+    App.RECONCILE_INTERVAL_MS = Number.MAX_SAFE_INTEGER;
+
     function clearSettledFDWorkAuthOverride(status) {
         if (!status || status.operation !== "none") return;
         if (["ready", "idle", "error", "disabled", "shutdown"].indexOf(status.session_state) < 0) {
@@ -81,12 +86,8 @@
                 ? Math.round(seconds / totalSeconds * 1000) / 10
                 : 0;
         }
-        groups.sort(function (left, right) {
-            var durationDelta = nonNegativeInt(right.duration_seconds)
-                - nonNegativeInt(left.duration_seconds);
-            if (durationDelta) return durationDelta;
-            return String(left.display_name || "").localeCompare(String(right.display_name || ""), "zh-Hans-CN");
-        });
+        // Keep authoritative row order stable while the local clock ticks.
+        // Resorting every second is visually disruptive and unnecessary.
     }
 
     function liveTargetElapsedSeconds(target, nowMs) {
@@ -135,10 +136,15 @@
     }
     App.statisticsLiveSummaryAtNow = statisticsLiveSummaryAtNow;
 
-    function runtimeRefreshIdentity() {
-        var runtime = App.liveRuntimeStore && typeof App.liveRuntimeStore.get === "function"
+    function runtimeGeneration(runtime, name) {
+        var generations = runtime && runtime.generations;
+        return nonNegativeInt(generations && generations[name]);
+    }
+
+    function runtimeRefreshIdentity(runtime) {
+        runtime = runtime || (App.liveRuntimeStore && typeof App.liveRuntimeStore.get === "function"
             ? App.liveRuntimeStore.get()
-            : null;
+            : null);
         if (!runtime) return "";
         return [
             String(runtime.structureRevision || ""),
@@ -146,10 +152,43 @@
         ].join("|");
     }
 
+    function patchStatisticsGroupTable(tbodyId, groups) {
+        var body = document.getElementById(tbodyId);
+        if (!body || typeof body.querySelectorAll !== "function") return false;
+        var rows = body.querySelectorAll("tr");
+        groups = Array.isArray(groups) ? groups : [];
+        if (rows.length !== groups.length) return false;
+        for (var i = 0; i < rows.length; i++) {
+            var cells = rows[i].children;
+            if (!cells || cells.length < 4) return false;
+            var group = groups[i] || {};
+            var duration = group.duration || App.formatDuration(group.duration_seconds || 0);
+            var percentage = Math.max(0, Math.min(100, parseFloat(group.percentage) || 0));
+            if (cells[1].textContent !== duration) cells[1].textContent = duration;
+            var percentageText = String(group.percentage || 0) + "%";
+            if (cells[3].textContent !== percentageText) cells[3].textContent = percentageText;
+            var bar = typeof rows[i].querySelector === "function"
+                ? rows[i].querySelector(".stats-share-bar i")
+                : null;
+            if (bar && bar.style) bar.style.width = percentage + "%";
+        }
+        return true;
+    }
+
+    function patchStatisticsLiveSummary(summary) {
+        if (!summary || typeof document.getElementById !== "function") return false;
+        var total = document.getElementById("stats-total");
+        if (total) total.textContent = summary.total_duration || "00:00:00";
+        var projectPatched = patchStatisticsGroupTable("stats-by-project", summary.by_project || []);
+        var appPatched = patchStatisticsGroupTable("stats-by-app", summary.by_app || []);
+        return projectPatched && appPatched;
+    }
+    App.patchStatisticsLiveSummary = patchStatisticsLiveSummary;
+
     function applyStatisticsLocalTicker() {
         if (App.currentPage !== "statistics") return;
         var accepted = App.statisticsAcceptedPayload;
-        if (!accepted || !accepted.summary || !accepted.filters || typeof App.showStatistics !== "function") return;
+        if (!accepted || !accepted.summary || !accepted.filters) return;
         var identity = runtimeRefreshIdentity();
         if (identity) App.statisticsAcceptedRefreshIdentity = identity;
         var liveTarget = accepted.exportTicket && accepted.exportTicket.live_target;
@@ -161,19 +200,83 @@
         ].join("|");
         if (App.statisticsLastLiveRenderKey === renderKey) return;
         App.statisticsLastLiveRenderKey = renderKey;
-        App.showStatistics(summary, accepted.filters);
+        patchStatisticsLiveSummary(summary);
     }
     App.applyStatisticsLocalTicker = applyStatisticsLocalTicker;
 
+    function backgroundRulesRefresh() {
+        if (!App.bridge || typeof App.bridge.getProjectRules !== "function") return Promise.resolve(null);
+        if (App.rulesLoading) return App.rulesLoadPromise || Promise.resolve(null);
+        var token = App.requestCoordinator.beginLatest("rules", "background");
+        return App.bridge.getProjectRules().then(function (result) {
+            if (!App.requestCoordinator.isCurrent(token)) return null;
+            var data = App.handleResult(result, function (message) {
+                if (typeof App.showRulesError === "function") App.showRulesError(message);
+            });
+            if (!data) return null;
+            if (typeof App.showProjectRules === "function") App.showProjectRules(data);
+            App.rulesLoaded = true;
+            if (typeof App.clearRulesError === "function") App.clearRulesError();
+            return data;
+        }).catch(function () {
+            if (App.requestCoordinator.isCurrent(token) && typeof App.showRulesError === "function") {
+                App.showRulesError("加载项目规则失败");
+            }
+            return null;
+        });
+    }
+    App.backgroundRulesRefresh = backgroundRulesRefresh;
+
+    function backgroundStatisticsRefresh() {
+        if (!App.bridge || typeof App.bridge.getStatisticsExportSummary !== "function"
+            || typeof App.selectedStatisticsFilters !== "function") {
+            return Promise.resolve(null);
+        }
+        if (App.statisticsLoading) return App.statisticsLoadPromise || Promise.resolve(null);
+        var filters = App.selectedStatisticsFilters();
+        var key = "background|" + JSON.stringify(filters || {});
+        var token = App.requestCoordinator.beginLatest("statistics", key);
+        return App.bridge.getStatisticsExportSummary(
+            filters.dateFrom, filters.dateTo, filters.projectId
+        ).then(function (result) {
+            if (!App.requestCoordinator.isCurrent(token)) return null;
+            var data = App.handleResult(result, function (message) {
+                if (typeof App.showStatisticsError === "function") App.showStatisticsError(message);
+            });
+            if (!data || !data.summary || !data.export_ticket) return null;
+            App.statisticsAcceptedPayload = {
+                summary: data.summary,
+                exportTicket: data.export_ticket,
+                filters: filters
+            };
+            App.statisticsSnapshotRevision = String(data.export_ticket.revision || "");
+            App.statisticsAcceptedRefreshIdentity = runtimeRefreshIdentity();
+            App.statisticsLastLiveRenderKey = "";
+            if (typeof App.showStatistics === "function") App.showStatistics(data.summary, filters);
+            App.statisticsLoaded = true;
+            if (typeof App.clearStatisticsError === "function") App.clearStatisticsError();
+            return data;
+        }).catch(function () {
+            if (App.requestCoordinator.isCurrent(token) && typeof App.showStatisticsError === "function") {
+                App.showStatisticsError("加载统计失败");
+            }
+            return null;
+        });
+    }
+    App.backgroundStatisticsRefresh = backgroundStatisticsRefresh;
+
     function refreshComposedPage(page, reason) {
         page = String(page || App.currentPage || "");
+        reason = String(reason || "manual");
         if (page === "rules" && typeof App.loadProjectRules === "function") {
-            return App.loadProjectRules();
+            if (reason === "manual" || !App.rulesLoaded) return App.loadProjectRules();
+            return backgroundRulesRefresh();
         }
         if (page === "statistics" && typeof App.loadStatisticsExportSummary === "function") {
             if (App.statisticsLoading) return App.statisticsLoadPromise || Promise.resolve(null);
             App.statisticsLastLiveRenderKey = "";
-            return App.loadStatisticsExportSummary();
+            if (reason === "manual" || !App.statisticsLoaded) return App.loadStatisticsExportSummary();
+            return backgroundStatisticsRefresh();
         }
         if (page === "settings" && typeof App.loadSettingsPrivacyStatus === "function") {
             if (App.settingsLoading) return App.settingsLoadPromise || Promise.resolve(null);
@@ -211,20 +314,6 @@
     }
     App.drainTimelineStructuralRefresh = drainTimelineStructuralRefresh;
 
-    function runtimeStatusSignature(runtime) {
-        if (!runtime) return "";
-        var collector = runtime.collector || {};
-        return JSON.stringify([
-            runtime.runtimePhase || "",
-            collector.status || "",
-            collector.paused === true,
-            collector.collector_running === true,
-            collector.user_paused === true,
-            collector.maintenance_in_progress === true,
-            collector.blocked_reason || ""
-        ]);
-    }
-
     var baseAcceptRefreshStateRuntime = App.acceptRefreshStateRuntime;
     if (typeof baseAcceptRefreshStateRuntime === "function") {
         App.acceptRefreshStateRuntime = function (state) {
@@ -241,21 +330,22 @@
                 !== String(current.structureRevision || "");
             var liveChanged = String(previous.liveRevision || "")
                 !== String(current.liveRevision || "");
-            var pageChanged = String(previous.pageRevision || "")
-                !== String(current.pageRevision || "");
+            var classificationChanged = runtimeGeneration(previous, "classification_catalog")
+                !== runtimeGeneration(current, "classification_catalog");
+            var settingsChanged = runtimeGeneration(previous, "settings")
+                !== runtimeGeneration(current, "settings");
             var page = String(App.currentPage || "");
 
-            if (page === "timeline" && pageChanged
+            if (page === "timeline" && structureChanged
                 && typeof App._timelineEditingActive === "function"
                 && App._timelineEditingActive()) {
                 App.timelineStructuralRefreshPending = true;
-            } else if (page === "rules" && (structureChanged || liveChanged)) {
-                refreshComposedPage("rules", "runtime-revision");
+            } else if (page === "rules" && classificationChanged) {
+                refreshComposedPage("rules", "catalog-generation");
             } else if (page === "statistics" && (structureChanged || liveChanged)) {
                 refreshComposedPage("statistics", "runtime-revision");
-            } else if (page === "settings"
-                && runtimeStatusSignature(previous) !== runtimeStatusSignature(current)) {
-                refreshComposedPage("settings", "runtime-status");
+            } else if (page === "settings" && settingsChanged) {
+                refreshComposedPage("settings", "settings-generation");
             }
             return accepted;
         };
@@ -280,6 +370,21 @@
                 return refreshComposedPage(page, "manual");
             }
             return baseRefreshAll.apply(App, arguments);
+        };
+    }
+
+    var baseShowStatus = App.showStatus;
+    if (typeof baseShowStatus === "function") {
+        App.showStatus = function (statusResult) {
+            if (!statusResult) return;
+            var signature = JSON.stringify([
+                String(statusResult.status || ""),
+                statusResult.paused === true,
+                String(statusResult.display || "")
+            ]);
+            if (App.lastStatusRenderSignature === signature) return;
+            App.lastStatusRenderSignature = signature;
+            return baseShowStatus.apply(App, arguments);
         };
     }
 
