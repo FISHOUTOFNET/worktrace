@@ -55,18 +55,7 @@ const
   WebView2ClientGuid = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
   WebView2BootstrapperUrl = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703';
   WebView2BootstrapperName = 'MicrosoftEdgeWebview2Setup.exe';
-  UpdateShutdownEventName = 'Local\WorkTrace_UpdateShutdown_v1';
-  EventModifyState = $0002;
-  SynchronizeAccess = $00100000;
-  GracefulShutdownPollCount = 100;
-  GracefulShutdownPollDelayMs = 100;
-
-function OpenEvent(DesiredAccess: DWORD; InheritHandle: BOOL; EventName: String): THandle;
-  external 'OpenEventW@kernel32.dll stdcall';
-function SetEvent(EventHandle: THandle): BOOL;
-  external 'SetEvent@kernel32.dll stdcall';
-function CloseHandle(Handle: THandle): BOOL;
-  external 'CloseHandle@kernel32.dll stdcall';
+  MaintenanceShutdownArgument = '--shutdown-for-maintenance';
 
 function IsUpgradeInstall: Boolean;
 begin
@@ -90,73 +79,42 @@ begin
     Result := Trim(ExistingValue) <> '';
 end;
 
-function IsWorkTraceShutdownEventPresent: Boolean;
-var
-  EventHandle: THandle;
-begin
-  EventHandle := OpenEvent(SynchronizeAccess, False, UpdateShutdownEventName);
-  Result := EventHandle <> 0;
-  if Result then
-    CloseHandle(EventHandle);
-end;
-
-function SignalWorkTraceShutdown: Boolean;
-var
-  EventHandle: THandle;
-begin
-  Result := False;
-  EventHandle := OpenEvent(
-    EventModifyState or SynchronizeAccess,
-    False,
-    UpdateShutdownEventName
-  );
-  if EventHandle = 0 then
-    exit;
-  try
-    Result := SetEvent(EventHandle);
-  finally
-    CloseHandle(EventHandle);
-  end;
-end;
-
-function WaitForWorkTraceShutdown: Boolean;
-var
-  I: Integer;
-begin
-  for I := 1 to GracefulShutdownPollCount do
-  begin
-    if not IsWorkTraceShutdownEventPresent then
-    begin
-      Result := True;
-      exit;
-    end;
-    Sleep(GracefulShutdownPollDelayMs);
-  end;
-  Result := not IsWorkTraceShutdownEventPresent;
-end;
-
 function RequestWorkTraceShutdown(const Context: String): Boolean;
+var
+  ExePath: String;
+  ResultCode: Integer;
 begin
-  if not IsWorkTraceShutdownEventPresent then
+  ExePath := ExpandConstant('{app}\{#MyAppExeName}');
+  if not FileExists(ExePath) then
   begin
-    Log('WorkTrace cooperative shutdown event not present for ' + Context + '.');
+    Log('WorkTrace maintenance shutdown skipped for ' + Context + ': executable not present.');
     Result := True;
     exit;
   end;
 
-  Log('Requesting WorkTrace cooperative shutdown for ' + Context + '.');
-  if not SignalWorkTraceShutdown then
+  Log('Requesting WorkTrace maintenance shutdown for ' + Context + '.');
+  if not Exec(
+    ExePath,
+    MaintenanceShutdownArgument,
+    ExpandConstant('{app}'),
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  ) then
   begin
-    Log('Failed to signal WorkTrace cooperative shutdown for ' + Context + '.');
+    Log('Failed to start WorkTrace maintenance shutdown client for ' + Context + '.');
     Result := False;
     exit;
   end;
 
-  Result := WaitForWorkTraceShutdown;
+  Result := ResultCode = 0;
   if Result then
-    Log('WorkTrace cooperative shutdown completed for ' + Context + '.')
+    Log('WorkTrace maintenance shutdown client completed for ' + Context + '.')
   else
-    Log('WorkTrace cooperative shutdown timed out for ' + Context + '.');
+    Log(
+      'WorkTrace maintenance shutdown client failed for ' + Context +
+      ' with exit code ' + IntToStr(ResultCode) + '.'
+    );
 end;
 
 function IsUsableWebView2Version(const Version: String): Boolean;
@@ -201,7 +159,8 @@ var
 begin
   Result := '';
 
-  if IsUpgradeInstall and not RequestWorkTraceShutdown('upgrade') then
+  if FileExists(ExpandConstant('{app}\{#MyAppExeName}')) and
+     not RequestWorkTraceShutdown('upgrade') then
     Log('Continuing upgrade so Restart Manager can apply the configured fallback.');
 
   if IsWebView2RuntimeInstalled then
