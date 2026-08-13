@@ -5,6 +5,7 @@ import ctypes
 import logging
 import os
 import threading
+import time
 from typing import Callable, Protocol
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ def _windows_kernel32():
 
 class UpdateShutdownKernel(Protocol):
     def create_event(self, name: str): ...
+    def event_exists(self, name: str) -> bool: ...
     def signal_event(self, name: str) -> bool: ...
     def wait_for_signal(self, event, timeout_seconds: float) -> bool: ...
     def wake_waiter(self, event) -> None: ...
@@ -60,6 +62,14 @@ class WindowsUpdateShutdownKernel:
                 f"update_shutdown_event_create_failed:{int(ctypes.get_last_error())}"
             )
         return handle
+
+    def event_exists(self, name: str) -> bool:
+        kernel32 = self._kernel32()
+        handle = kernel32.OpenEventW(self.SYNCHRONIZE, False, name)
+        if not handle:
+            return False
+        kernel32.CloseHandle(handle)
+        return True
 
     def signal_event(self, name: str) -> bool:
         kernel32 = self._kernel32()
@@ -165,6 +175,40 @@ class ApplicationUpdateShutdownCoordinator:
             logger.warning("named update shutdown Event signal failed", exc_info=True)
             return False
 
+    def request_running_instance_shutdown(
+        self,
+        *,
+        timeout_seconds: float = 20.0,
+        poll_interval_seconds: float = 0.1,
+    ) -> bool:
+        """Ask an existing process to exit and wait for its lifetime Event to close.
+
+        Absence of the Event means there is no compatible running instance, which is
+        already a successful maintenance precondition. A signaled Event remains alive
+        until the owning process completes its normal runtime shutdown.
+        """
+
+        if not self._supported():
+            return True
+        timeout = max(0.0, float(timeout_seconds))
+        poll_interval = max(0.01, float(poll_interval_seconds))
+        try:
+            if not self._kernel.event_exists(UPDATE_SHUTDOWN_EVENT_NAME):
+                return True
+            if not self._kernel.signal_event(UPDATE_SHUTDOWN_EVENT_NAME):
+                return not self._kernel.event_exists(UPDATE_SHUTDOWN_EVENT_NAME)
+            deadline = time.monotonic() + timeout
+            while self._kernel.event_exists(UPDATE_SHUTDOWN_EVENT_NAME):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    logger.error("maintenance shutdown timed out")
+                    return False
+                time.sleep(min(poll_interval, remaining))
+            return True
+        except Exception:
+            logger.exception("maintenance shutdown request failed")
+            return False
+
     def stop_listener(self) -> None:
         """Stop dispatching but retain the named Event as a process-alive marker."""
 
@@ -257,9 +301,18 @@ def get_application_update_shutdown_coordinator() -> ApplicationUpdateShutdownCo
     return _application_update_shutdown_coordinator
 
 
+def request_running_instance_shutdown(*, timeout_seconds: float = 20.0) -> bool:
+    """Process-control entry point used by the installed maintenance client."""
+
+    return _application_update_shutdown_coordinator.request_running_instance_shutdown(
+        timeout_seconds=timeout_seconds
+    )
+
+
 __all__ = [
     "ApplicationUpdateShutdownCoordinator",
     "UPDATE_SHUTDOWN_EVENT_NAME",
     "UpdateShutdownError",
     "get_application_update_shutdown_coordinator",
+    "request_running_instance_shutdown",
 ]
