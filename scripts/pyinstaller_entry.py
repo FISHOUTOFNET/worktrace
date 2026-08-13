@@ -10,6 +10,7 @@ from typing import TextIO
 
 
 _STARTUP_LOG_NAME = "startup.log"
+_MAINTENANCE_SHUTDOWN_ARGUMENT = "--shutdown-for-maintenance"
 
 
 def _startup_log_candidates() -> list[Path]:
@@ -95,7 +96,11 @@ def _run_application(argv: list[str]) -> int:
     stream, log_path = _open_startup_log()
     _attach_windowed_streams(stream)
     background = "--background" in argv
-    _write_startup_marker(stream, f"bootstrap start background={background}")
+    maintenance_control = _MAINTENANCE_SHUTDOWN_ARGUMENT in argv
+    _write_startup_marker(
+        stream,
+        f"bootstrap start background={background} maintenance_control={maintenance_control}",
+    )
 
     try:
         from worktrace.main import main
@@ -106,13 +111,13 @@ def _run_application(argv: list[str]) -> int:
         if stream is not None:
             traceback.print_exc(file=stream)
             stream.flush()
-        if not background:
+        if not background and not maintenance_control:
             _show_fatal_startup_message(_format_fatal_message(log_path=log_path))
         return 1
 
     if exit_code != 0:
         _write_startup_marker(stream, f"application startup exited code={exit_code}")
-        if not background:
+        if not background and not maintenance_control:
             _show_fatal_startup_message(
                 _format_fatal_message(log_path=log_path, exit_code=exit_code)
             )
