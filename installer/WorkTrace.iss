@@ -26,7 +26,7 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 UsedUserAreasWarning=no
 UsePreviousTasks=no
-CloseApplications=yes
+CloseApplications=force
 RestartApplications=no
 
 [Tasks]
@@ -55,6 +55,18 @@ const
   WebView2ClientGuid = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
   WebView2BootstrapperUrl = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703';
   WebView2BootstrapperName = 'MicrosoftEdgeWebview2Setup.exe';
+  UpdateShutdownEventName = 'Local\WorkTrace_UpdateShutdown_v1';
+  EventModifyState = $0002;
+  SynchronizeAccess = $00100000;
+  GracefulShutdownPollCount = 100;
+  GracefulShutdownPollDelayMs = 100;
+
+function OpenEvent(DesiredAccess: DWORD; InheritHandle: BOOL; EventName: String): THandle;
+  external 'OpenEventW@kernel32.dll stdcall';
+function SetEvent(EventHandle: THandle): BOOL;
+  external 'SetEvent@kernel32.dll stdcall';
+function CloseHandle(Handle: THandle): BOOL;
+  external 'CloseHandle@kernel32.dll stdcall';
 
 function IsUpgradeInstall: Boolean;
 begin
@@ -76,6 +88,75 @@ begin
     ExistingValue
   ) then
     Result := Trim(ExistingValue) <> '';
+end;
+
+function IsWorkTraceShutdownEventPresent: Boolean;
+var
+  EventHandle: THandle;
+begin
+  EventHandle := OpenEvent(SynchronizeAccess, False, UpdateShutdownEventName);
+  Result := EventHandle <> 0;
+  if Result then
+    CloseHandle(EventHandle);
+end;
+
+function SignalWorkTraceShutdown: Boolean;
+var
+  EventHandle: THandle;
+begin
+  Result := False;
+  EventHandle := OpenEvent(
+    EventModifyState or SynchronizeAccess,
+    False,
+    UpdateShutdownEventName
+  );
+  if EventHandle = 0 then
+    exit;
+  try
+    Result := SetEvent(EventHandle);
+  finally
+    CloseHandle(EventHandle);
+  end;
+end;
+
+function WaitForWorkTraceShutdown: Boolean;
+var
+  I: Integer;
+begin
+  for I := 1 to GracefulShutdownPollCount do
+  begin
+    if not IsWorkTraceShutdownEventPresent then
+    begin
+      Result := True;
+      exit;
+    end;
+    Sleep(GracefulShutdownPollDelayMs);
+  end;
+  Result := not IsWorkTraceShutdownEventPresent;
+end;
+
+function RequestWorkTraceShutdown(const Context: String): Boolean;
+begin
+  if not IsWorkTraceShutdownEventPresent then
+  begin
+    Log('WorkTrace cooperative shutdown event not present for ' + Context + '.');
+    Result := True;
+    exit;
+  end;
+
+  Log('Requesting WorkTrace cooperative shutdown for ' + Context + '.');
+  if not SignalWorkTraceShutdown then
+  begin
+    Log('Failed to signal WorkTrace cooperative shutdown for ' + Context + '.');
+    Result := False;
+    exit;
+  end;
+
+  Result := WaitForWorkTraceShutdown;
+  if Result then
+    Log('WorkTrace cooperative shutdown completed for ' + Context + '.')
+  else
+    Log('WorkTrace cooperative shutdown timed out for ' + Context + '.');
 end;
 
 function IsUsableWebView2Version(const Version: String): Boolean;
@@ -119,6 +200,10 @@ var
   ResultCode: Integer;
 begin
   Result := '';
+
+  if IsUpgradeInstall and not RequestWorkTraceShutdown('upgrade') then
+    Log('Continuing upgrade so Restart Manager can apply the configured fallback.');
+
   if IsWebView2RuntimeInstalled then
   begin
     Log('WebView2 Runtime prerequisite already satisfied.');
@@ -165,6 +250,17 @@ begin
       '请检查网络或组织策略后重试。' + #13#10 +
       GetExceptionMessage;
   end;
+end;
+
+function InitializeUninstall: Boolean;
+begin
+  Result := RequestWorkTraceShutdown('uninstall');
+  if not Result then
+    MsgBox(
+      'WorkTrace 未能在卸载前正常退出。请从通知区域退出 WorkTrace 后重试。',
+      mbError,
+      MB_OK
+    );
 end;
 
 procedure InitializeWizard;
