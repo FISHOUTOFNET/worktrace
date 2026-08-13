@@ -39,10 +39,22 @@ def test_webview2_prerequisite_is_detected_and_installed_per_user() -> None:
     assert "PrivilegesRequired=lowest" in source
 
 
-def test_upgrade_closes_running_app_without_restart_manager_relaunch() -> None:
+def test_upgrade_uses_cooperative_shutdown_with_force_only_as_fallback() -> None:
     source = ISS_PATH.read_text(encoding="utf-8")
-    assert "CloseApplications=yes" in source
+    assert "CloseApplications=force" in source
     assert "RestartApplications=no" in source
+    assert "Local\\WorkTrace_UpdateShutdown_v1" in source
+    assert "RequestWorkTraceShutdown('upgrade')" in source
+    assert "SignalWorkTraceShutdown" in source
+    assert "WaitForWorkTraceShutdown" in source
+    assert "Restart Manager can apply the configured fallback" in source
+
+
+def test_uninstall_requires_running_app_to_exit_cooperatively() -> None:
+    source = ISS_PATH.read_text(encoding="utf-8")
+    assert "function InitializeUninstall: Boolean" in source
+    assert "RequestWorkTraceShutdown('uninstall')" in source
+    assert "WorkTrace 未能在卸载前正常退出" in source
 
 
 def test_startup_task_writes_only_hkcu_and_is_uninstall_cleaned() -> None:
@@ -73,7 +85,7 @@ def test_upgrade_task_selection_preserves_actual_registry_choice() -> None:
 def test_startup_state_detection_does_not_depend_on_app_constant() -> None:
     source = ISS_PATH.read_text(encoding="utf-8")
     helper_start = source.index("function ExistingStartupEnabled")
-    helper_end = source.index("function IsUsableWebView2Version", helper_start)
+    helper_end = source.index("function IsWorkTraceShutdownEventPresent", helper_start)
     helper = source[helper_start:helper_end]
 
     assert "RegQueryStringValue" in helper
@@ -160,28 +172,32 @@ def test_ci_waits_for_inno_setup_bootstrap_before_using_iscc() -> None:
     assert "ExitCode" in workflow
 
 
-def test_ci_exercises_installer_upgrade_runtime_path() -> None:
+def test_ci_exercises_running_app_upgrade_and_uninstall_paths() -> None:
     workflow = (ROOT / ".github" / "workflows" / "_validation.yml").read_text(
         encoding="utf-8"
     )
     assert "Exercise installer upgrade runtime path" in workflow
     assert "worktrace-installer-smoke" in workflow
-    assert '"C:\legacy\WorkTrace.exe" --background' in workflow
+    assert '"C:\\legacy\\WorkTrace.exe" --background' in workflow
     assert '"Upgrade install"' in workflow
     assert workflow.count('/TASKS=`"startup`"') >= 2
+    assert "/NOFORCECLOSEAPPLICATIONS" in workflow
+    assert workflow.count("-KeepRunning") >= 2
+    assert "worktrace-upgrade-smoke.pid" in workflow
+    assert "worktrace-uninstall-smoke.pid" in workflow
+    assert "Upgrade left the running WorkTrace process alive" in workflow
+    assert "Uninstall left the running WorkTrace process alive" in workflow
     assert "unins000.exe" in workflow
     assert "Get-ItemPropertyValue" in workflow
 
 
-def test_ci_launches_the_freshly_installed_application() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "_validation.yml").read_text(
-        encoding="utf-8"
-    )
+def test_installed_launch_smoke_can_leave_process_running_for_lifecycle_test() -> None:
     smoke = INSTALLED_LAUNCH_SMOKE_PATH.read_text(encoding="utf-8")
 
-    assert 'smoke_installed_launch.ps1" -InstallDir $installDir' in workflow
     assert 'Join-Path $InstallDir "WorkTrace.exe"' in smoke
     assert "Start-Process -FilePath $exe -PassThru" in smoke
     assert 'SimpleMatch "desktop shell window loaded"' in smoke
     assert "$env:LOCALAPPDATA = $smokeRoot" in smoke
+    assert "[switch]$KeepRunning" in smoke
+    assert "[string]$PidFile" in smoke
     assert "taskkill.exe /PID $process.Id /T /F" in smoke
