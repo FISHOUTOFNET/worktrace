@@ -4,8 +4,10 @@ from __future__ import annotations
 import ctypes
 import logging
 import os
+import sys
 import threading
 import time
+from pathlib import Path
 from typing import Callable, Protocol
 
 logger = logging.getLogger(__name__)
@@ -44,6 +46,11 @@ class UpdateShutdownKernel(Protocol):
     def wait_for_signal(self, event, timeout_seconds: float) -> bool: ...
     def wake_waiter(self, event) -> None: ...
     def close_event(self, event) -> None: ...
+
+
+class MaintenanceProcessProbe(Protocol):
+    def snapshot_other_same_executable_pids(self) -> set[int]: ...
+    def any_alive(self, pids: set[int]) -> bool: ...
 
 
 class WindowsUpdateShutdownKernel:
@@ -99,11 +106,67 @@ class WindowsUpdateShutdownKernel:
         self._kernel32().CloseHandle(event)
 
 
+class FrozenExecutableProcessProbe:
+    """Track pre-existing processes backed by the same frozen executable."""
+
+    def snapshot_other_same_executable_pids(self) -> set[int]:
+        if os.name != "nt" or not bool(getattr(sys, "frozen", False)):
+            return set()
+        try:
+            import psutil
+
+            current = psutil.Process(os.getpid())
+            excluded = {current.pid, *(parent.pid for parent in current.parents())}
+            target = Path(sys.executable).resolve()
+            matching: set[int] = set()
+            for process in psutil.process_iter(("pid", "exe")):
+                pid = int(process.info.get("pid") or 0)
+                if pid <= 0 or pid in excluded:
+                    continue
+                executable = process.info.get("exe")
+                if not executable:
+                    continue
+                try:
+                    if Path(str(executable)).resolve() == target:
+                        matching.add(pid)
+                except (OSError, RuntimeError):
+                    continue
+            return matching
+        except Exception:
+            logger.warning("maintenance process snapshot failed", exc_info=True)
+            return set()
+
+    def any_alive(self, pids: set[int]) -> bool:
+        if not pids:
+            return False
+        try:
+            import psutil
+
+            for pid in tuple(pids):
+                try:
+                    process = psutil.Process(pid)
+                    if process.is_running():
+                        return True
+                except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                    continue
+            return False
+        except Exception:
+            logger.warning("maintenance process liveness check failed", exc_info=True)
+            return True
+
+
 class ApplicationUpdateShutdownCoordinator:
     """Own one named maintenance event for the complete process lifetime."""
 
-    def __init__(self, kernel: UpdateShutdownKernel | None = None) -> None:
+    def __init__(
+        self,
+        kernel: UpdateShutdownKernel | None = None,
+        process_probe: MaintenanceProcessProbe | None = None,
+    ) -> None:
         self._kernel = kernel if kernel is not None else WindowsUpdateShutdownKernel()
+        self._process_probe = (
+            process_probe if process_probe is not None else FrozenExecutableProcessProbe()
+        )
         self._lock = threading.RLock()
         self._event = None
         self._stop_event = threading.Event()
@@ -181,33 +244,61 @@ class ApplicationUpdateShutdownCoordinator:
         timeout_seconds: float = 20.0,
         poll_interval_seconds: float = 0.1,
     ) -> bool:
-        """Ask an existing process to exit and wait for its lifetime Event to close.
+        """Request graceful exit and wait for the complete frozen process tree.
 
-        Absence of the Event means there is no compatible running instance, which is
-        already a successful maintenance precondition. A signaled Event remains alive
-        until the owning process completes its normal runtime shutdown.
+        PyInstaller one-file applications have an outer bootloader process and an
+        inner Python application process. The named Event is held by the inner
+        process, so Event disappearance alone is not sufficient for an installer to
+        replace the executable. Snapshotting the exact same-executable processes
+        before signaling lets this control client wait until the old bootloader has
+        also completed its cleanup, while excluding its own one-file parent/child.
         """
 
         if not self._supported():
             return True
         timeout = max(0.0, float(timeout_seconds))
         poll_interval = max(0.01, float(poll_interval_seconds))
+        deadline = time.monotonic() + timeout
+        prior_pids = self._process_probe.snapshot_other_same_executable_pids()
         try:
             if not self._kernel.event_exists(UPDATE_SHUTDOWN_EVENT_NAME):
-                return True
+                return self._wait_for_prior_processes(
+                    prior_pids,
+                    deadline=deadline,
+                    poll_interval_seconds=poll_interval,
+                )
             if not self._kernel.signal_event(UPDATE_SHUTDOWN_EVENT_NAME):
-                return not self._kernel.event_exists(UPDATE_SHUTDOWN_EVENT_NAME)
-            deadline = time.monotonic() + timeout
+                if self._kernel.event_exists(UPDATE_SHUTDOWN_EVENT_NAME):
+                    return False
             while self._kernel.event_exists(UPDATE_SHUTDOWN_EVENT_NAME):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    logger.error("maintenance shutdown timed out")
+                    logger.error("maintenance shutdown timed out waiting for Event")
                     return False
                 time.sleep(min(poll_interval, remaining))
-            return True
+            return self._wait_for_prior_processes(
+                prior_pids,
+                deadline=deadline,
+                poll_interval_seconds=poll_interval,
+            )
         except Exception:
             logger.exception("maintenance shutdown request failed")
             return False
+
+    def _wait_for_prior_processes(
+        self,
+        pids: set[int],
+        *,
+        deadline: float,
+        poll_interval_seconds: float,
+    ) -> bool:
+        while self._process_probe.any_alive(pids):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.error("maintenance shutdown timed out waiting for executable release")
+                return False
+            time.sleep(min(poll_interval_seconds, remaining))
+        return True
 
     def stop_listener(self) -> None:
         """Stop dispatching but retain the named Event as a process-alive marker."""
@@ -311,6 +402,7 @@ def request_running_instance_shutdown(*, timeout_seconds: float = 20.0) -> bool:
 
 __all__ = [
     "ApplicationUpdateShutdownCoordinator",
+    "FrozenExecutableProcessProbe",
     "UPDATE_SHUTDOWN_EVENT_NAME",
     "UpdateShutdownError",
     "get_application_update_shutdown_coordinator",
