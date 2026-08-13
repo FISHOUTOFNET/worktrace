@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WorkTrace Typography Acceptance</title>
+    <link rel="stylesheet" href="../../../worktrace/webview_ui/styles.css">
+    <link rel="stylesheet" href="../../../worktrace/webview_ui/ui_components.css">
+    <link rel="stylesheet" href="../../../worktrace/webview_ui/project_autocomplete.css">
+    <style>
+        html, body { width: auto; height: auto; overflow: auto; }
+        body { padding: 22px; }
+        .acceptance-root { width: min(920px, calc(100vw - 44px)); display: grid; gap: 14px; }
+        .acceptance-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+        .acceptance-card { min-width: 0; padding: 13px 15px; }
+        .acceptance-card h2 { margin: 0 0 8px; font-size: var(--font-size-lg); }
+        .acceptance-sample { margin: 5px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .acceptance-rules { display: grid; gap: 5px; }
+        .acceptance-rules .rules-row { grid-template-columns: auto minmax(0, 1fr); }
+        .acceptance-timeline { width: 100%; }
+        .acceptance-settings { width: 180px; padding: 5px; }
+        .acceptance-settings button { width: 100%; justify-content: flex-start; }
+        .acceptance-autocomplete { position: static; display: block; width: 100%; max-height: none; }
+        #typography-report { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+        @media (max-width: 760px) {
+            .acceptance-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <main class="acceptance-root">
+        <header class="page-header page-header-compact">
+            <div><h1 id="sample-heading">项目规则 Typography</h1><p>中文、English 与 26IP0165 数字混排验收</p></div>
+            <div class="page-total"><span>今日总时长</span><strong class="numeric">08:26:15</strong></div>
+        </header>
+
+        <div class="acceptance-grid">
+            <section class="surface acceptance-card">
+                <h2>混排正文</h2>
+                <p id="sample-body" class="acceptance-sample">26IP0165 Miragene项目 · Review SPA文件并修改第12条</p>
+                <p class="acceptance-sample">登录 Windows 时自动启动 WorkTrace</p>
+                <button id="sample-action" type="button" class="button primary">填入 FD Work</button>
+            </section>
+
+            <section class="surface acceptance-card">
+                <h2>项目规则</h2>
+                <div class="rules-project-title" id="sample-project-title">26IP0165 Miragene项目</div>
+                <div class="acceptance-rules">
+                    <div class="rules-row" id="sample-rule-row"><span class="rules-kind-badge">文件夹</span><span>D:\Work\26IP0165\证据 <span class="rules-detail">· 包含子文件夹</span></span></div>
+                    <div class="rules-row"><span class="rules-kind-badge">关键词</span><span>合同 Draft V2</span></div>
+                </div>
+            </section>
+        </div>
+
+        <section class="surface acceptance-card">
+            <h2>时间详情</h2>
+            <div class="timeline-item acceptance-timeline" id="sample-timeline">
+                <span class="timeline-item-time">09:18</span>
+                <span class="timeline-item-project" id="sample-timeline-project">26IP0165 项目A Draft</span>
+                <span class="timeline-item-description">Review 中文附件 v2</span>
+                <span class="timeline-item-side"><span class="timeline-item-duration">01:26:15</span></span>
+            </div>
+        </section>
+
+        <div class="acceptance-grid">
+            <section class="surface acceptance-card">
+                <h2>设置</h2>
+                <nav class="surface settings-categories acceptance-settings"><button id="sample-settings" type="button" aria-current="true">FD Work 插件</button></nav>
+            </section>
+            <section class="surface acceptance-card">
+                <h2>项目联想</h2>
+                <div class="project-autocomplete-menu acceptance-autocomplete">
+                    <button class="project-autocomplete-option is-active" type="button"><span class="project-autocomplete-name">26IP0165 Miragene项目</span><span class="project-autocomplete-description">IP Litigation 中文描述</span></button>
+                </div>
+            </section>
+        </div>
+    </main>
+    <pre id="typography-report" aria-hidden="true"></pre>
+    <script>
+    (function () {
+        function snapshot(id) {
+            var node = document.getElementById(id);
+            var style = getComputedStyle(node);
+            return {
+                fontFamily: style.fontFamily,
+                fontWeight: style.fontWeight,
+                fontSize: style.fontSize,
+                lineHeight: style.lineHeight,
+                width: node.getBoundingClientRect().width,
+                height: node.getBoundingClientRect().height,
+                overflowX: node.scrollWidth > node.clientWidth + 1,
+                overflowY: node.scrollHeight > node.clientHeight + 1
+            };
+        }
+
+        Promise.resolve(document.fonts && document.fonts.ready).then(function () {
+            var ids = [
+                "sample-heading",
+                "sample-body",
+                "sample-action",
+                "sample-project-title",
+                "sample-rule-row",
+                "sample-timeline",
+                "sample-timeline-project",
+                "sample-settings"
+            ];
+            var samples = {};
+            ids.forEach(function (id) { samples[id] = snapshot(id); });
+            var bodyStyle = getComputedStyle(document.body);
+            var fontAvailable = !document.fonts || document.fonts.check('13px "Microsoft YaHei UI"', "中文ABC123");
+            var expectedFamily = bodyStyle.fontFamily.indexOf("Microsoft YaHei UI") !== -1;
+            var expectedBold = ["sample-heading", "sample-project-title", "sample-timeline-project", "sample-settings"].every(function (id) {
+                return samples[id].fontWeight === "700";
+            });
+            var noUnexpectedOverflow = ids.every(function (id) {
+                return !samples[id].overflowY;
+            });
+            var report = {
+                pass: Boolean(fontAvailable && expectedFamily && expectedBold && noUnexpectedOverflow),
+                fontAvailable: fontAvailable,
+                bodyFontFamily: bodyStyle.fontFamily,
+                fontSynthesis: bodyStyle.fontSynthesis,
+                expectedFamily: expectedFamily,
+                expectedBold: expectedBold,
+                noUnexpectedOverflow: noUnexpectedOverflow,
+                devicePixelRatio: window.devicePixelRatio,
+                viewport: { width: window.innerWidth, height: window.innerHeight },
+                samples: samples
+            };
+            document.body.dataset.acceptance = report.pass ? "pass" : "fail";
+            document.getElementById("typography-report").textContent = JSON.stringify(report);
+        });
+    })();
+    </script>
+</body>
+</html>
