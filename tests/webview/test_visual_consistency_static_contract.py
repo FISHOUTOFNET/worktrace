@@ -36,16 +36,13 @@ def test_timeline_time_points_use_minute_precision_with_separate_width_semantics
 
 
 def test_project_rules_keep_card_height_and_rule_typography_visually_stable():
+    render = _source("rules_render.js")
+    body = _func_body(render, "renderProjectRuleProject")
     css = _resource("ui_components.css")
 
-    empty_description = re.search(
-        r"\.rules-project-title-group:not\(:has\(\.rules-project-description\)\)::after\s*\{([^}]*)\}",
-        css,
-    )
-    assert empty_description is not None
-    assert 'content: "无描述"' in empty_description.group(1)
-    assert "var(--color-text-tertiary)" in empty_description.group(1)
-    assert "var(--font-size-sm)" in empty_description.group(1)
+    assert 'rules-project-description is-empty' in body
+    assert 'text("无描述", "无描述")' in body
+    assert ".rules-project-title-group:not(:has(.rules-project-description))::after" not in css
 
     rule_row = re.search(r"\.rules-row\s*\{([^}]*)\}", css)
     assert rule_row is not None and "var(--font-size-md)" in rule_row.group(1)

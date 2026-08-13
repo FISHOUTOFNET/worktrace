@@ -59,16 +59,6 @@
 .timeline-item-side,
 .timeline-item-duration { width: var(--record-duration-width); }
 
-.rules-project-title-group:not(:has(.rules-project-description))::after {
-    content: "无描述";
-    display: block;
-    margin-top: 1px;
-    overflow: hidden;
-    color: var(--color-text-tertiary);
-    font-size: var(--font-size-sm);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
 .rules-row { font-size: var(--font-size-md); }
 .rules-kind-badge,
 .rules-detail { font-size: inherit; }
