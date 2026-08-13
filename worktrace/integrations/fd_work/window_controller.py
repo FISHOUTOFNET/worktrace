@@ -7,6 +7,10 @@ import threading
 import time
 from typing import Any, Callable, Mapping
 
+from ...platforms.window_activation import (
+    make_window_activatable,
+    request_window_foreground,
+)
 from .page_adapter import FDWorkPageAdapter, FDWorkPagePhase
 from .window_executor import (
     FDWorkCallbackScheduler,
@@ -14,6 +18,8 @@ from .window_executor import (
     FDWorkWindowCommandError,
     FDWorkWindowExecutor,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _run_now(callback: Callable[[], None]) -> None:
@@ -723,7 +729,6 @@ class FDWorkWindowController:
             window = self._window
             navigation_generation = self._navigation_generation
             controller_operation_generation = self._operation_generation
-            already_visible = self._window_visible
             if self._shutdown or window is None:
                 return self._failure_locked("window_unavailable")
             if owner in {"user_picker", "automation_fill"} and self._session_state != "ready":
@@ -735,15 +740,14 @@ class FDWorkWindowController:
                 and guard()
             )
 
-        if not already_visible:
-            if not self._show_window_if_current(
-                window,
-                navigation_generation,
-                focus=True,
-                restore=True,
-                external_guard=current,
-            ):
-                return {"ok": False, "error": "lookup_superseded"}
+        if not self._show_window_if_current(
+            window,
+            navigation_generation,
+            focus=True,
+            restore=True,
+            external_guard=current,
+        ):
+            return {"ok": False, "error": "lookup_superseded"}
         guarded_window = self._executor_window(
             window,
             navigation_generation,
@@ -776,17 +780,23 @@ class FDWorkWindowController:
                 and guard()
             )
 
-        def mutate() -> None:
+        def hide_helper() -> None:
             callback = getattr(window, "hide", None)
             if callable(callback):
                 callback()
-            main_focus()
 
-        if self._dispatch_window_mutation(mutate, current):
-            with self._lock:
-                if self._window is window:
-                    self._window_visible = False
-            self._log_event("fd_work_window_hide")
+        if not self._dispatch_window_mutation(hide_helper, current):
+            return
+        with self._lock:
+            if self._window is window:
+                self._window_visible = False
+        self._log_event("fd_work_window_hide")
+        if not current():
+            return
+        try:
+            main_focus()
+        except Exception:
+            logger.debug("FD Work main-window restore request failed", exc_info=True)
 
     def _show_window_if_current(
         self,
@@ -800,6 +810,7 @@ class FDWorkWindowController:
         with self._lock:
             if not self._navigation_is_current_locked(window, generation):
                 return False
+            already_visible = self._window_visible
 
         def guard() -> bool:
             return bool(
@@ -807,24 +818,63 @@ class FDWorkWindowController:
                 and (external_guard is None or external_guard())
             )
 
-        def mutate() -> None:
-            for action in (
-                "show",
-                "restore" if restore else None,
-                "focus" if focus else None,
-            ):
-                if action:
-                    callback = getattr(window, action, None)
-                    if callable(callback):
-                        callback()
+        if focus:
+            def enable_activation() -> None:
+                make_window_activatable(
+                    window,
+                    fallback_title="FD Work",
+                    logger=logger,
+                )
 
-        if not self._dispatch_window_mutation(mutate, guard):
-            return False
-        with self._lock:
-            if self._navigation_is_current_locked(window, generation):
+            if not self._dispatch_window_mutation(enable_activation, guard):
+                return False
+
+        if not already_visible:
+            def show_helper() -> None:
+                callback = getattr(window, "show", None)
+                if callable(callback):
+                    callback()
+
+            if not self._dispatch_window_mutation(show_helper, guard):
+                return False
+            with self._lock:
+                if not self._navigation_is_current_locked(window, generation):
+                    return False
                 self._window_visible = True
-        self._log_event("fd_work_window_show")
-        return True
+            self._log_event("fd_work_window_show")
+
+            def restore_and_focus() -> None:
+                for action in (
+                    "restore" if restore else None,
+                    "focus" if focus else None,
+                ):
+                    if action:
+                        callback = getattr(window, action, None)
+                        if callable(callback):
+                            try:
+                                callback()
+                            except Exception:
+                                logger.debug(
+                                    "FD Work pywebview activation step failed",
+                                    exc_info=True,
+                                )
+
+            if restore or focus:
+                if not self._dispatch_window_mutation(restore_and_focus, guard):
+                    return False
+
+        if focus:
+            def request_native_foreground() -> None:
+                request_window_foreground(
+                    window,
+                    fallback_title="FD Work",
+                    restore=restore,
+                    logger=logger,
+                )
+
+            if not self._dispatch_window_mutation(request_native_foreground, guard):
+                return False
+        return guard()
 
     def _destroy_window(self, window: Any | None) -> None:
         if window is None:
