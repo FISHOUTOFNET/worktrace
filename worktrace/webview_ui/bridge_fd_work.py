@@ -85,9 +85,7 @@ class FDWorkBridgeMixin:
         try:
             return {"ok": True, "status": self._services.fd_work.get_settings_status()}
         except Exception:
-            logger.error(
-                "fd_work_bridge_failed action=get_status internal_error_kind=python_exception"
-            )
+            logger.error("fd_work_bridge_failed action=get_status internal_error_kind=python_exception")
             code = "fd_work_window_unavailable"
             return {"ok": False, "error": code, "message": fd_work_message(code)}
 
@@ -101,9 +99,21 @@ class FDWorkBridgeMixin:
                 result["message"] = fd_work_message(result["error"])
             return result
         except Exception:
-            logger.error(
-                "fd_work_bridge_failed action=open_picker internal_error_kind=python_exception"
-            )
+            logger.error("fd_work_bridge_failed action=open_picker internal_error_kind=python_exception")
+            code = "fd_work_window_unavailable"
+            return {"ok": False, "error": code, "message": fd_work_message(code)}
+
+    def cancel_fd_work_case_picker(self, request_id) -> dict[str, Any]:
+        if type(request_id) is not str or not request_id or len(request_id) > 128:
+            return {"ok": False, "error": "invalid_input", "message": "案件选择请求无效"}
+        try:
+            result = dict(self._services.fd_work.cancel_case_picker(request_id))
+            if result.get("ok") is not True:
+                result["error"] = public_fd_work_error(result.get("error"))
+                result["message"] = fd_work_message(result["error"])
+            return result
+        except Exception:
+            logger.error("fd_work_bridge_failed action=cancel_picker internal_error_kind=python_exception")
             code = "fd_work_window_unavailable"
             return {"ok": False, "error": code, "message": fd_work_message(code)}
 
@@ -115,9 +125,7 @@ class FDWorkBridgeMixin:
                 result["message"] = fd_work_message(result["error"])
             return result
         except Exception:
-            logger.error(
-                "fd_work_bridge_failed action=show_login internal_error_kind=python_exception"
-            )
+            logger.error("fd_work_bridge_failed action=show_login internal_error_kind=python_exception")
             return {"ok": False, "error": "session_start_failed", "message": fd_work_message("session_start_failed")}
 
     def open_fd_work_entry(self, report_date, projection_instance_key, expected_projection_revision) -> dict[str, Any]:
@@ -139,13 +147,9 @@ class FDWorkBridgeMixin:
                 result["message"] = fd_work_message(result["error"], "打开 FD Work 失败")
             return result
         except Exception as exc:
-            code = public_fd_work_error(
-                getattr(exc, "code", "") or "operation_failed"
-            )
+            code = public_fd_work_error(getattr(exc, "code", "") or "operation_failed")
             if code not in FD_WORK_MESSAGES:
-                logger.error(
-                    "fd_work_bridge_failed action=open_entry internal_error_kind=python_exception"
-                )
+                logger.error("fd_work_bridge_failed action=open_entry internal_error_kind=python_exception")
                 code = "operation_failed"
             return {"ok": False, "error": code, "message": fd_work_message(code, "打开 FD Work 失败")}
 
