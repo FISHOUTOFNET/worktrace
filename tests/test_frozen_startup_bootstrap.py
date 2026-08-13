@@ -32,12 +32,14 @@ def test_frozen_entry_records_uncaught_startup_exceptions() -> None:
     assert "MessageBoxW" in source
 
 
-def test_foreground_nonzero_startup_exit_is_visible_but_background_is_not_blocked() -> None:
+def test_nonzero_startup_exit_is_visible_only_for_interactive_foreground_mode() -> None:
     source = ENTRY_PATH.read_text(encoding="utf-8")
 
     assert 'background = "--background" in argv' in source
+    assert '_MAINTENANCE_SHUTDOWN_ARGUMENT = "--shutdown-for-maintenance"' in source
+    assert "maintenance_control = _MAINTENANCE_SHUTDOWN_ARGUMENT in argv" in source
     assert "if exit_code != 0:" in source
-    assert "if not background:" in source
+    assert "if not background and not maintenance_control:" in source
     assert "_format_fatal_message(log_path=log_path, exit_code=exit_code)" in source
 
 
