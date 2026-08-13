@@ -39,15 +39,17 @@ def test_webview2_prerequisite_is_detected_and_installed_per_user() -> None:
     assert "PrivilegesRequired=lowest" in source
 
 
-def test_upgrade_uses_cooperative_shutdown_with_force_only_as_fallback() -> None:
+def test_upgrade_delegates_shutdown_to_worktrace_with_force_only_as_fallback() -> None:
     source = ISS_PATH.read_text(encoding="utf-8")
     assert "CloseApplications=force" in source
     assert "RestartApplications=no" in source
-    assert "Local\\WorkTrace_UpdateShutdown_v1" in source
+    assert "MaintenanceShutdownArgument = '--shutdown-for-maintenance'" in source
     assert "RequestWorkTraceShutdown('upgrade')" in source
-    assert "SignalWorkTraceShutdown" in source
-    assert "WaitForWorkTraceShutdown" in source
+    assert "ewWaitUntilTerminated" in source
     assert "Restart Manager can apply the configured fallback" in source
+    assert "OpenEvent" not in source
+    assert "SetEvent" not in source
+    assert "WaitForWorkTraceShutdown" not in source
 
 
 def test_uninstall_requires_running_app_to_exit_cooperatively() -> None:
@@ -85,7 +87,7 @@ def test_upgrade_task_selection_preserves_actual_registry_choice() -> None:
 def test_startup_state_detection_does_not_depend_on_app_constant() -> None:
     source = ISS_PATH.read_text(encoding="utf-8")
     helper_start = source.index("function ExistingStartupEnabled")
-    helper_end = source.index("function IsWorkTraceShutdownEventPresent", helper_start)
+    helper_end = source.index("function RequestWorkTraceShutdown", helper_start)
     helper = source[helper_start:helper_end]
 
     assert "RegQueryStringValue" in helper
