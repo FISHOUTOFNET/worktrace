@@ -29,27 +29,27 @@ $process = $null
 $originalLocalAppData = $env:LOCALAPPDATA
 $launchSucceeded = $false
 
-if (Test-Path -LiteralPath $smokeRoot) {
-    Remove-Item -Recurse -Force -LiteralPath $smokeRoot
-}
-New-Item -ItemType Directory -Force -Path $smokeRoot | Out-Null
-
-try {
+function Start-WorkTraceForSmoke {
     $env:LOCALAPPDATA = $smokeRoot
     try {
-        $process = Start-Process -FilePath $exe -PassThru
+        return Start-Process -FilePath $exe -PassThru
     }
     finally {
         $env:LOCALAPPDATA = $originalLocalAppData
     }
+}
+
+function Wait-ForWorkTraceWindow {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$TargetProcess
+    )
 
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-    $windowLoaded = $false
-
     while ([DateTime]::UtcNow -lt $deadline) {
-        $process.Refresh()
-        if ($process.HasExited) {
-            throw "Installed WorkTrace exited during startup with code $($process.ExitCode)."
+        $TargetProcess.Refresh()
+        if ($TargetProcess.HasExited) {
+            throw "Installed WorkTrace exited during startup with code $($TargetProcess.ExitCode)."
         }
 
         if (Test-Path -LiteralPath $appLog) {
@@ -59,26 +59,65 @@ try {
                 -Quiet `
                 -ErrorAction SilentlyContinue)
             if ($windowLoaded) {
-                break
+                Start-Sleep -Seconds 2
+                $TargetProcess.Refresh()
+                if ($TargetProcess.HasExited) {
+                    throw "Installed WorkTrace exited immediately after its WebView window loaded with code $($TargetProcess.ExitCode)."
+                }
+                return
             }
         }
         Start-Sleep -Milliseconds 500
     }
 
-    if (-not $windowLoaded) {
-        $startupLogHint = if (Test-Path -LiteralPath $startupLog) {
-            $startupLog
-        }
-        else {
-            "not created"
-        }
-        throw "Installed WorkTrace did not load its WebView window within $TimeoutSeconds seconds; startup log: $startupLogHint"
+    $startupLogHint = if (Test-Path -LiteralPath $startupLog) {
+        $startupLog
     }
+    else {
+        "not created"
+    }
+    throw "Installed WorkTrace did not load its WebView window within $TimeoutSeconds seconds; startup log: $startupLogHint"
+}
 
-    Start-Sleep -Seconds 2
-    $process.Refresh()
-    if ($process.HasExited) {
-        throw "Installed WorkTrace exited immediately after its WebView window loaded with code $($process.ExitCode)."
+function Invoke-MaintenanceShutdownControl {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$TargetProcess
+    )
+
+    $control = Start-Process `
+        -FilePath $exe `
+        -ArgumentList @("--shutdown-for-maintenance") `
+        -WindowStyle Hidden `
+        -Wait `
+        -PassThru
+
+    $TargetProcess.Refresh()
+    if ($control.ExitCode -ne 0) {
+        $stillRunning = -not $TargetProcess.HasExited
+        throw "Direct maintenance shutdown exited with code $($control.ExitCode); primary_alive=$stillRunning"
+    }
+    if (-not $TargetProcess.HasExited) {
+        throw "Direct maintenance shutdown returned success but primary process remained alive: $($TargetProcess.Id)"
+    }
+    Write-Host "maintenance_shutdown_control=passed old_pid=$($TargetProcess.Id)"
+}
+
+if (Test-Path -LiteralPath $smokeRoot) {
+    Remove-Item -Recurse -Force -LiteralPath $smokeRoot
+}
+New-Item -ItemType Directory -Force -Path $smokeRoot | Out-Null
+
+try {
+    $process = Start-WorkTraceForSmoke
+    Wait-ForWorkTraceWindow -TargetProcess $process
+
+    if ($KeepRunning.IsPresent) {
+        Invoke-MaintenanceShutdownControl -TargetProcess $process
+        Remove-Item -Force -LiteralPath $appLog -ErrorAction SilentlyContinue
+        Remove-Item -Force -LiteralPath $startupLog -ErrorAction SilentlyContinue
+        $process = Start-WorkTraceForSmoke
+        Wait-ForWorkTraceWindow -TargetProcess $process
     }
 
     if ($PidFile) {
