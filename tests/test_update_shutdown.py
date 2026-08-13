@@ -20,14 +20,24 @@ class FakeUpdateShutdownKernel:
         self.signal_calls = 0
         self.close_calls = 0
         self.consumed = threading.Event()
+        self.running = False
+        self.close_on_signal = False
 
     def create_event(self, _name: str):
         self.create_calls += 1
+        self.running = True
         return self.event
+
+    def event_exists(self, _name: str) -> bool:
+        return self.running
 
     def signal_event(self, _name: str) -> bool:
         self.signal_calls += 1
+        if not self.running:
+            return False
         self.event.set()
+        if self.close_on_signal:
+            self.running = False
         return True
 
     def wait_for_signal(self, event, timeout_seconds: float) -> bool:
@@ -42,6 +52,7 @@ class FakeUpdateShutdownKernel:
 
     def close_event(self, event) -> None:
         assert event is self.event
+        self.running = False
         self.close_calls += 1
 
 
@@ -77,8 +88,10 @@ def test_stop_listener_retains_lifetime_event_until_close() -> None:
     coordinator.stop_listener()
 
     assert kernel.close_calls == 0
+    assert kernel.running is True
     coordinator.close()
     assert kernel.close_calls == 1
+    assert kernel.running is False
 
 
 def test_shutdown_callback_runs_outside_coordinator_lock() -> None:
@@ -124,3 +137,32 @@ def test_prepare_start_stop_and_close_are_idempotent() -> None:
 
     assert kernel.create_calls == 1
     assert kernel.close_calls == 1
+
+
+def test_maintenance_client_succeeds_when_no_compatible_instance_exists() -> None:
+    kernel = FakeUpdateShutdownKernel()
+    coordinator = ApplicationUpdateShutdownCoordinator(kernel=kernel)
+
+    assert coordinator.request_running_instance_shutdown(timeout_seconds=0.0) is True
+    assert kernel.signal_calls == 0
+
+
+def test_maintenance_client_signals_and_waits_for_lifetime_event_to_close() -> None:
+    kernel = FakeUpdateShutdownKernel()
+    kernel.running = True
+    kernel.close_on_signal = True
+    coordinator = ApplicationUpdateShutdownCoordinator(kernel=kernel)
+
+    assert coordinator.request_running_instance_shutdown(timeout_seconds=0.0) is True
+    assert kernel.signal_calls == 1
+    assert kernel.running is False
+
+
+def test_maintenance_client_fails_closed_when_running_instance_does_not_exit() -> None:
+    kernel = FakeUpdateShutdownKernel()
+    kernel.running = True
+    coordinator = ApplicationUpdateShutdownCoordinator(kernel=kernel)
+
+    assert coordinator.request_running_instance_shutdown(timeout_seconds=0.0) is False
+    assert kernel.signal_calls == 1
+    assert kernel.running is True
