@@ -92,10 +92,14 @@ def _show_blocking_startup_message(message: str) -> None:
         logging.warning("startup message box failed", exc_info=True)
 
 
+def _should_show_blocking_startup_message(*, background: bool) -> bool:
+    return background or bool(getattr(sys, "frozen", False))
+
+
 def _report_runtime_missing(*, background: bool = False) -> int:
     msg = missing_runtime_message()
     print(msg, file=sys.stderr)
-    if background:
+    if _should_show_blocking_startup_message(background=background):
         _show_blocking_startup_message(msg)
     logging.error("webview startup aborted: WebView2 Runtime missing")
     return 2
@@ -112,7 +116,7 @@ def _report_already_running(instance_coordinator) -> int:
 
 def _report_startup_failure(message: str, *, background: bool) -> int:
     print(message, file=sys.stderr)
-    if background:
+    if _should_show_blocking_startup_message(background=background):
         _show_blocking_startup_message(message)
     return 2
 
@@ -162,10 +166,7 @@ def main(*, background: bool = False) -> int:
     try:
         webview = _check_pywebview_available()
     except RuntimeError as exc:
-        print(str(exc), file=sys.stderr)
-        if background:
-            _show_blocking_startup_message(str(exc))
-        return 2
+        return _report_startup_failure(str(exc), background=background)
     logging.info("pywebview_runtime version=%s", _pywebview_runtime_version())
 
     runtime = AppRuntime(paths)
