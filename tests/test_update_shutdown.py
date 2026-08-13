@@ -4,6 +4,7 @@ import threading
 
 import pytest
 
+import worktrace.desktop.update_shutdown as update_shutdown_module
 from worktrace.desktop.update_shutdown import ApplicationUpdateShutdownCoordinator
 
 pytestmark = [
@@ -198,10 +199,11 @@ def test_maintenance_client_waits_for_onefile_parent_after_event_closes(
     )
     monotonic_values = iter([0.0, 0.0, 0.01])
     monkeypatch.setattr(
-        "worktrace.desktop.update_shutdown.time.monotonic",
+        update_shutdown_module.time,
+        "monotonic",
         lambda: next(monotonic_values),
     )
-    monkeypatch.setattr("worktrace.desktop.update_shutdown.time.sleep", lambda _value: None)
+    monkeypatch.setattr(update_shutdown_module.time, "sleep", lambda _value: None)
 
     assert coordinator.request_running_instance_shutdown(timeout_seconds=1.0) is True
     assert kernel.signal_calls == 1
