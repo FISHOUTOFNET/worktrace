@@ -32,7 +32,7 @@ RestartApplications=no
 [Tasks]
 Name: startup; Description: "登录 Windows 时自动启动 WorkTrace"; GroupDescription: "附加任务："; Flags: unchecked
 Name: desktopicon; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："; Flags: unchecked
-Name: fdwork; Description: "启用 FD Work 插件"; GroupDescription: "附加任务："; Flags: unchecked
+Name: fdwork; Description: "启用 FD Work 插件（仅方达律师事务所可用）"; GroupDescription: "附加任务："; Flags: unchecked
 
 [Files]
 Source: "{#MyAppExe}"; DestDir: "{app}"; Flags: ignoreversion
@@ -55,9 +55,6 @@ const
   WebView2ClientGuid = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
   WebView2BootstrapperUrl = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703';
   WebView2BootstrapperName = 'MicrosoftEdgeWebview2Setup.exe';
-
-var
-  FDWorkNotice: TNewStaticText;
 
 function IsUpgradeInstall: Boolean;
 begin
@@ -178,16 +175,6 @@ begin
     WizardSelectTasks('startup')
   else
     WizardSelectTasks('!startup');
-
-  WizardForm.TasksList.Height := WizardForm.TasksList.Height - ScaleY(30);
-  FDWorkNotice := TNewStaticText.Create(WizardForm);
-  FDWorkNotice.Parent := WizardForm.SelectTasksPage;
-  FDWorkNotice.Left := WizardForm.TasksList.Left;
-  FDWorkNotice.Top := WizardForm.TasksList.Top + WizardForm.TasksList.Height + ScaleY(8);
-  FDWorkNotice.Caption := 'FD Work 插件仅方达律师事务所可用。';
-  FDWorkNotice.Font.Color := clRed;
-  FDWorkNotice.Font.Style := [fsBold];
-  FDWorkNotice.AutoSize := True;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
