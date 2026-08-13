@@ -203,6 +203,10 @@ def monitor(args: argparse.Namespace) -> int:
                 state["project_created"] = True
                 state["binding_created"] = True
                 state["binding_readback"] = True
+                if int(state.get("helper_foreground_count") or 0) < 1:
+                    state["monitor_error"] = "helper_never_foreground"
+                    _write_json(args.state, state)
+                    return 1
                 _write_json(args.state, state)
                 return 0
             time.sleep(0.1)
