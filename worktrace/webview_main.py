@@ -277,14 +277,6 @@ def main(*, background: bool = False) -> int:
             )
             bridge.set_window(window)
             fd_work_main_sink.bind_window(window)
-
-            def focus_main_window() -> None:
-                for action in ("show", "restore", "focus"):
-                    callback = getattr(window, action, None)
-                    if callable(callback):
-                        callback()
-
-            fd_work_controller.bind_main_focus_callback(focus_main_window)
             shell_holder: dict[str, DesktopShellController] = {}
             exit_lock = threading.Lock()
             exit_requested = False
@@ -313,6 +305,7 @@ def main(*, background: bool = False) -> int:
                 initial_hidden=initial_hidden,
             )
             shell_holder["shell"] = shell
+            fd_work_controller.bind_main_focus_callback(shell.show_window)
             _bind_shell_events(window, shell)
             instance_coordinator.bind_activation_handler(shell.show_window)
             if update_shutdown_prepared:
