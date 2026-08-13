@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 from hashlib import sha256
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
@@ -12,6 +13,7 @@ from . import config
 from .collector.single_instance import get_application_instance_coordinator
 from .desktop.install_bootstrap import consume_fd_work_install_intent
 from .desktop.shell import DesktopShellController
+from .desktop.update_shutdown import get_application_update_shutdown_coordinator
 from .desktop.windows_tray import WindowsTrayHost
 from .integrations.fd_work.helper_bridge import FDWorkHelperBridge
 from .integrations.fd_work.interaction_coordinator import FDWorkInteractionCoordinator
@@ -174,6 +176,8 @@ def main(*, background: bool = False) -> int:
     fd_work_controller: FDWorkWindowController | None = None
     services = None
     instance_coordinator = get_application_instance_coordinator()
+    update_shutdown = get_application_update_shutdown_coordinator()
+    update_shutdown_prepared = False
 
     try:
         try:
@@ -184,6 +188,11 @@ def main(*, background: bool = False) -> int:
                 "WorkTrace 实例激活通道初始化失败，请重新打开应用。",
                 background=background,
             )
+        try:
+            update_shutdown.prepare()
+            update_shutdown_prepared = True
+        except Exception:
+            logging.exception("update shutdown Event preparation failed")
         try:
             initialized = runtime.initialize()
         except Exception:
@@ -202,6 +211,12 @@ def main(*, background: bool = False) -> int:
                 "WorkTrace 实例激活监听启动失败，请重新打开应用。",
                 background=background,
             )
+        if update_shutdown_prepared:
+            try:
+                update_shutdown.start_listener()
+            except Exception:
+                logging.exception("update shutdown listener startup failed")
+                update_shutdown_prepared = False
 
         fd_work_main_sink = FDWorkMainWindowSink()
         fd_work_page_adapter = FDWorkPageAdapter()
@@ -271,15 +286,26 @@ def main(*, background: bool = False) -> int:
 
             fd_work_controller.bind_main_focus_callback(focus_main_window)
             shell_holder: dict[str, DesktopShellController] = {}
+            exit_lock = threading.Lock()
+            exit_requested = False
 
             def exit_application() -> None:
-                services.fd_work.shutdown()
-                shell_holder["shell"].exit_application()
+                nonlocal exit_requested
+                with exit_lock:
+                    if exit_requested:
+                        return
+                    exit_requested = True
+                logging.info("application exit requested")
+                try:
+                    services.fd_work.shutdown()
+                finally:
+                    shell_holder["shell"].exit_application()
 
             tray = WindowsTrayHost(
                 icon_path=desktop_resource_path("worktrace.ico"),
                 on_open=lambda: shell_holder["shell"].show_window(),
                 on_exit=exit_application,
+                on_session_end=exit_application,
             )
             shell = DesktopShellController(
                 window=window,
@@ -289,6 +315,8 @@ def main(*, background: bool = False) -> int:
             shell_holder["shell"] = shell
             _bind_shell_events(window, shell)
             instance_coordinator.bind_activation_handler(shell.show_window)
+            if update_shutdown_prepared:
+                update_shutdown.bind_shutdown_handler(exit_application)
             shell.start()
             webview_profile_path = paths.base_dir / "webview-profile"
             webview_profile_path.mkdir(parents=True, exist_ok=True)
@@ -331,6 +359,7 @@ def main(*, background: bool = False) -> int:
         )
     finally:
         instance_coordinator.stop_activation_listener()
+        update_shutdown.stop_listener()
         if "fd_work_main_sink" in locals():
             fd_work_main_sink.mark_unavailable()
         if services is not None:
@@ -340,6 +369,7 @@ def main(*, background: bool = False) -> int:
         if shell is not None:
             shell.stop()
         runtime.shutdown()
+        update_shutdown.close()
 
 
 if __name__ == "__main__":
