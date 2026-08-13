@@ -429,7 +429,7 @@ test("timeline presentation sorts newest first with deterministic ties and exact
   const a = html.indexOf('data-projection-instance-key="base:a"');
   assert.ok(c < b && b < a, "start_time desc, then key desc");
   assert.doesNotMatch(html, /data-duration-format="compact-hours"/);
-  assert.match(html, />10:00:00<\/div>/);
+  assert.match(html, />10:00<\/div>/);
   assert.match(html, />01:10:00<\/div>/);
   assert.doesNotMatch(html, />进行中<\/span>/);
   assert.equal(element("timeline-total-label").textContent, "今日总时长");
