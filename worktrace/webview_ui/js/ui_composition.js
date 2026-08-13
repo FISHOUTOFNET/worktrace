@@ -3,9 +3,9 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // Runtime generations already carry the durable invalidation domains. Keep
-    // background refresh ownership surface-specific instead of treating every
-    // live/page revision as a reason to rebuild the active page.
+    // Durable runtime generations/revisions are authoritative. A periodic
+    // reconcile may verify runtime state, but must not force a visible
+    // collection rebuild when no invalidation domain changed.
     App.RECONCILE_INTERVAL_MS = Number.MAX_SAFE_INTEGER;
 
     function clearSettledFDWorkAuthOverride(status) {
@@ -87,7 +87,6 @@
                 : 0;
         }
         // Keep authoritative row order stable while the local clock ticks.
-        // Resorting every second is visually disruptive and unnecessary.
     }
 
     function liveTargetElapsedSeconds(target, nowMs) {
@@ -314,6 +313,28 @@
     }
     App.drainTimelineStructuralRefresh = drainTimelineStructuralRefresh;
 
+    var baseRefreshTimeline = App.refreshTimeline;
+    if (typeof baseRefreshTimeline === "function") {
+        App.refreshTimeline = function () {
+            if (App.currentPage === "timeline" && App.suppressNextTimelineCollectionRefresh === true) {
+                App.suppressNextTimelineCollectionRefresh = false;
+                return Promise.resolve(null);
+            }
+            return baseRefreshTimeline.apply(App, arguments);
+        };
+    }
+
+    var baseShowOverview = App.showOverview;
+    if (typeof baseShowOverview === "function") {
+        App.showOverview = function () {
+            if (App.currentPage === "overview" && App.suppressNextOverviewCollectionRefresh === true) {
+                App.suppressNextOverviewCollectionRefresh = false;
+                return;
+            }
+            return baseShowOverview.apply(App, arguments);
+        };
+    }
+
     var baseAcceptRefreshStateRuntime = App.acceptRefreshStateRuntime;
     if (typeof baseAcceptRefreshStateRuntime === "function") {
         App.acceptRefreshStateRuntime = function (state) {
@@ -335,6 +356,12 @@
             var settingsChanged = runtimeGeneration(previous, "settings")
                 !== runtimeGeneration(current, "settings");
             var page = String(App.currentPage || "");
+
+            if (page === "timeline") {
+                App.suppressNextTimelineCollectionRefresh = !structureChanged && liveChanged;
+            } else if (page === "overview") {
+                App.suppressNextOverviewCollectionRefresh = !structureChanged && liveChanged;
+            }
 
             if (page === "timeline" && structureChanged
                 && typeof App._timelineEditingActive === "function"
@@ -369,6 +396,10 @@
             if (page === "rules" || page === "statistics" || page === "settings") {
                 return refreshComposedPage(page, "manual");
             }
+            // A user-initiated refresh must never inherit a one-shot suppression
+            // token from a preceding passive runtime transition.
+            if (page === "timeline") App.suppressNextTimelineCollectionRefresh = false;
+            if (page === "overview") App.suppressNextOverviewCollectionRefresh = false;
             return baseRefreshAll.apply(App, arguments);
         };
     }
