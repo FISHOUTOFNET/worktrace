@@ -340,6 +340,10 @@ jobs:
           $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
           $uninstaller = Join-Path $installDir "unins000.exe"
           $expectedStartup = '"' + (Join-Path $installDir "WorkTrace.exe") + '" --background'
+          $upgradePidFile = Join-Path $env:RUNNER_TEMP "worktrace-upgrade-smoke.pid"
+          $uninstallPidFile = Join-Path $env:RUNNER_TEMP "worktrace-uninstall-smoke.pid"
+          $upgradePid = $null
+          $uninstallPid = $null
 
           function Invoke-CheckedProcess {
             param(
@@ -361,6 +365,8 @@ jobs:
           if (Test-Path -LiteralPath $installDir) {
             Remove-Item -Recurse -Force -LiteralPath $installDir
           }
+          Remove-Item -Force -LiteralPath $upgradePidFile -ErrorAction SilentlyContinue
+          Remove-Item -Force -LiteralPath $uninstallPidFile -ErrorAction SilentlyContinue
           Remove-ItemProperty `
             -Path $runKey `
             -Name "WorkTrace" `
@@ -388,7 +394,11 @@ jobs:
               throw "First install wrote unexpected startup value: $firstStartup"
             }
 
-            & ".\scripts\smoke_installed_launch.ps1" -InstallDir $installDir
+            & ".\scripts\smoke_installed_launch.ps1" `
+              -InstallDir $installDir `
+              -KeepRunning `
+              -PidFile $upgradePidFile
+            $upgradePid = [int](Get-Content -LiteralPath $upgradePidFile -Raw)
 
             Set-ItemProperty `
               -Path $runKey `
@@ -402,11 +412,16 @@ jobs:
                 "/VERYSILENT",
                 "/SUPPRESSMSGBOXES",
                 "/NORESTART",
+                "/NOFORCECLOSEAPPLICATIONS",
                 "/CURRENTUSER",
                 "/SP-",
                 "/DIR=`"$installDir`"",
                 "/TASKS=`"startup`""
               )
+
+            if (Get-Process -Id $upgradePid -ErrorAction SilentlyContinue) {
+              throw "Upgrade left the running WorkTrace process alive: $upgradePid"
+            }
 
             $upgradedStartup = Get-ItemPropertyValue `
               -Path $runKey `
@@ -419,6 +434,13 @@ jobs:
             if (-not (Test-Path -LiteralPath $uninstaller)) {
               throw "Installer smoke uninstaller was not generated"
             }
+
+            & ".\scripts\smoke_installed_launch.ps1" `
+              -InstallDir $installDir `
+              -KeepRunning `
+              -PidFile $uninstallPidFile
+            $uninstallPid = [int](Get-Content -LiteralPath $uninstallPidFile -Raw)
+
             Invoke-CheckedProcess `
               -FilePath $uninstaller `
               -Phase "Uninstall" `
@@ -427,6 +449,10 @@ jobs:
                 "/SUPPRESSMSGBOXES",
                 "/NORESTART"
               )
+
+            if (Get-Process -Id $uninstallPid -ErrorAction SilentlyContinue) {
+              throw "Uninstall left the running WorkTrace process alive: $uninstallPid"
+            }
 
             $remainingStartup = (
               Get-ItemProperty `
@@ -439,6 +465,14 @@ jobs:
             }
           }
           finally {
+            foreach ($pidValue in @($upgradePid, $uninstallPid)) {
+              if ($null -ne $pidValue) {
+                $remaining = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
+                if ($null -ne $remaining) {
+                  & taskkill.exe /PID $pidValue /T /F *> $null
+                }
+              }
+            }
             if (Test-Path -LiteralPath $uninstaller) {
               Start-Process `
                 -FilePath $uninstaller `
@@ -455,6 +489,12 @@ jobs:
               -Path $runKey `
               -Name "WorkTrace" `
               -ErrorAction SilentlyContinue
+            Remove-Item -Force -LiteralPath $upgradePidFile -ErrorAction SilentlyContinue
+            Remove-Item -Force -LiteralPath $uninstallPidFile -ErrorAction SilentlyContinue
+            $smokeStateRoot = Join-Path $env:RUNNER_TEMP "worktrace-installed-launch-state"
+            if (Test-Path -LiteralPath $smokeStateRoot) {
+              Remove-Item -Recurse -Force -LiteralPath $smokeStateRoot -ErrorAction SilentlyContinue
+            }
             if (Test-Path -LiteralPath $installDir) {
               Remove-Item `
                 -Recurse `
