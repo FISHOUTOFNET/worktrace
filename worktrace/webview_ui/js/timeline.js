@@ -27,7 +27,8 @@
 
     function formatTimelineStartTime(startTime) {
         var value = String(startTime || "");
-        return value.length >= 19 ? value.slice(11, 19) : value.slice(0, 8);
+        var exact = value.length >= 19 ? value.slice(11, 19) : value.slice(0, 8);
+        return exact.slice(0, 5);
     }
     App.formatTimelineStartTime = formatTimelineStartTime;
 

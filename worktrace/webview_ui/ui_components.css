@@ -1,4 +1,4 @@
-/* Shared UI primitive presentation. Feature/page layout stays in styles.css. */
+/* Shared UI primitive presentation plus narrow final consistency overrides. Structural feature layout stays in styles.css. */
 #app-tooltip {
     position: fixed;
     z-index: 90;
@@ -48,3 +48,46 @@
 .dialog-choice-title { font-weight: 500; }
 
 .page-header-compact { align-items: center; }
+
+/* Final cross-page visual consistency layer. */
+:root { --record-start-time-width: 52px; }
+
+.timeline-item {
+    grid-template-columns: var(--record-start-time-width) minmax(0, 1fr) var(--record-duration-width);
+}
+.timeline-item-time { width: var(--record-start-time-width); }
+.timeline-item-side,
+.timeline-item-duration { width: var(--record-duration-width); }
+
+.rules-project-title-group:not(:has(.rules-project-description))::after {
+    content: "无描述";
+    display: block;
+    margin-top: 1px;
+    overflow: hidden;
+    color: var(--color-text-tertiary);
+    font-size: var(--font-size-sm);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.rules-row { font-size: var(--font-size-md); }
+.rules-kind-badge,
+.rules-detail { font-size: inherit; }
+
+.setting-row small { font-size: var(--font-size-sm); }
+
+#rules-panel-project-section:not(:has(#rules-panel-fd-work-picker:not([hidden]))) > label.field:first-child {
+    grid-column: 1 / -1;
+}
+
+.metric-strip { border-width: 0; }
+
+.timeline-edit-panel .project-autocomplete-menu {
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+}
+
+@media (min-width: 960px) {
+    .statistics-date-range { min-width: 310px; }
+    .statistics-all-time-label { width: 100%; }
+}
