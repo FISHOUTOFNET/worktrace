@@ -7,7 +7,11 @@ import pytest
 
 from worktrace.desktop.windows_tray import WindowsTrayHost
 
-pytestmark = [pytest.mark.packaging, pytest.mark.contract]
+pytestmark = [
+    pytest.mark.packaging,
+    pytest.mark.contract,
+    pytest.mark.collector_runtime,
+]
 
 
 def test_query_end_session_allows_windows_shutdown_and_requests_exit_once() -> None:
