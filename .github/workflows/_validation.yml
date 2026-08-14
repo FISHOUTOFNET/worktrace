@@ -280,8 +280,8 @@ jobs:
       - name: Verify single-file exe
         shell: pwsh
         run: |
-          if (-not (Test-Path -LiteralPath "dist\WorkTrace.exe")) {
-            throw "dist\WorkTrace.exe was not generated"
+          if (-not (Test-Path -LiteralPath "dist\Trace.exe")) {
+            throw "dist\Trace.exe was not generated"
           }
 
       - name: Prepare pinned Inno Setup compiler
@@ -328,18 +328,18 @@ jobs:
       - name: Verify installer
         shell: pwsh
         run: |
-          if (-not (Test-Path -LiteralPath "dist\WorkTrace-Setup.exe")) {
-            throw "dist\WorkTrace-Setup.exe was not generated"
+          if (-not (Test-Path -LiteralPath "dist\Trace-Setup.exe")) {
+            throw "dist\Trace-Setup.exe was not generated"
           }
 
       - name: Exercise installer upgrade runtime path
         shell: pwsh
         run: |
-          $setup = (Resolve-Path -LiteralPath "dist\WorkTrace-Setup.exe").Path
+          $setup = (Resolve-Path -LiteralPath "dist\Trace-Setup.exe").Path
           $installDir = Join-Path $env:RUNNER_TEMP "worktrace-installer-smoke"
           $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
           $uninstaller = Join-Path $installDir "unins000.exe"
-          $expectedStartup = '"' + (Join-Path $installDir "WorkTrace.exe") + '" --background'
+          $expectedStartup = '"' + (Join-Path $installDir "Trace.exe") + '" --background'
           $upgradePidFile = Join-Path $env:RUNNER_TEMP "worktrace-upgrade-smoke.pid"
           $uninstallPidFile = Join-Path $env:RUNNER_TEMP "worktrace-uninstall-smoke.pid"
           $upgradePid = $null
@@ -400,6 +400,10 @@ jobs:
               -PidFile $upgradePidFile
             $upgradePid = [int](Get-Content -LiteralPath $upgradePidFile -Raw)
 
+            Copy-Item `
+              -LiteralPath (Join-Path $installDir "Trace.exe") `
+              -Destination (Join-Path $installDir "WorkTrace.exe") `
+              -Force
             Set-ItemProperty `
               -Path $runKey `
               -Name "WorkTrace" `
@@ -420,7 +424,10 @@ jobs:
               )
 
             if (Get-Process -Id $upgradePid -ErrorAction SilentlyContinue) {
-              throw "Upgrade left the running WorkTrace process alive: $upgradePid"
+              throw "Upgrade left the running Trace process alive: $upgradePid"
+            }
+            if (Test-Path -LiteralPath (Join-Path $installDir "WorkTrace.exe")) {
+              throw "Upgrade left legacy WorkTrace.exe behind"
             }
 
             $upgradedStartup = Get-ItemPropertyValue `
@@ -451,7 +458,7 @@ jobs:
               )
 
             if (Get-Process -Id $uninstallPid -ErrorAction SilentlyContinue) {
-              throw "Uninstall left the running WorkTrace process alive: $uninstallPid"
+              throw "Uninstall left the running Trace process alive: $uninstallPid"
             }
 
             $remainingStartup = (
@@ -461,7 +468,7 @@ jobs:
                 -ErrorAction SilentlyContinue
             ).WorkTrace
             if ($null -ne $remainingStartup) {
-              throw "Uninstall left WorkTrace startup value behind"
+              throw "Uninstall left startup value behind"
             }
           }
           finally {
@@ -469,7 +476,7 @@ jobs:
               if ($null -ne $pidValue) {
                 $remaining = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
                 if ($null -ne $remaining) {
-                  & taskkill.exe /PID $pidValue /T /F *> $null
+                  $remaining.Kill()
                 }
               }
             }
@@ -508,9 +515,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v6
         with:
-          name: worktrace-windows-smoke
+          name: trace-windows-smoke
           path: |
-            dist/WorkTrace.exe
-            dist/WorkTrace-Setup.exe
+            dist/Trace.exe
+            dist/Trace-Setup.exe
           if-no-files-found: error
           retention-days: 1
