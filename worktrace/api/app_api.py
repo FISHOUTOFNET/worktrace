@@ -100,17 +100,17 @@ class ApplicationControlService:
     def is_collection_active(self) -> bool:
         """Return whether the collector is actively observing right now.
 
-        This is intentionally stricter than ``collector_status == running``:
-        user pause, maintenance hold/recovery and a dead collector thread all
-        project to the inactive desktop icon. Transient/degraded health remains
-        active while the collector is still operational.
+        This intentionally follows runtime capability rather than the persisted
+        display status, which can lag a resume heartbeat by a few seconds.
+        Pause/privacy gates, maintenance hold/recovery and a dead collector
+        thread all project to the inactive desktop icon. Transient/degraded
+        health remains active while the collector is still operational.
         """
 
         try:
-            status = self.get_collection_status()
-            if str(status.get("status") or "") != "running":
+            if not privacy_gate_service.is_sensitive_runtime_allowed():
                 return False
-            if bool(status.get("paused")):
+            if settings_api.is_user_paused():
                 return False
             if self.maintenance.operation_active() or self.maintenance.recovery_blocked():
                 return False
