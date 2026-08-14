@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>WorkTrace</title>
+    <title>有迹 · Trace</title>
     <link rel="stylesheet" href="styles.css?v=47c399e6c5656a7e">
     <link rel="stylesheet" href="ui_components.css?v=86da0c9384bbb2a8">
     <link rel="stylesheet" href="project_autocomplete.css?v=1b8aa4d1915ef51b">
@@ -42,7 +42,7 @@
         </div>
 
         <aside class="app-nav" aria-label="主导航">
-            <div class="app-brand"><span class="brand-mark" aria-hidden="true">WT</span><span class="nav-label">WorkTrace</span></div>
+            <div class="app-brand"><span class="brand-mark" aria-hidden="true">迹</span><span class="nav-label">有迹</span></div>
             <div class="nav-status">
                 <div id="status-display" class="status-display"><span class="status-dot" aria-hidden="true"></span><span class="status-label">记录未启动</span></div>
             </div>
@@ -159,7 +159,7 @@
                     <div class="surface settings-content">
                         <section id="settings-section-general" class="settings-section active">
                             <h2>常规</h2>
-                            <label class="setting-row" for="settings-launch-at-login-toggle"><span><strong>登录 Windows 时自动启动 WorkTrace</strong></span><span class="toggle-wrap"><span id="settings-launch-at-login-toggle-status" class="toggle-status">未加载</span><input id="settings-launch-at-login-toggle" type="checkbox" disabled></span></label>
+                            <label class="setting-row" for="settings-launch-at-login-toggle"><span><strong>登录 Windows 时自动启动有迹</strong></span><span class="toggle-wrap"><span id="settings-launch-at-login-toggle-status" class="toggle-status">未加载</span><input id="settings-launch-at-login-toggle" type="checkbox" disabled></span></label>
                             <label id="settings-privacy-card" class="setting-row" for="settings-clipboard-toggle"><span><strong id="settings-clipboard-toggle-label">记录剪贴板复制的文本</strong></span><span class="toggle-wrap"><span id="settings-clipboard-toggle-status" class="toggle-status">未加载</span><input id="settings-clipboard-toggle" type="checkbox" disabled></span></label>
                             <div id="settings-health-summary" class="setting-row"><span><strong>系统状态</strong><small>正在检查记录服务</small></span><span class="badge">检查中</span></div>
                             <article id="settings-storage-card" class="setting-row"><span><strong>本地数据</strong></span><span>本机</span></article>
@@ -170,7 +170,7 @@
                             <h2>数据与备份</h2><article id="settings-backup-card" class="settings-backup-card">
                                 <div class="credential-list"><label class="credential-row"><span class="credential-label">备份口令</span><span class="password-control"><input id="settings-backup-passphrase" type="password" autocomplete="off" disabled><button id="settings-backup-passphrase-reveal" type="button" class="password-reveal-button" data-password-input="settings-backup-passphrase" aria-label="按住查看口令" aria-pressed="false" disabled><svg class="icon password-eye" aria-hidden="true"><use href="#icon-eye"/></svg><svg class="icon password-eye-off" aria-hidden="true"><use href="#icon-eye-off"/></svg></button></span></label><label class="credential-row"><span class="credential-label">确认口令</span><span class="password-control"><input id="settings-backup-passphrase-confirm" type="password" autocomplete="off" disabled><button id="settings-backup-passphrase-confirm-reveal" type="button" class="password-reveal-button" data-password-input="settings-backup-passphrase-confirm" aria-label="按住查看口令" aria-pressed="false" disabled><svg class="icon password-eye" aria-hidden="true"><use href="#icon-eye"/></svg><svg class="icon password-eye-off" aria-hidden="true"><use href="#icon-eye-off"/></svg></button></span></label></div>
                                 <div class="button-row"><button id="settings-backup-export-btn" type="button" disabled>导出加密备份</button><button id="settings-backup-manifest-btn" type="button" disabled>预览备份清单</button></div><p id="settings-backup-status" class="inline-status" role="status" hidden></p><div id="settings-backup-manifest" class="backup-manifest" hidden><p class="settings-backup-manifest-filename"></p><dl class="settings-backup-manifest-fields"></dl></div>
-                                <div class="maintenance-section"><h3>导入并替换数据</h3><div class="credential-list"><label class="credential-row"><span class="credential-label">备份口令</span><span class="password-control"><input id="settings-backup-import-passphrase" type="password" autocomplete="off" disabled><button id="settings-backup-import-passphrase-reveal" type="button" class="password-reveal-button" data-password-input="settings-backup-import-passphrase" aria-label="按住查看口令" aria-pressed="false" disabled><svg class="icon password-eye" aria-hidden="true"><use href="#icon-eye"/></svg><svg class="icon password-eye-off" aria-hidden="true"><use href="#icon-eye-off"/></svg></button></span></label></div><div class="button-row"><button id="settings-backup-import-btn" type="button" disabled>导入加密备份</button></div><p id="settings-backup-import-status" class="inline-status" role="status" hidden></p></div>
+                                <div class="maintenance-section"><h3>导入并替换数据</h3><div class="credential-list"><label class="credential-row"><span class="credential-label">备份口令</span><span class="password-control"><input id="settings-backup-import-passphrase" type="password" autocomplete="off" disabled><button id="settings-backup-passphrase-reveal" type="button" class="password-reveal-button" data-password-input="settings-backup-import-passphrase" aria-label="按住查看口令" aria-pressed="false" disabled><svg class="icon password-eye" aria-hidden="true"><use href="#icon-eye"/></svg><svg class="icon password-eye-off" aria-hidden="true"><use href="#icon-eye-off"/></svg></button></span></label></div><div class="button-row"><button id="settings-backup-import-btn" type="button" disabled>导入加密备份</button></div><p id="settings-backup-import-status" class="inline-status" role="status" hidden></p></div>
                             </article>
                             <article id="settings-danger-card" class="danger-zone"><h2>危险操作</h2><div class="setting-row"><span><strong>清空本地数据</strong><small>此操作不可撤销。</small></span><div class="danger-inline"><input id="settings-clear-confirm" type="text" autocomplete="off" placeholder="清空本地数据" disabled><button id="settings-clear-local-data-btn" type="button" class="button danger" disabled>清空本地数据</button></div></div><p id="settings-clear-status" class="inline-status" role="status" hidden></p></article>
                         </section>
