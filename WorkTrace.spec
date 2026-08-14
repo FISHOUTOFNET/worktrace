@@ -1,9 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
+import runpy
 
 from PyInstaller.utils.hooks import collect_all
 
 root = Path(SPECPATH)
+brand_icon = root / 'build' / 'brand' / 'worktrace.ico'
+icon_generator = runpy.run_path(str(root / 'scripts' / 'generate_brand_icon.py'))
+icon_generator['generate_icon'](brand_icon)
 
 datas = [
     (str(root / 'worktrace' / 'schema.sql'), 'worktrace'),
@@ -34,7 +38,7 @@ datas = [
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'rules_delete_actions.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'init_fd_work_v5.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'ui_composition.js'), 'worktrace/webview_ui/js'),
-    (str(root / 'worktrace' / 'assets' / 'worktrace.ico'), 'worktrace/assets'),
+    (str(brand_icon), 'worktrace/assets'),
 ]
 binaries = []
 hiddenimports = ['win32api', 'win32con', 'win32gui', 'win32timezone']
@@ -80,5 +84,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=str(root / 'worktrace' / 'assets' / 'worktrace.ico'),
+    icon=str(brand_icon),
 )
