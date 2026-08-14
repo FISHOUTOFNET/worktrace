@@ -9,6 +9,7 @@ from typing import Any
 from . import config
 from .collector.single_instance import get_application_instance_coordinator
 from .desktop.shell import DesktopShellController
+from .desktop.windows_icons import WindowsWindowIconHost
 from .desktop.windows_tray import WindowsTrayHost
 from .runtime.app_runtime import AppRuntime
 from .runtime.application_services import build_application_services
@@ -206,15 +207,22 @@ def main(*, background: bool = False) -> int:
             )
             bridge.set_window(window)
             shell_holder: dict[str, DesktopShellController] = {}
+            icon_path = desktop_resource_path("worktrace.ico")
             tray = WindowsTrayHost(
-                icon_path=desktop_resource_path("worktrace.ico"),
+                icon_path=icon_path,
                 on_open=lambda: shell_holder["shell"].show_window(),
                 on_exit=lambda: shell_holder["shell"].exit_application(),
+            )
+            window_icons = WindowsWindowIconHost(
+                window_title="WorkTrace",
+                icon_path=icon_path,
             )
             shell = DesktopShellController(
                 window=window,
                 tray=tray,
                 initial_hidden=initial_hidden,
+                window_icons=window_icons,
+                collection_active_provider=app_control.is_collection_active,
             )
             shell_holder["shell"] = shell
             _bind_shell_events(window, shell)
