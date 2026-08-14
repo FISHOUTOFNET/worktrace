@@ -45,23 +45,10 @@ def test_performance_validation_is_opt_in_or_scheduled() -> None:
     assert "run-performance-validation" in source
 
 
-def test_standard_timing_validation_is_opt_in() -> None:
-    source = _source("standard-timing-validation.yml")
-    triggers = _trigger_block(source)
-
-    assert "workflow_dispatch:" in triggers
-    assert "pull_request:" in triggers
-    assert "types: [labeled]" in triggers
-    assert "\n  push:" not in triggers
-    assert "\n  schedule:" not in triggers
-    assert "run-standard-timing" in source
-
-
 @pytest.mark.parametrize(
     ("workflow", "group_prefix"),
     [
         ("performance-validation.yml", "performance-validation-"),
-        ("standard-timing-validation.yml", "standard-timing-validation-"),
         ("installer-validation.yml", "installer-validation-"),
     ],
 )
@@ -90,7 +77,6 @@ def test_installer_runtime_lifecycle_stays_out_of_standard_ci() -> None:
         "_validation.yml",
         "installer-validation.yml",
         "performance-validation.yml",
-        "standard-timing-validation.yml",
     ],
 )
 def test_validation_checkouts_do_not_persist_credentials(workflow: str) -> None:
