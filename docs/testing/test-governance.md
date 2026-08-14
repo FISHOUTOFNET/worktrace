@@ -52,7 +52,7 @@ Tests protect current behavior; they are not permanent records of how a refactor
 - Prefer one owner test for a stable boundary over several overlapping source scans.
 - Preserve old-version cases when they exercise a current compatibility or fail-safe policy, such as rejecting an incompatible database without data loss.
 - When a historically named test still covers current behavior, move the behavior into the current owner suite and rename it rather than dropping coverage.
-- CI/timing/performance harness tests should validate stable interfaces and failure modes, not mirror workflow YAML line-by-line.
+- CI/performance harness tests should validate stable interfaces and failure modes, not mirror workflow YAML line-by-line.
 
 When deleting a test, verify that any unique behavior it protected is already covered by a current owner test. No selector map, owner registry, risk-string database, or file-size exception list needs to be updated.
 
