@@ -159,8 +159,11 @@ def test_ci_exercises_running_app_upgrade_and_uninstall_paths() -> None:
 def test_installed_launch_smoke_targets_trace_but_keeps_legacy_state_root() -> None:
     smoke = INSTALLED_LAUNCH_SMOKE_PATH.read_text(encoding="utf-8")
     assert 'Join-Path $InstallDir "Trace.exe"' in smoke
-    assert '"WorkTrace\\logs\\worktrace.log"' in smoke
+    assert 'Join-Path $smokeRoot "WorkTrace"' in smoke
+    assert 'Join-Path $appStateRoot "logs\\worktrace.log"' in smoke
     assert "Start-Process -FilePath $exe -PassThru" in smoke
     assert 'SimpleMatch "desktop shell window loaded"' in smoke
+    assert "Remove-Item -Force -LiteralPath $appLog" in smoke
+    assert "Invoke-MaintenanceShutdownControl" in smoke
     assert "[switch]$KeepRunning" in smoke
     assert "[string]$PidFile" in smoke
