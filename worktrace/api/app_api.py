@@ -24,9 +24,13 @@ _COLLECTOR_FAILED_MESSAGE = (
 class ApplicationRuntimeCapability(Protocol):
     """Narrow runtime capability consumed by API-facing application commands."""
 
+    collector_control: Any
+
     def start_authorized_collection(self) -> RuntimeStartResult: ...
 
     def pause_collection_now(self) -> dict[str, object]: ...
+
+    def is_collection_running_for_maintenance(self) -> bool: ...
 
     def set_clipboard_capture_enabled(self, enabled: bool) -> bool: ...
 
@@ -38,6 +42,10 @@ class MaintenanceStateCapability(Protocol):
 
     @property
     def blocked_reason(self) -> str | None: ...
+
+    def operation_active(self) -> bool: ...
+
+    def recovery_blocked(self) -> bool: ...
 
     def external_runtime_mutation_guard(self) -> AbstractContextManager[None]: ...
 
@@ -88,6 +96,32 @@ class ApplicationControlService:
             "paused": paused,
             "display": display,
         }
+
+    def is_collection_active(self) -> bool:
+        """Return whether the collector is actively observing right now.
+
+        This intentionally follows runtime capability rather than persisted
+        display status, which can lag a resume heartbeat by a few seconds.
+        The privacy gate is not re-read here: collector startup already passes
+        that gate, and a later gate loss is converted by the collector loop into
+        durable user pause. Avoiding that re-read keeps this one-second desktop
+        projection free of installation-metadata disk I/O.
+        """
+
+        try:
+            if settings_api.is_user_paused():
+                return False
+            if self.maintenance.operation_active() or self.maintenance.recovery_blocked():
+                return False
+            if not self.runtime.is_collection_running_for_maintenance():
+                return False
+            control = getattr(self.runtime, "collector_control", None)
+            hold_state = getattr(control, "hold_state", None)
+            hold_value = getattr(hold_state, "value", hold_state)
+            return str(hold_value or "") == "operational"
+        except Exception:
+            logging.exception("collection active state read failed")
+            return False
 
     def start_collection_after_privacy_gate(self) -> dict[str, Any]:
         try:
