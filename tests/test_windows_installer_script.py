@@ -101,7 +101,7 @@ def test_first_postinstall_launch_is_visible_normal_mode() -> None:
 
 def test_installer_and_shortcut_use_canonical_icon() -> None:
     source = ISS_PATH.read_text(encoding="utf-8")
-    assert r"SetupIconFile=..\worktrace\assets\worktrace.ico" in source
+    assert r"SetupIconFile=..\build\brand\worktrace.ico" in source
     assert "UninstallDisplayIcon={app}\\{#MyAppExeName}" in source
     assert r'Name: "{group}\有迹"' in source
     assert r'Name: "{autodesktop}\有迹"' in source
