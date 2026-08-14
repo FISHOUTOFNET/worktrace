@@ -36,6 +36,7 @@ ENTRY_PATH = REPO_ROOT / "scripts" / "pyinstaller_entry.py"
 MAIN_PATH = REPO_ROOT / "worktrace" / "main.py"
 REQUIREMENTS_PATH = REPO_ROOT / "requirements.txt"
 VALIDATION_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "_validation.yml"
+ICON_GENERATOR_PATH = REPO_ROOT / "scripts" / "generate_brand_icon.py"
 
 
 def _read(path: Path) -> str:
@@ -118,11 +119,15 @@ def test_spec_retains_win32timezone():
 
 def test_spec_bundles_canonical_icon_and_tray_pywin32_imports():
     spec = _read(SPEC_PATH)
-    assert "worktrace.ico" in spec
-    assert "icon=str(root / 'worktrace' / 'assets' / 'worktrace.ico')" in spec
+    generator = _read(ICON_GENERATOR_PATH)
+    assert "brand_icon = root / 'build' / 'brand' / 'worktrace.ico'" in spec
+    assert "icon_generator['generate_icon'](brand_icon)" in spec
+    assert "(str(brand_icon), 'worktrace/assets')" in spec
+    assert "icon=str(brand_icon)" in spec
+    assert 'GLYPH = "迹"' in generator
+    assert "ICON_SIZES" in generator
     for module in ("win32api", "win32con", "win32gui"):
         assert module in spec
-    assert (REPO_ROOT / "worktrace" / "assets" / "worktrace.ico").is_file()
 
 
 def test_entry_script_routes_probe_or_forwards_to_worktrace_main():
