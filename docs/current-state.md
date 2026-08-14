@@ -1,6 +1,6 @@
 # WorkTrace Current State
 
-> Default entry point for developers and AI tools. This is the pre-release, current-only product contract; historical notes do not override it.
+> Default entry point for developers and AI tools. This is the pre-release, current-only product contract; historical notes do not override it. Historical WebView migration notes are archived in [`history/webview-phases.md`](history/webview-phases.md).
 
 ## Product
 - Windows desktop application using Python, SQLite, pywebview and WebView2.
