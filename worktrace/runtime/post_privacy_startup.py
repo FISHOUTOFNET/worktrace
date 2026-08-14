@@ -84,6 +84,10 @@ class PostPrivacyStartupCoordinator:
     def get_collection_status(self):
         return self._app_control.get_collection_status()
 
+    def is_collection_active(self) -> bool:
+        """Expose the base runtime collection-state projection through the coordinator."""
+        return bool(self._app_control.is_collection_active())
+
     def toggle_collection(self):
         return self._app_control.toggle_collection()
 
