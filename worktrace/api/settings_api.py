@@ -312,7 +312,7 @@ _FIRST_RUN_NOTICE_HIGHLIGHTS = [
     "不主动读正文",
     "用户可清空",
 ]
-_FIRST_RUN_NOTICE_TITLE = "WorkTrace 隐私说明"
+_FIRST_RUN_NOTICE_TITLE = "有迹隐私说明"
 
 
 def get_first_run_notice_for_webview() -> dict[str, Any]:
@@ -321,7 +321,7 @@ def get_first_run_notice_for_webview() -> dict[str, Any]:
     except Exception:
         return {
             "ok": False,
-            "error": "隐私说明加载失败。为保护隐私，WorkTrace 暂不会启动记录。请重启应用或重新安装。",
+            "error": "隐私说明加载失败。为保护隐私，有迹暂不会启动记录。请重启应用或重新安装。",
         }
     return {
         "ok": True,
