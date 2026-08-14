@@ -31,7 +31,6 @@ BUILD_DEP_CANDIDATES = [
     REPO_ROOT / "requirements-build.txt",
 ]
 
-# documentation governance targets.
 CURRENT_STATE_TARGET_LINES = 150
 CURRENT_STATE_HARD_MAX_LINES = 170
 
@@ -45,65 +44,50 @@ def _line_count(path: Path) -> int:
     return len(_read_text(path).splitlines())
 
 
-# Existing release / build-dependency consistency (preserved).
-
-
 def test_readme_packaging_commands_have_matching_build_dependency_file():
-    """If README documents PyInstaller packaging, a build-dep file must exist."""
     readme = _read_text(README_PATH)
     mentions_pyinstaller = "PyInstaller" in readme or "WorkTrace.spec" in readme
     if not mentions_pyinstaller:
         pytest.skip("README does not reference PyInstaller packaging")
-
     existing = [p for p in BUILD_DEP_CANDIDATES if p.is_file()]
-    assert existing, (
-        "README references PyInstaller packaging but neither "
-        "requirements-dev.txt nor requirements-build.txt exists"
-    )
+    assert existing
 
 
 def test_build_dependency_file_includes_pyinstaller():
-    """The build-dependency file must declare pyinstaller."""
     existing = [p for p in BUILD_DEP_CANDIDATES if p.is_file()]
-    assert existing, "no build-dependency file (requirements-dev.txt / requirements-build.txt)"
+    assert existing
     combined = "\n".join(_read_text(p) for p in existing)
-    assert "pyinstaller" in combined.lower(), (
-        "build-dependency file must include 'pyinstaller'"
-    )
+    assert "pyinstaller" in combined.lower()
 
 
 def test_readme_references_build_dependency_file():
-    """README must point developers at the build-dependency file."""
     readme = _read_text(README_PATH)
-    assert (
-        "requirements-dev.txt" in readme or "requirements-build.txt" in readme
-    ), "README must mention the build-dependency file name"
+    assert "requirements-dev.txt" in readme or "requirements-build.txt" in readme
 
 
 def test_release_checklist_exists():
-    assert CHECKLIST_PATH.is_file(), "docs/release-checklist.md must exist"
+    assert CHECKLIST_PATH.is_file()
 
 
 def test_release_validation_doc_and_workflows_exist():
-    assert VALIDATION_PATH.is_file(), "docs/release-validation.md must exist"
+    assert VALIDATION_PATH.is_file()
     for path in (CI_PATH, REUSABLE_VALIDATION_PATH):
-        assert path.is_file(), f"expected permanent workflow: {path}"
-    assert not ACCEPTANCE_PATH.exists(), "Acceptance workflow must remain removed"
+        assert path.is_file()
+    assert not ACCEPTANCE_PATH.exists()
 
 
 def test_readme_points_to_release_validation_doc():
-    readme = _read_text(README_PATH)
-    assert "docs/release-validation.md" in readme
+    assert "docs/release-validation.md" in _read_text(README_PATH)
 
 
 @pytest.mark.parametrize(
     "phrase",
     [
-        "WorkTrace v0.1 Release Validation",
+        "有迹 (Trace) v0.1 Release Validation",
         "GitHub Actions Windows tests pass",
-        r"dist\WorkTrace.exe",
-        r"dist\WorkTrace-Setup.exe",
-        "%LOCALAPPDATA%\\Programs\\WorkTrace",
+        r"dist\Trace.exe",
+        r"dist\Trace-Setup.exe",
+        "%LOCALAPPDATA%\\Programs\\Trace",
         "Release decision: pass / blocked",
     ],
 )
@@ -138,6 +122,3 @@ def test_ci_workflows_contain_required_release_smoke_steps():
     combined = "\n".join((standard, reusable))
     assert "3.12" not in combined
     assert "run_python312" not in combined
-
-
-# release-checklist stub tests.
