@@ -17,6 +17,12 @@ $installerScript = Resolve-Path -LiteralPath (Join-Path $repoRoot "installer\Wor
 $target = [System.IO.Path]::GetFullPath($OutputPath)
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
 
+$brandIcon = Join-Path $repoRoot "build\brand\worktrace.ico"
+& python (Join-Path $repoRoot "scripts\generate_brand_icon.py") $brandIcon
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $brandIcon)) {
+    throw "Failed to generate the 有迹 Windows icon."
+}
+
 if (-not $ISCCPath) { $ISCCPath = $env:ISCC_PATH }
 if (-not $ISCCPath) {
     $command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
