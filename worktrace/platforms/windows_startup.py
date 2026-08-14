@@ -7,8 +7,7 @@ from pathlib import Path
 from typing import Protocol
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-RUN_VALUE_NAME = "Trace"
-LEGACY_RUN_VALUE_NAMES = ("WorkTrace",)
+RUN_VALUE_NAME = "WorkTrace"
 BACKGROUND_ARGUMENT = "--background"
 
 
@@ -98,25 +97,18 @@ class WindowsStartupRegistration:
             raise RuntimeError("launch_at_login_unsupported")
         return f'"{self._executable_path}" {BACKGROUND_ARGUMENT}'
 
-    def _matches_expected(self, value: str | None) -> bool:
+    def is_configured(self) -> bool:
+        if not self.supported:
+            return False
+        try:
+            value = self._registry.read_run_value(RUN_VALUE_NAME)
+        except OSError:
+            return False
         if not isinstance(value, str):
             return False
         return ntpath.normcase(value.strip()) == ntpath.normcase(
             self.expected_command()
         )
-
-    def is_configured(self) -> bool:
-        if not self.supported:
-            return False
-        try:
-            if self._matches_expected(self._registry.read_run_value(RUN_VALUE_NAME)):
-                return True
-            return any(
-                self._matches_expected(self._registry.read_run_value(name))
-                for name in LEGACY_RUN_VALUE_NAMES
-            )
-        except OSError:
-            return False
 
     def enable(self, executable_path: Path | None = None) -> None:
         if executable_path is not None:
@@ -124,22 +116,25 @@ class WindowsStartupRegistration:
         if not self.supported:
             raise RuntimeError("launch_at_login_unsupported")
         expected = self.expected_command()
-        current = self._registry.read_run_value(RUN_VALUE_NAME)
-        if not self._matches_expected(current):
-            self._registry.write_run_value(RUN_VALUE_NAME, expected)
-        for name in LEGACY_RUN_VALUE_NAMES:
-            self._registry.delete_run_value(name)
+        if self.is_configured():
+            return
+        self._registry.write_run_value(RUN_VALUE_NAME, expected)
 
     def disable(self) -> None:
         if not self.supported:
             raise RuntimeError("launch_at_login_unsupported")
-        for name in (RUN_VALUE_NAME, *LEGACY_RUN_VALUE_NAMES):
-            self._registry.delete_run_value(name)
+        try:
+            current = self._registry.read_run_value(RUN_VALUE_NAME)
+        except OSError:
+            self._registry.delete_run_value(RUN_VALUE_NAME)
+            return
+        if current is None:
+            return
+        self._registry.delete_run_value(RUN_VALUE_NAME)
 
 
 __all__ = [
     "BACKGROUND_ARGUMENT",
-    "LEGACY_RUN_VALUE_NAMES",
     "RUN_KEY",
     "RUN_VALUE_NAME",
     "WindowsStartupRegistration",
