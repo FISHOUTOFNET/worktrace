@@ -8,6 +8,7 @@ from collections.abc import Callable
 from enum import Enum
 from typing import Any, Protocol
 
+from .. import PRODUCT_DISPLAY_NAME
 from ..platforms.window_activation import (
     GWL_EXSTYLE as _GWL_EXSTYLE,
     SW_RESTORE as _SW_RESTORE,
@@ -299,14 +300,14 @@ class DesktopShellController:
     def _make_window_activatable(self) -> None:
         make_window_activatable(
             self._window,
-            fallback_title="WorkTrace",
+            fallback_title=PRODUCT_DISPLAY_NAME,
             logger=logger,
         )
 
     def _native_window_handle(self) -> int:
         return native_window_handle(
             self._window,
-            fallback_title="WorkTrace",
+            fallback_title=PRODUCT_DISPLAY_NAME,
             logger=logger,
         )
 
@@ -315,7 +316,7 @@ class DesktopShellController:
             return
         if not request_window_foreground(
             self._window,
-            fallback_title="WorkTrace",
+            fallback_title=PRODUCT_DISPLAY_NAME,
             restore=True,
             logger=logger,
         ):
