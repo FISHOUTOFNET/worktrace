@@ -20,10 +20,12 @@ def get_local_appdata() -> Path:
 
 
 def get_default_export_dir() -> Path:
-    return Path.home() / "Documents" / "WorkTrace Exports"
+    return Path.home() / "Documents" / "有迹"
 
 
 def resolve_paths() -> AppPaths:
+    # Keep the legacy data root stable across the product rename so existing
+    # installations retain their database, logs, and WebView profile in place.
     base_dir = get_local_appdata() / "WorkTrace"
     data_dir = base_dir / "data"
     log_dir = base_dir / "logs"
