@@ -40,7 +40,7 @@ binaries = []
 hiddenimports = ['win32api', 'win32con', 'win32gui', 'win32timezone']
 # pywebview is the WebView backend used by the default UI entry point.
 # collect_all('webview') is a no-op if pywebview is not installed;
-# pywebview==6.2.1 is declared in requirements.txt and is required for WorkTrace
+# pywebview==6.2.1 is declared in requirements.txt and is required for the app
 # to start.
 _wv_ret = collect_all('webview')
 datas += _wv_ret[0]; binaries += _wv_ret[1]; hiddenimports += _wv_ret[2]
@@ -67,7 +67,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='WorkTrace',
+    name='Trace',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
