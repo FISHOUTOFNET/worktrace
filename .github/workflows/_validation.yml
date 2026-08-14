@@ -82,17 +82,6 @@ jobs:
           "pywebview_version=$pywebviewVersion" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
           Write-Host "pywebview_version=$pywebviewVersion"
 
-      - name: Check test inventory
-        id: inventory
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
-          & python scripts/test_inventory.py --check *> "test-results/inventory.log"
-          $inventoryExitCode = $LASTEXITCODE
-          Get-Content -LiteralPath "test-results/inventory.log" |
-            ForEach-Object { Write-Host $_ }
-          exit $inventoryExitCode
-
       - name: Compile Python
         id: compile
         shell: pwsh
@@ -145,15 +134,7 @@ jobs:
         shell: pwsh
         run: |
           $artifactName = "validation-diagnostics-${{ inputs.revision }}"
-          if ("${{ steps.inventory.outcome }}" -eq "failure") {
-            & python scripts/pytest_diagnostics.py `
-              --stage inventory `
-              --log "test-results/inventory.log" `
-              --output-dir "test-results" `
-              --revision "${{ inputs.revision }}" `
-              --artifact-name $artifactName
-          }
-          elseif ("${{ steps.compile.outcome }}" -eq "failure") {
+          if ("${{ steps.compile.outcome }}" -eq "failure") {
             & python scripts/pytest_diagnostics.py `
               --stage compile `
               --log "test-results/compile.log" `

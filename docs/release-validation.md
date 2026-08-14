@@ -6,7 +6,7 @@ This checklist is the release-candidate validation baseline for 有迹 (Trace) v
 
 - Current validation target: 有迹 (Trace) v0.1.
 - The goal is to confirm that Windows users can install, start, collect active-window metadata, classify activity, export, clear local data, and exit without crossing the documented privacy boundary.
-- The local affected-test runner and marker shards are development accelerators only. A release still requires the full Python suite, WebView tests, the PyInstaller executable build, and the per-user installer smoke.
+- A release requires the full Python non-benchmark suite, WebView tests, the PyInstaller executable build, and the per-user installer lifecycle validation. Local marker shards are development aids only.
 - The internal Python package remains `worktrace`; this is not a user-facing product name.
 - Legacy compatibility identifiers are intentionally retained where changing them would break upgrades: `%LOCALAPPDATA%\WorkTrace`, `AppId=WorkTrace`, the legacy HKCU Run value name, and the existing single-instance IPC identity.
 
@@ -28,11 +28,10 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-Run tests:
+Run the release Python suite:
 
 ```powershell
-python scripts/test_inventory.py --check
-pytest
+python -m pytest -m "not benchmark"
 ```
 
 Start from source:
@@ -55,7 +54,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_instal
 
 ## Automated Validation Checklist
 
-- [ ] `pytest` passes.
+- [ ] `python -m pytest -m "not benchmark"` passes.
 - [ ] GitHub Actions Windows tests pass.
 - [ ] WebView Node behavior tests pass.
 - [ ] PyInstaller build smoke passes.

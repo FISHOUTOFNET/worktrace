@@ -125,9 +125,7 @@ later in Settings → General. Build artifacts (`build/`, `dist/`, generated
 ## Release Validation
 
 Before a Windows release, use
-[`docs/release-validation.md`](docs/release-validation.md) as the v0.1 Lite
-release-candidate baseline. Run `pytest`, require GitHub Actions CI to pass,
-and validate both the PyInstaller exe and the per-user installer.
+[`docs/release-validation.md`](docs/release-validation.md) as the release-candidate baseline. Require the full non-benchmark Python suite and GitHub Actions CI to pass, and validate both the PyInstaller executable and the per-user installer lifecycle.
 
 ## v0.2 Boundary And Local Security
 
@@ -148,91 +146,33 @@ Tests run without requiring a real Windows foreground window and use
 
 ### Local Test Strategy
 
-WorkTrace has a large and growing test suite, so running the full `pytest` on
-every small change is wasteful. Default to the affected-test runner for
-day-to-day iteration; reserve the full suite for cross-cutting changes,
-pre-push, and release validation.
+Local test selection is explicit. There is no changed-file/affected-test dependency map and no separate machine-readable test policy or inventory gate. Pytest owns collection and marker validation; `pytest.ini` enables strict markers. Standard CI remains the regression backstop and always runs the complete non-benchmark Python suite.
 
 ```powershell
-# Day-to-day: run only the tests affected by the current workspace changes
-# (staged + unstaged vs HEAD). Pure standard library; no new dependencies.
-python scripts/run_affected_tests.py
+# Known failure or owner
+python -m pytest --lf
+python -m pytest tests/test_timeline_service.py
+python -m pytest tests/test_timeline_service.py::TestClassName::test_case
 
-# Print the detected changed files and selected targets without running pytest
-python scripts/run_affected_tests.py --list
+# Fast marker-covered feedback
+python -m pytest -m "unit and not slow"
 
-# Print the final pytest command without executing it
-python scripts/run_affected_tests.py --print-only
+# Cross-layer/static contract feedback
+python -m pytest -m contract
+python -m pytest -m "webview_static and contract"
+python -m pytest -m "live_display and contract"
+python -m pytest -m "collector_runtime and integration"
+python -m pytest -m "security_privacy"
 
-# Marker-covered fast feedback (incremental marker coverage; not a full
-# fast universe yet)
-python scripts/run_affected_tests.py --fast
-
-# Test/comment/runner governance gate
-python scripts/run_affected_tests.py --governance
-
-# Explicit full-suite fallback
-python scripts/run_affected_tests.py --all
-
-# Only consider staged changes; or diff against a custom base ref
-python scripts/run_affected_tests.py --staged
-python scripts/run_affected_tests.py --base HEAD
-
-# Pass extra pytest arguments after --
-python scripts/run_affected_tests.py -- --maxfail=1 -q
-
-# Audit test structure, marker coverage, and governance warnings
-python scripts/test_inventory.py
-python scripts/test_inventory.py --check
+# Full Standard-CI Python correctness surface
+python -m pytest -m "not benchmark"
 ```
 
-The runner maps changed source / docs / packaging paths to a conservative,
-finite set of pytest targets and now prints marker-shard diagnostics for some
-well-known domains (`webview_static`, `live_display`, `collector_runtime`,
-`security_privacy`, `packaging`). The default command still runs concrete
-targets so unmarked tests are not skipped. When nothing changed it runs a
-light smoke set (startup imports, WebView bridge boundary, WebView
-static-contract suite) plus the `import worktrace.webview_main` import smoke —
-it never silently runs the full suite. PyInstaller and the per-user installer
-are **not** part of the affected runner; they remain manual release-validation
-steps.
+Use the narrowest explicit target that gives useful feedback during iteration. Use the full non-benchmark suite for DB/schema, collector/runtime, live display, privacy/security, recovery/concurrency, broad architecture changes, pre-push confidence, and release validation. Performance benchmarks and installer lifecycle acceptance stay in their dedicated workflows.
 
-Test governance lives in [`docs/testing/test-governance.md`](docs/testing/test-governance.md)
-and `test_policy.json`. `--fast` is `python -m pytest -m "unit and not slow"`
-over the currently marked unit surface. `--governance` runs inventory,
-comment hygiene, and focused runner/inventory tests without becoming another
-full suite. `python scripts/test_inventory.py --check` hard-fails explicit
-sleep, stale affected-runner targets, unregistered markers, budget overruns
-without reason overrides, and obvious risk/marker mismatches; unmarked tests
-remain warnings while marker coverage is incremental.
+Test maintenance rules live in [`docs/testing/test-governance.md`](docs/testing/test-governance.md). Shared helpers live under `tests/support/`: use small domain factories for repeated setup, keep scenarios readable, and avoid large fixtures that hide behavior.
 
-### Targeted and Full Test Commands
-
-```powershell
-# Single point of failure / known-failing tests from the last run
-pytest --lf
-
-# A specific test file or test case
-pytest tests/test_timeline_service.py
-pytest tests/test_timeline_service.py::TestClassName::test_case
-
-# Marker shards for focused local feedback
-pytest -m "webview_static and contract"
-pytest -m "live_display and contract"
-pytest -m "collector_runtime and integration"
-pytest -m "security_privacy"
-pytest -m "packaging"
-
-# Full suite — use for core cross-cutting changes, pre-push, or release
-# validation. Also runs in GitHub Actions CI.
-pytest
-```
-
-This phase does **not** enable parallel testing. The `parallel_safe` and
-`serial` markers are planning labels for future work only; default `pytest`
-and the affected runner remain non-parallel. Shared helpers live under
-`tests/support/`: use small domain factories for repeated setup, but keep each
-test's scenario readable and avoid large fixtures that hide behavior.
+This project does **not** currently enable parallel pytest. The `parallel_safe` and `serial` markers remain planning labels only.
 
 ## Local Paths
 
