@@ -100,16 +100,15 @@ class ApplicationControlService:
     def is_collection_active(self) -> bool:
         """Return whether the collector is actively observing right now.
 
-        This intentionally follows runtime capability rather than the persisted
+        This intentionally follows runtime capability rather than persisted
         display status, which can lag a resume heartbeat by a few seconds.
-        Pause/privacy gates, maintenance hold/recovery and a dead collector
-        thread all project to the inactive desktop icon. Transient/degraded
-        health remains active while the collector is still operational.
+        The privacy gate is not re-read here: collector startup already passes
+        that gate, and a later gate loss is converted by the collector loop into
+        durable user pause. Avoiding that re-read keeps this one-second desktop
+        projection free of installation-metadata disk I/O.
         """
 
         try:
-            if not privacy_gate_service.is_sensitive_runtime_allowed():
-                return False
             if settings_api.is_user_paused():
                 return False
             if self.maintenance.operation_active() or self.maintenance.recovery_blocked():
