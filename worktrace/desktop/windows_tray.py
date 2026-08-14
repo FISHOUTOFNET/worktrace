@@ -6,6 +6,8 @@ import threading
 from pathlib import Path
 from typing import Callable
 
+from .windows_icons import load_icon_variant
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,7 +35,10 @@ class WindowsTrayHost:
         self._failed = threading.Event()
         self._stop_requested = threading.Event()
         self._hwnd: int | None = None
+        self._active_icon_handle = None
+        self._inactive_icon_handle = None
         self._icon_handle = None
+        self._collection_active = False
         self._taskbar_created = 0
         self._deleted = False
 
@@ -75,6 +80,28 @@ class WindowsTrayHost:
         if thread is not threading.current_thread():
             thread.join(timeout=5.0)
 
+    def set_collection_active(self, active: bool) -> None:
+        """Switch the notification icon without changing collector ownership."""
+
+        with self._lock:
+            active = bool(active)
+            if self._collection_active is active and self._icon_handle is not None:
+                return
+            self._collection_active = active
+            hwnd = self._hwnd
+            icon = (
+                self._active_icon_handle if active else self._inactive_icon_handle
+            )
+            if not hwnd or not icon:
+                return
+            self._icon_handle = icon
+        try:
+            import win32gui
+
+            win32gui.Shell_NotifyIcon(win32gui.NIM_MODIFY, self._notify_data())
+        except Exception:
+            logger.warning("tray collection icon update failed", exc_info=True)
+
     def show_background_notice(self) -> None:
         with self._lock:
             hwnd = self._hwnd
@@ -101,14 +128,15 @@ class WindowsTrayHost:
     def _notify_data(self):
         import win32gui
 
-        return (
-            self._hwnd,
-            0,
-            win32gui.NIF_ICON | win32gui.NIF_MESSAGE | win32gui.NIF_TIP,
-            self._WM_TRAY,
-            self._icon_handle,
-            "WorkTrace",
-        )
+        with self._lock:
+            return (
+                self._hwnd,
+                0,
+                win32gui.NIF_ICON | win32gui.NIF_MESSAGE | win32gui.NIF_TIP,
+                self._WM_TRAY,
+                self._icon_handle,
+                "WorkTrace",
+            )
 
     def _add_icon(self) -> None:
         import win32gui
@@ -126,6 +154,23 @@ class WindowsTrayHost:
             win32gui.Shell_NotifyIcon(win32gui.NIM_DELETE, (self._hwnd, 0))
         except Exception:
             logger.warning("tray icon deletion failed", exc_info=True)
+
+    def _destroy_icon_handles(self) -> None:
+        with self._lock:
+            handles = [self._active_icon_handle, self._inactive_icon_handle]
+            self._active_icon_handle = None
+            self._inactive_icon_handle = None
+            self._icon_handle = None
+        try:
+            import win32gui
+
+            for handle in dict.fromkeys(handle for handle in handles if handle):
+                try:
+                    win32gui.DestroyIcon(handle)
+                except Exception:
+                    logger.debug("tray icon handle cleanup failed", exc_info=True)
+        except Exception:
+            logger.debug("tray icon cleanup unavailable", exc_info=True)
 
     def _run(self) -> None:
         try:
@@ -160,14 +205,20 @@ class WindowsTrayHost:
                 wc.hInstance,
                 None,
             )
-            self._icon_handle = win32gui.LoadImage(
-                0,
-                str(self._icon_path),
-                win32con.IMAGE_ICON,
-                0,
-                0,
-                win32con.LR_LOADFROMFILE | win32con.LR_DEFAULTSIZE,
+            self._active_icon_handle = load_icon_variant(
+                self._icon_path,
+                active=True,
             )
+            self._inactive_icon_handle = load_icon_variant(
+                self._icon_path,
+                active=False,
+            )
+            with self._lock:
+                self._icon_handle = (
+                    self._active_icon_handle
+                    if self._collection_active
+                    else self._inactive_icon_handle
+                )
             self._add_icon()
             self._ready.set()
             if self._stop_requested.is_set():
@@ -181,9 +232,9 @@ class WindowsTrayHost:
             self._ready.set()
         finally:
             self._delete_icon()
+            self._destroy_icon_handles()
             with self._lock:
                 self._hwnd = None
-                self._icon_handle = None
 
     def _on_tray_message(self, hwnd, _msg, _wparam, lparam):
         import win32con
