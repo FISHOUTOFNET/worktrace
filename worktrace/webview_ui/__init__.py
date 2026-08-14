@@ -1,11 +1,10 @@
 """WebView UI package (default and only shipping UI).
 
 The WebView shell started by ``worktrace.webview_main`` is the default and
-only shipping UI for WorkTrace. The default entry point
+only shipping UI for 有迹 (Trace). The default entry point
 ``python -m worktrace.main`` starts the WebView UI; the packaged
-``WorkTrace.exe`` defaults to the WebView UI as well. There is no Tkinter
+``Trace.exe`` defaults to the WebView UI as well. There is no Tkinter
 fallback.
-Tkinter fallback.
 
 Boundary rules (enforced by tests/test_ui_backend_boundary.py):
 
@@ -18,4 +17,3 @@ Boundary rules (enforced by tests/test_ui_backend_boundary.py):
   ``https://``, CDN, or Google Fonts references, and must not use
   ``localStorage``/``sessionStorage`` for sensitive data.
 """
-
