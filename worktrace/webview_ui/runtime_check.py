@@ -10,9 +10,9 @@ registry, it returns ``"unknown"`` rather than raising, so a failed detection
 does not block startup. The caller still surfaces a clear error message when
 the runtime is genuinely missing.
 
-The WebView2 Runtime is a blocking runtime prerequisite for WorkTrace. When
-it is missing on Windows, the user is prompted to install it and WorkTrace
-exits with a non-zero code.
+The WebView2 Runtime is a blocking runtime prerequisite for 有迹 (Trace). When
+it is missing on Windows, the user is prompted to install it and 有迹 exits
+with a non-zero code.
 """
 
 from __future__ import annotations
@@ -29,9 +29,9 @@ RuntimeStatus = Literal["installed", "missing", "unknown"]
 _WEBVIEW2_CLIENT_GUID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
 _MISSING_HINT = (
-    "WorkTrace 需要 Microsoft Edge WebView2 Runtime 才能启动，但未检测到该运行时。"
+    "有迹需要 Microsoft Edge WebView2 Runtime 才能启动，但未检测到该运行时。"
     "请从 Microsoft 官方渠道下载并安装 Microsoft Edge WebView2 Runtime，"
-    "然后重新启动 WorkTrace。"
+    "然后重新启动有迹。"
 )
 
 
