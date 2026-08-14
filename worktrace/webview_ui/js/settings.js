@@ -10,7 +10,7 @@
     var BACKUP_MANIFEST_ERROR_MESSAGE = "读取备份清单失败";
     var BACKUP_IMPORT_ERROR_MESSAGE = "导入加密备份失败";
     var CLEAR_ALL_ERROR_MESSAGE = "清空本地数据失败";
-    var FIRST_RUN_NOTICE_LOAD_ERROR = "隐私说明加载失败。为保护隐私，WorkTrace 暂不会启动记录。请点击“重新加载”重试。";
+    var FIRST_RUN_NOTICE_LOAD_ERROR = "隐私说明加载失败。为保护隐私，有迹暂不会启动记录。请点击“重新加载”重试。";
     var FIRST_RUN_NOTICE_ACCEPT_ERROR = "确认隐私说明失败";
     var IMPORT_CONFIRM_LITERAL = "导入并替换";
     var CLEAR_CONFIRM_LITERAL = "清空本地数据";
@@ -848,7 +848,7 @@
         var accept = element("first-run-notice-accept-btn");
         var close = element("first-run-notice-close-btn");
         var retry = element("first-run-notice-retry-btn");
-        if (title) title.textContent = String(notice.title || "WorkTrace 隐私说明");
+        if (title) title.textContent = String(notice.title || "有迹隐私说明");
         clearChildren(highlights);
         if (highlights && Array.isArray(notice.highlights)) {
             notice.highlights.forEach(function (item) {
