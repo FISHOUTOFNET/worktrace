@@ -1,23 +1,25 @@
-#define MyAppName "WorkTrace"
+#define MyAppName "有迹"
 #define MyAppVersion "0.1"
-#define MyAppPublisher "WorkTrace"
-#define MyAppExeName "WorkTrace.exe"
+#define MyAppPublisher "Trace"
+#define MyAppExeName "Trace.exe"
+#define LegacyAppExeName "WorkTrace.exe"
 
 #ifndef MyAppExe
-  #define MyAppExe "..\dist\WorkTrace.exe"
+  #define MyAppExe "..\dist\Trace.exe"
 #endif
 
 [Setup]
+; AppId is intentionally retained so existing WorkTrace installs upgrade in place.
 AppId=WorkTrace
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={localappdata}\Programs\WorkTrace
-DefaultGroupName=WorkTrace
+DefaultDirName={localappdata}\Programs\Trace
+DefaultGroupName=有迹
 PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
 OutputDir=..\dist
-OutputBaseFilename=WorkTrace-Setup
+OutputBaseFilename=Trace-Setup
 SetupIconFile=..\worktrace\assets\worktrace.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2
@@ -30,25 +32,31 @@ CloseApplications=force
 RestartApplications=no
 
 [Tasks]
-Name: startup; Description: "登录 Windows 时自动启动 WorkTrace"; GroupDescription: "附加任务："; Flags: unchecked
+Name: startup; Description: "登录 Windows 时自动启动有迹"; GroupDescription: "附加任务："; Flags: unchecked
 Name: desktopicon; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："; Flags: unchecked
 Name: fdwork; Description: "启用 FD Work 插件（仅方达律师事务所可用）"; GroupDescription: "附加任务："; Flags: unchecked
 
 [Files]
-Source: "{#MyAppExe}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#MyAppExe}"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion
+
+[InstallDelete]
+Type: files; Name: "{app}\{#LegacyAppExeName}"
+Type: files; Name: "{group}\WorkTrace.lnk"
+Type: files; Name: "{autodesktop}\WorkTrace.lnk"
 
 [Icons]
-Name: "{group}\WorkTrace"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\WorkTrace"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\有迹"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyAppExeName}"
+Name: "{autodesktop}\有迹"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "WorkTrace"; ValueData: """{app}\WorkTrace.exe"" --background"; Tasks: startup; Flags: uninsdeletevalue
+; Keep the legacy Run value name as a compatibility identifier; its target is Trace.exe.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "WorkTrace"; ValueData: """{app}\Trace.exe"" --background"; Tasks: startup; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "WorkTrace"; Tasks: not startup; Flags: deletevalue
 Root: HKCU; Subkey: "Software\WorkTrace\InstallBootstrap"; ValueType: dword; ValueName: "EnableFDWork"; ValueData: "1"; Tasks: fdwork; Flags: uninsdeletevalue uninsdeletekeyifempty
 Root: HKCU; Subkey: "Software\WorkTrace\InstallBootstrap"; ValueType: none; ValueName: "EnableFDWork"; Tasks: not fdwork; Flags: deletevalue
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "启动 WorkTrace"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "启动有迹"; Flags: nowait postinstall skipifsilent
 
 [Code]
 const
@@ -79,20 +87,39 @@ begin
     Result := Trim(ExistingValue) <> '';
 end;
 
+function ExistingApplicationExePath: String;
+var
+  Candidate: String;
+begin
+  Candidate := ExpandConstant('{app}\{#MyAppExeName}');
+  if FileExists(Candidate) then
+  begin
+    Result := Candidate;
+    exit;
+  end;
+  Candidate := ExpandConstant('{app}\{#LegacyAppExeName}');
+  if FileExists(Candidate) then
+  begin
+    Result := Candidate;
+    exit;
+  end;
+  Result := '';
+end;
+
 function RequestWorkTraceShutdown(const Context: String): Boolean;
 var
   ExePath: String;
   ResultCode: Integer;
 begin
-  ExePath := ExpandConstant('{app}\{#MyAppExeName}');
-  if not FileExists(ExePath) then
+  ExePath := ExistingApplicationExePath;
+  if ExePath = '' then
   begin
-    Log('WorkTrace maintenance shutdown skipped for ' + Context + ': executable not present.');
+    Log('Application maintenance shutdown skipped for ' + Context + ': executable not present.');
     Result := True;
     exit;
   end;
 
-  Log('Requesting WorkTrace maintenance shutdown for ' + Context + '.');
+  Log('Requesting application maintenance shutdown for ' + Context + '.');
   if not Exec(
     ExePath,
     MaintenanceShutdownArgument,
@@ -102,17 +129,17 @@ begin
     ResultCode
   ) then
   begin
-    Log('Failed to start WorkTrace maintenance shutdown client for ' + Context + '.');
+    Log('Failed to start maintenance shutdown client for ' + Context + '.');
     Result := False;
     exit;
   end;
 
   Result := ResultCode = 0;
   if Result then
-    Log('WorkTrace maintenance shutdown client completed for ' + Context + '.')
+    Log('Maintenance shutdown client completed for ' + Context + '.')
   else
     Log(
-      'WorkTrace maintenance shutdown client failed for ' + Context +
+      'Maintenance shutdown client failed for ' + Context +
       ' with exit code ' + IntToStr(ResultCode) + '.'
     );
 end;
@@ -159,7 +186,7 @@ var
 begin
   Result := '';
 
-  if FileExists(ExpandConstant('{app}\{#MyAppExeName}')) and
+  if (ExistingApplicationExePath <> '') and
      not RequestWorkTraceShutdown('upgrade') then
     Log('Continuing upgrade so Restart Manager can apply the configured fallback.');
 
@@ -189,7 +216,7 @@ begin
     ) then
     begin
       Result :=
-        'WorkTrace 需要 Microsoft Edge WebView2 Runtime，但安装器无法启动其官方安装程序。' + #13#10 +
+        '有迹需要 Microsoft Edge WebView2 Runtime，但安装器无法启动其官方安装程序。' + #13#10 +
         '请检查当前用户权限后重试。';
       exit;
     end;
@@ -197,15 +224,15 @@ begin
     if not IsWebView2RuntimeInstalled then
     begin
       Result :=
-        'WorkTrace 需要 Microsoft Edge WebView2 Runtime，但自动安装未完成（退出代码 ' +
+        '有迹需要 Microsoft Edge WebView2 Runtime，但自动安装未完成（退出代码 ' +
         IntToStr(ResultCode) + '）。' + #13#10 +
-        '请检查网络或组织策略，安装 Microsoft Edge WebView2 Runtime 后重新运行 WorkTrace 安装程序。';
+        '请检查网络或组织策略，安装 Microsoft Edge WebView2 Runtime 后重新运行有迹安装程序。';
       exit;
     end;
     Log('WebView2 Runtime prerequisite installed successfully.');
   except
     Result :=
-      'WorkTrace 需要 Microsoft Edge WebView2 Runtime，但自动安装失败。' + #13#10 +
+      '有迹需要 Microsoft Edge WebView2 Runtime，但自动安装失败。' + #13#10 +
       '请检查网络或组织策略后重试。' + #13#10 +
       GetExceptionMessage;
   end;
@@ -216,7 +243,7 @@ begin
   Result := RequestWorkTraceShutdown('uninstall');
   if not Result then
     MsgBox(
-      'WorkTrace 未能在卸载前正常退出。请从通知区域退出 WorkTrace 后重试。',
+      '有迹未能在卸载前正常退出。请从通知区域退出有迹后重试。',
       mbError,
       MB_OK
     );
