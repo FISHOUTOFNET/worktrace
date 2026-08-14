@@ -77,22 +77,23 @@ class FakeWindowIcons:
         self.stop_calls += 1
 
 
-def test_collection_active_requires_runtime_privacy_and_no_pause_or_maintenance(
+def test_collection_active_requires_runtime_no_pause_and_no_maintenance(
     monkeypatch,
 ) -> None:
     runtime = FakeRuntime()
     maintenance = FakeMaintenance()
     service = ApplicationControlService(runtime, maintenance)
-    privacy_allowed = {"value": True}
     paused = {"value": False}
 
     monkeypatch.setattr(
-        "worktrace.api.app_api.privacy_gate_service.is_sensitive_runtime_allowed",
-        lambda: privacy_allowed["value"],
-    )
-    monkeypatch.setattr(
         "worktrace.api.app_api.settings_api.is_user_paused",
         lambda: paused["value"],
+    )
+    monkeypatch.setattr(
+        "worktrace.api.app_api.privacy_gate_service.is_sensitive_runtime_allowed",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("desktop icon polling must not read privacy metadata")
+        ),
     )
 
     assert service.is_collection_active() is True
@@ -100,10 +101,6 @@ def test_collection_active_requires_runtime_privacy_and_no_pause_or_maintenance(
     paused["value"] = True
     assert service.is_collection_active() is False
     paused["value"] = False
-
-    privacy_allowed["value"] = False
-    assert service.is_collection_active() is False
-    privacy_allowed["value"] = True
 
     maintenance.active = True
     assert service.is_collection_active() is False
