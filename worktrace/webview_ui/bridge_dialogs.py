@@ -70,7 +70,7 @@ class BridgeDialogMixin:
         try:
             result = window.create_file_dialog(
                 dialog_type,
-                save_filename="worktrace-export.csv",
+                save_filename="trace-export.csv",
                 file_types=("CSV Files (*.csv)",),
             )
         except Exception:
@@ -153,9 +153,9 @@ class BridgeDialogMixin:
         """Shared pywebview dialog helper for ``.wtbackup`` save / open.
 
         ``save=True`` resolves the SAVE dialog (with a default
-        ``worktrace-backup.wtbackup`` filename); ``save=False`` resolves
-        the OPEN dialog. Lazy-imports pywebview so the bridge module does
-        not pull the WebView backend into unit tests at import time.
+        ``trace-backup.wtbackup`` filename); ``save=False`` resolves the OPEN
+        dialog. Lazy-imports pywebview so the bridge module does not pull the
+        WebView backend into unit tests at import time.
         """
         window = self._window
         if window is None:
@@ -179,10 +179,10 @@ class BridgeDialogMixin:
             raise RuntimeError("pywebview FileDialog unavailable")
         try:
             kwargs: dict[str, Any] = {
-                "file_types": ("WorkTrace Backup (*.wtbackup)",),
+                "file_types": ("有迹备份 (*.wtbackup)",),
             }
             if save:
-                kwargs["save_filename"] = "worktrace-backup.wtbackup"
+                kwargs["save_filename"] = "trace-backup.wtbackup"
             result = window.create_file_dialog(dialog_type, **kwargs)
         except Exception:
             raise RuntimeError("webview file dialog failed")
