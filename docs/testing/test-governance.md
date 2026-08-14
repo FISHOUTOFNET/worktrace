@@ -26,9 +26,9 @@ pytest
   inventory governance tests.
 - `contract`: API, ViewModel, static frontend, payload, and boundary
   contracts.
-- `full`: complete regression suite for DB/schema, collector/lifecycle,
-  display model, export/privacy/security, release validation, or pre-push
-  confidence.
+- `full`: complete current regression suite for DB/schema,
+  collector/lifecycle, display model, export/privacy/security, release
+  validation, or pre-push confidence.
 
 ## Markers
 
@@ -59,6 +59,35 @@ Owner areas include live display, collector lifecycle / 30s short activity,
 timeline editing, project rules, statistics/export, security/privacy/backup,
 WebView static/frontend render, DB/migration, and governance.
 
+## Test Retirement And Maintenance
+
+Tests protect current behavior, durable compatibility requirements, data
+integrity, security boundaries, or a stable architecture boundary. A test is
+not permanent merely because it was useful during a refactor.
+
+- Remove Stage/Phase/checkpoint tests after the cutover is complete when their
+  only purpose is to prove that an old implementation has disappeared.
+- Do not keep repository-wide blacklists of retired private function names,
+  state labels, or implementation strings unless reintroducing that exact
+  construct would violate a current public or security contract.
+- Do not test how other tests are written (for example mandatory monkeypatch
+  style, fake implementation style, or source-file layout) unless the rule is
+  required for test correctness rather than stylistic uniformity.
+- Prefer one owner test for a stable boundary over several overlapping static
+  source scans that assert the same invariant at different historical stages.
+- Preserve old-version cases when they exercise a current compatibility or
+  fail-safe policy, such as rejecting an incompatible database without data
+  loss. Old version numbers alone are not grounds for deletion.
+- When a historically named test still covers current behavior, move the case
+  into the current owner suite and rename it rather than dropping the coverage.
+- CI/timing/performance harness tests should validate their own failure modes
+  and stable interfaces; avoid duplicating the same workflow text contract in
+  multiple test files.
+
+When removing a test, also remove or update affected-runner targets, inventory
+policy references, documentation, and any budget/owner overrides in the same
+change. A deleted test must not leave a stale selector or governance exception.
+
 ## New Test Admission
 
 - Prefer pure function/policy tests before DB tests.
@@ -69,6 +98,8 @@ WebView static/frontend render, DB/migration, and governance.
 - Mark DB, runtime/threading, subprocess, WebView static, and live-display tests
   according to `test_policy.json`.
 - Keep PyInstaller and installer builds out of the affected runner.
+- New architecture tests must name the stable invariant they protect, not the
+  migration stage that introduced it.
 
 Run full `pytest` when a change crosses owner boundaries, touches DB/schema,
 collector/lifecycle/live display semantics, export/privacy/security, packaging
