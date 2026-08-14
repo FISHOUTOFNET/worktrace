@@ -27,12 +27,11 @@ def test_inno_setup_is_per_user_and_uses_trace_install_identity() -> None:
 def test_legacy_app_id_is_retained_for_in_place_upgrade() -> None:
     source = ISS_PATH.read_text(encoding="utf-8")
     assert "AppId=WorkTrace" in source
-    assert "LegacyAppExeName \"WorkTrace.exe\"" in source
+    assert 'LegacyAppExeName "WorkTrace.exe"' in source
     assert r"Uninstall\WorkTrace_is1" in source
     assert "ExistingApplicationExePath" in source
     assert r"{app}\{#LegacyAppExeName}" in source
     assert "[InstallDelete]" in source
-    assert r'{app}\{#LegacyAppExeName}' in source
     assert r'{group}\WorkTrace.lnk' in source
     assert r'{autodesktop}\WorkTrace.lnk' in source
 
