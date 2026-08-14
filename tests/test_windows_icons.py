@@ -11,7 +11,7 @@ from worktrace.desktop.windows_icons import WindowsWindowIconHost, load_icon_var
 def _fake_win32_modules():
     calls: dict[str, list] = {
         "load": [],
-        "send": [],
+        "post": [],
         "destroy": [],
     }
     next_handle = {"value": 100}
@@ -38,7 +38,7 @@ def _fake_win32_modules():
     gui = SimpleNamespace(
         LoadImage=load_image,
         FindWindow=lambda _class, title: 321 if title == "WorkTrace" else 0,
-        SendMessage=lambda hwnd, msg, kind, handle: calls["send"].append(
+        PostMessage=lambda hwnd, msg, kind, handle: calls["post"].append(
             (hwnd, msg, kind, handle)
         ),
         DestroyIcon=lambda handle: calls["destroy"].append(handle),
@@ -63,7 +63,7 @@ def test_inactive_icon_variant_uses_win32_monochrome_flag() -> None:
     assert inactive_flags & con.LR_MONOCHROME
 
 
-def test_window_icon_host_updates_large_and_small_taskbar_icons() -> None:
+def test_window_icon_host_updates_large_and_small_taskbar_icons_nonblocking() -> None:
     calls, con, gui, api = _fake_win32_modules()
     with patch.dict(
         sys.modules,
@@ -83,7 +83,7 @@ def test_window_icon_host_updates_large_and_small_taskbar_icons() -> None:
     assert all(flags & con.LR_MONOCHROME for flags in inactive_flags)
     assert all(not flags & con.LR_MONOCHROME for flags in active_flags)
 
-    assert [call[2] for call in calls["send"]] == [
+    assert [call[2] for call in calls["post"]] == [
         con.ICON_BIG,
         con.ICON_SMALL,
         con.ICON_BIG,
