@@ -6,6 +6,8 @@ import threading
 from pathlib import Path
 from typing import Callable
 
+from .. import PRODUCT_DISPLAY_NAME, PRODUCT_NAME
+
 logger = logging.getLogger(__name__)
 
 
@@ -95,10 +97,10 @@ class WindowsTrayHost:
             flags,
             self._WM_TRAY,
             icon,
-            "WorkTrace",
-            "WorkTrace 仍在后台记录，可右键通知区域图标退出。",
+            PRODUCT_DISPLAY_NAME,
+            f"{PRODUCT_NAME} 仍在后台记录，可右键通知区域图标退出。",
             5000,
-            "WorkTrace",
+            PRODUCT_DISPLAY_NAME,
         )
         win32gui.Shell_NotifyIcon(win32gui.NIM_MODIFY, data)
 
@@ -111,7 +113,7 @@ class WindowsTrayHost:
             win32gui.NIF_ICON | win32gui.NIF_MESSAGE | win32gui.NIF_TIP,
             self._WM_TRAY,
             self._icon_handle,
-            "WorkTrace",
+            PRODUCT_DISPLAY_NAME,
         )
 
     def _add_icon(self) -> None:
@@ -155,7 +157,7 @@ class WindowsTrayHost:
             win32gui.RegisterClass(wc)
             self._hwnd = win32gui.CreateWindow(
                 class_name,
-                "WorkTrace Tray Host",
+                "Trace Tray Host",
                 0,
                 0,
                 0,
@@ -207,9 +209,9 @@ class WindowsTrayHost:
 
         menu = win32gui.CreatePopupMenu()
         try:
-            win32gui.AppendMenu(menu, win32con.MF_STRING, self._CMD_OPEN, "打开 WorkTrace")
+            win32gui.AppendMenu(menu, win32con.MF_STRING, self._CMD_OPEN, f"打开 {PRODUCT_NAME}")
             win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
-            win32gui.AppendMenu(menu, win32con.MF_STRING, self._CMD_EXIT, "退出 WorkTrace")
+            win32gui.AppendMenu(menu, win32con.MF_STRING, self._CMD_EXIT, f"退出 {PRODUCT_NAME}")
             x, y = win32gui.GetCursorPos()
             win32gui.SetForegroundWindow(hwnd)
             win32gui.TrackPopupMenu(
