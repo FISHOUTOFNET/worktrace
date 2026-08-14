@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from worktrace.runtime.post_privacy_startup import PostPrivacyStartupCoordinator
+
+pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.collector_runtime]
 
 
 class FakeAppControl:
