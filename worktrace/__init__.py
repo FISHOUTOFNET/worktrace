@@ -1,3 +1,3 @@
-"""WorkTrace v0.1 Lite."""
+"""有迹 application package."""
 
 __version__ = "0.1.0"
