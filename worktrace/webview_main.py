@@ -14,6 +14,7 @@ from .collector.single_instance import get_application_instance_coordinator
 from .desktop.install_bootstrap import consume_fd_work_install_intent
 from .desktop.shell import DesktopShellController
 from .desktop.update_shutdown import get_application_update_shutdown_coordinator
+from .desktop.windows_icons import WindowsWindowIconHost
 from .desktop.windows_tray import WindowsTrayHost
 from .integrations.fd_work.helper_bridge import FDWorkHelperBridge
 from .integrations.fd_work.interaction_coordinator import FDWorkInteractionCoordinator
@@ -298,16 +299,23 @@ def main(*, background: bool = False) -> int:
                 finally:
                     shell_holder["shell"].exit_application()
 
+            icon_path = desktop_resource_path("worktrace.ico")
             tray = WindowsTrayHost(
-                icon_path=desktop_resource_path("worktrace.ico"),
+                icon_path=icon_path,
                 on_open=lambda: shell_holder["shell"].show_window(),
                 on_exit=exit_application,
                 on_session_end=exit_application,
+            )
+            window_icons = WindowsWindowIconHost(
+                window_title=PRODUCT_DISPLAY_NAME,
+                icon_path=icon_path,
             )
             shell = DesktopShellController(
                 window=window,
                 tray=tray,
                 initial_hidden=initial_hidden,
+                window_icons=window_icons,
+                collection_active_provider=lambda: app_control.is_collection_active(),
             )
             shell_holder["shell"] = shell
             fd_work_controller.bind_main_focus_callback(shell.show_window)
