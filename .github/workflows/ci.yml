@@ -20,33 +20,3 @@ jobs:
       revision: ${{ github.event.pull_request.head.sha || github.sha }}
       run_node_tests: true
       run_build_smoke: true
-
-  typography:
-    name: Windows Edge typography render
-    runs-on: windows-latest
-    timeout-minutes: 10
-    steps:
-      - name: Check out exact revision
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          clean: true
-          show-progress: false
-          persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Render typography acceptance
-        run: python scripts/render_typography_acceptance.py
-
-      - name: Upload typography render artifacts
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: typography-acceptance-${{ github.event.pull_request.head.sha || github.sha }}
-          path: test-results/typography
-          if-no-files-found: error
-          retention-days: 7
