@@ -96,11 +96,7 @@ class WindowsWindowIconHost:
             wm_seticon = getattr(win32con, "WM_SETICON", 0x0080)
             icon_big = getattr(win32con, "ICON_BIG", 1)
             icon_small = getattr(win32con, "ICON_SMALL", 0)
-            # Do not synchronously SendMessage from the collection-state worker.
-            # During pywebview startup the HWND can exist before its UI thread is
-            # fully pumping messages; a cross-thread SendMessage can then block
-            # both startup and the status projection. The icon handles remain
-            # owned by this host, so posting WM_SETICON is safe and non-blocking.
+            # Post WM_SETICON so collection-state polling cannot block pywebview startup.
             win32gui.PostMessage(hwnd, wm_seticon, icon_big, large)
             win32gui.PostMessage(hwnd, wm_seticon, icon_small, small)
             with self._lock:
