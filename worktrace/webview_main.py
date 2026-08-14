@@ -222,7 +222,7 @@ def main(*, background: bool = False) -> int:
                 tray=tray,
                 initial_hidden=initial_hidden,
                 window_icons=window_icons,
-                collection_active_provider=app_control.is_collection_active,
+                collection_active_provider=lambda: app_control.is_collection_active(),
             )
             shell_holder["shell"] = shell
             _bind_shell_events(window, shell)
