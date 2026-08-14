@@ -172,7 +172,7 @@ def test_installer_exposes_desktop_and_fd_work_tasks_with_inline_notice() -> Non
         in source
     )
     assert (
-        'Name: "{autodesktop}\\WorkTrace"; Filename: "{app}\\{#MyAppExeName}"; '
+        'Name: "{autodesktop}\\有迹"; Filename: "{app}\\{#MyAppExeName}"; '
         'WorkingDir: "{app}"; IconFilename: "{app}\\{#MyAppExeName}"; Tasks: desktopicon'
         in source
     )
