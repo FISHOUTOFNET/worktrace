@@ -9,7 +9,7 @@ from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 from typing import Any
 
-from . import config
+from . import PRODUCT_DISPLAY_NAME, PRODUCT_NAME, config
 from .collector.single_instance import get_application_instance_coordinator
 from .desktop.install_bootstrap import consume_fd_work_install_intent
 from .desktop.shell import DesktopShellController
@@ -78,6 +78,10 @@ def _pywebview_runtime_version() -> str:
         return "unknown"
 
 
+def _brand_runtime_message(message: str) -> str:
+    return str(message).replace("WorkTrace", PRODUCT_NAME)
+
+
 def _show_blocking_startup_message(message: str) -> None:
     if not sys.platform.startswith("win"):
         return
@@ -86,8 +90,8 @@ def _show_blocking_startup_message(message: str) -> None:
 
         ctypes.windll.user32.MessageBoxW(
             None,
-            message,
-            "WorkTrace",
+            _brand_runtime_message(message),
+            PRODUCT_DISPLAY_NAME,
             0x00000010,
         )
     except Exception:
@@ -99,7 +103,7 @@ def _should_show_blocking_startup_message(*, background: bool) -> bool:
 
 
 def _report_runtime_missing(*, background: bool = False) -> int:
-    msg = missing_runtime_message()
+    msg = _brand_runtime_message(missing_runtime_message())
     print(msg, file=sys.stderr)
     if _should_show_blocking_startup_message(background=background):
         _show_blocking_startup_message(msg)
@@ -117,9 +121,10 @@ def _report_already_running(instance_coordinator) -> int:
 
 
 def _report_startup_failure(message: str, *, background: bool) -> int:
-    print(message, file=sys.stderr)
+    branded_message = _brand_runtime_message(message)
+    print(branded_message, file=sys.stderr)
     if _should_show_blocking_startup_message(background=background):
-        _show_blocking_startup_message(message)
+        _show_blocking_startup_message(branded_message)
     return 2
 
 
@@ -152,7 +157,7 @@ def _bind_shell_events(window, shell: DesktopShellController) -> None:
 
 
 _RENDERER_UNAVAILABLE_MESSAGE = (
-    "WorkTrace 无法使用 Microsoft Edge WebView2 renderer。"
+    f"{PRODUCT_NAME} 无法使用 Microsoft Edge WebView2 renderer。"
     "请安装或修复 WebView2 Runtime 后重新打开应用。"
 )
 
@@ -185,7 +190,7 @@ def main(*, background: bool = False) -> int:
         except Exception:
             logging.exception("activation Event preparation failed")
             return _report_startup_failure(
-                "WorkTrace 实例激活通道初始化失败，请重新打开应用。",
+                f"{PRODUCT_NAME} 实例激活通道初始化失败，请重新打开应用。",
                 background=background,
             )
         try:
@@ -198,7 +203,7 @@ def main(*, background: bool = False) -> int:
         except Exception:
             logging.exception("runtime initialization failed")
             return _report_startup_failure(
-                "WorkTrace 初始化失败，请打开应用处理后重试。",
+                f"{PRODUCT_NAME} 初始化失败，请打开应用处理后重试。",
                 background=background,
             )
         if initialized is False:
@@ -208,7 +213,7 @@ def main(*, background: bool = False) -> int:
         except Exception:
             logging.exception("activation listener startup failed")
             return _report_startup_failure(
-                "WorkTrace 实例激活监听启动失败，请重新打开应用。",
+                f"{PRODUCT_NAME} 实例激活监听启动失败，请重新打开应用。",
                 background=background,
             )
         if update_shutdown_prepared:
@@ -266,7 +271,7 @@ def main(*, background: bool = False) -> int:
         )
         try:
             window = webview.create_window(
-                title="WorkTrace",
+                title=PRODUCT_DISPLAY_NAME,
                 url=_versioned_resource_url(index_path),
                 js_api=bridge.shipping_api,
                 width=1080,
@@ -347,7 +352,7 @@ def main(*, background: bool = False) -> int:
     except Exception:
         logging.exception("webview composition failed")
         return _report_startup_failure(
-            "WorkTrace 启动失败，请重新打开应用。",
+            f"{PRODUCT_NAME} 启动失败，请重新打开应用。",
             background=background,
         )
     finally:
