@@ -141,10 +141,12 @@ try {
         throw "Uninstall left the running Trace process alive: $uninstallPid"
     }
 
-    $remainingStartup = Get-ItemPropertyValue `
-        -Path $runKey `
-        -Name "WorkTrace" `
-        -ErrorAction SilentlyContinue
+    $remainingStartup = (
+        Get-ItemProperty `
+            -Path $runKey `
+            -Name "WorkTrace" `
+            -ErrorAction SilentlyContinue
+    ).WorkTrace
     if ($null -ne $remainingStartup) {
         throw "Uninstall left startup value behind"
     }
