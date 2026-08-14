@@ -55,9 +55,9 @@ class TestSharedPackageBuild:
     def test_shared_action_builds_both_artifacts(self) -> None:
         source = PACKAGE_ACTION_YML.read_text(encoding="utf-8")
         assert "python -m PyInstaller --noconfirm --clean WorkTrace.spec" in source
-        assert "dist\Trace.exe" in source
-        assert "scripts\build_windows_installer.ps1" in source
-        assert "dist\Trace-Setup.exe" in source
+        assert "dist\\Trace.exe" in source
+        assert r"scripts\build_windows_installer.ps1" in source
+        assert "dist\\Trace-Setup.exe" in source
 
 
 class TestInstallerValidationLayer:
@@ -87,9 +87,9 @@ class TestInstallerValidationLayer:
 
     def test_installer_runtime_script_keeps_upgrade_and_uninstall_contract(self) -> None:
         source = INSTALLER_SMOKE.read_text(encoding="utf-8")
-        assert 'Phase "First install"' in source
-        assert 'Phase "Upgrade install"' in source
-        assert 'Phase "Uninstall"' in source
+        assert '-Operation "First install"' in source
+        assert '-Operation "Upgrade install"' in source
+        assert '-Operation "Uninstall"' in source
         assert "/NOFORCECLOSEAPPLICATIONS" in source
         assert "Upgrade left legacy WorkTrace.exe behind" in source
         assert "Uninstall left startup value behind" in source

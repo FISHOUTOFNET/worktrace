@@ -102,6 +102,7 @@ def test_only_permanent_workflows_and_no_agent_helpers() -> None:
     expected = {
         "_validation.yml",
         "ci.yml",
+        "installer-validation.yml",
         "performance-validation.yml",
         "standard-timing-validation.yml",
     }

@@ -28,7 +28,7 @@ function Invoke-CheckedProcess {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [Parameter(Mandatory = $true)][string]$Phase
+        [Parameter(Mandatory = $true)][string]$Operation
     )
 
     $process = Start-Process `
@@ -38,7 +38,7 @@ function Invoke-CheckedProcess {
         -Wait `
         -PassThru
     if ($process.ExitCode -ne 0) {
-        throw "$Phase exited with code $($process.ExitCode)"
+        throw "$Operation exited with code $($process.ExitCode)"
     }
 }
 
@@ -55,7 +55,7 @@ Remove-ItemProperty `
 try {
     Invoke-CheckedProcess `
         -FilePath $setup `
-        -Phase "First install" `
+        -Operation "First install" `
         -Arguments @(
             "/VERYSILENT",
             "/SUPPRESSMSGBOXES",
@@ -91,7 +91,7 @@ try {
 
     Invoke-CheckedProcess `
         -FilePath $setup `
-        -Phase "Upgrade install" `
+        -Operation "Upgrade install" `
         -Arguments @(
             "/VERYSILENT",
             "/SUPPRESSMSGBOXES",
@@ -130,7 +130,7 @@ try {
 
     Invoke-CheckedProcess `
         -FilePath $uninstaller `
-        -Phase "Uninstall" `
+        -Operation "Uninstall" `
         -Arguments @(
             "/VERYSILENT",
             "/SUPPRESSMSGBOXES",

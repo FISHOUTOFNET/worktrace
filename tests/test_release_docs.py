@@ -25,6 +25,13 @@ AI_CONTEXT_PATH = REPO_ROOT / "docs" / "ai-context-guide.md"
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 CI_PATH = WORKFLOW_DIR / "ci.yml"
 REUSABLE_VALIDATION_PATH = WORKFLOW_DIR / "_validation.yml"
+INSTALLER_VALIDATION_PATH = WORKFLOW_DIR / "installer-validation.yml"
+PACKAGE_ACTION_PATH = (
+    REPO_ROOT / ".github" / "actions" / "build-windows-package" / "action.yml"
+)
+INSTALLER_RUNTIME_SMOKE_PATH = (
+    REPO_ROOT / "scripts" / "ci" / "installer_runtime_smoke.ps1"
+)
 ACCEPTANCE_PATH = WORKFLOW_DIR / "acceptance.yml"
 BUILD_DEP_CANDIDATES = [
     REPO_ROOT / "requirements-dev.txt",
@@ -71,7 +78,13 @@ def test_release_checklist_exists():
 
 def test_release_validation_doc_and_workflows_exist():
     assert VALIDATION_PATH.is_file()
-    for path in (CI_PATH, REUSABLE_VALIDATION_PATH):
+    for path in (
+        CI_PATH,
+        REUSABLE_VALIDATION_PATH,
+        INSTALLER_VALIDATION_PATH,
+        PACKAGE_ACTION_PATH,
+        INSTALLER_RUNTIME_SMOKE_PATH,
+    ):
         assert path.is_file()
     assert not ACCEPTANCE_PATH.exists()
 
@@ -96,9 +109,12 @@ def test_release_validation_contains_required_baseline_items(phrase):
     assert phrase in validation, f"release validation missing phrase: {phrase}"
 
 
-def test_ci_workflows_contain_required_release_smoke_steps():
+def test_ci_layers_contain_required_release_smoke_steps():
     standard = _read_text(CI_PATH)
     reusable = _read_text(REUSABLE_VALIDATION_PATH)
+    package_action = _read_text(PACKAGE_ACTION_PATH)
+    installer = _read_text(INSTALLER_VALIDATION_PATH)
+    installer_runtime = _read_text(INSTALLER_RUNTIME_SMOKE_PATH)
 
     assert "pull_request:" in standard
     assert "push:" in standard
@@ -111,14 +127,32 @@ def test_ci_workflows_contain_required_release_smoke_steps():
         "pip install --disable-pip-version-check -q -r requirements-dev.txt",
         "python scripts/run_pytest_ci.py",
         "node --test tests/webview/*.test.js",
-        "python -m PyInstaller --noconfirm --clean WorkTrace.spec",
-        r"scripts\build_windows_installer.ps1",
+        "uses: ./.github/actions/build-windows-package",
         "actions/upload-artifact@v6",
         "validation-diagnostics-${{ inputs.revision }}",
         "retention-days: 3",
     ):
         assert phrase in reusable, f"reusable validation missing phrase: {phrase}"
 
-    combined = "\n".join((standard, reusable))
+    for phrase in (
+        'python-version: "3.11"',
+        "pip install --disable-pip-version-check -q -r requirements-dev.txt",
+        "python -m PyInstaller --noconfirm --clean WorkTrace.spec",
+        r"scripts\build_windows_installer.ps1",
+        r"dist\Trace.exe",
+        r"dist\Trace-Setup.exe",
+    ):
+        assert phrase in package_action, f"package action missing phrase: {phrase}"
+
+    assert "uses: ./.github/actions/build-windows-package" in installer
+    assert r"scripts\ci\installer_runtime_smoke.ps1" in installer
+    assert 'tags: ["v*"]' in installer
+    assert "workflow_dispatch:" in installer
+    assert "Upgrade install" in installer_runtime
+    assert "Uninstall" in installer_runtime
+
+    combined = "\n".join(
+        (standard, reusable, package_action, installer, installer_runtime)
+    )
     assert "3.12" not in combined
     assert "run_python312" not in combined

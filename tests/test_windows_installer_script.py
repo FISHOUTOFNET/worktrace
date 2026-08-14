@@ -12,6 +12,11 @@ ISS_PATH = ROOT / "installer" / "WorkTrace.iss"
 BUILD_PATH = ROOT / "scripts" / "build_windows_installer.ps1"
 RELEASE_BUILD_PATH = ROOT / "scripts" / "build_windows_release.ps1"
 INSTALLED_LAUNCH_SMOKE_PATH = ROOT / "scripts" / "smoke_installed_launch.ps1"
+PACKAGE_ACTION_PATH = (
+    ROOT / ".github" / "actions" / "build-windows-package" / "action.yml"
+)
+INSTALLER_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "installer-validation.yml"
+INSTALLER_RUNTIME_SMOKE_PATH = ROOT / "scripts" / "ci" / "installer_runtime_smoke.ps1"
 
 
 def test_inno_setup_is_per_user_and_uses_trace_install_identity() -> None:
@@ -136,24 +141,28 @@ def test_retired_copy_installer_is_removed() -> None:
 
 
 def test_ci_prepares_one_pinned_verified_inno_setup_version() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "_validation.yml").read_text(encoding="utf-8")
-    assert "innosetup-6.7.3.exe" in workflow
-    assert "is-6_7_3" in workflow
-    assert "9C73C3BAE7ED48D44112A0F48E66742C00090BDB5BEF71D9D3C056C66E97B732" in workflow
-    assert "ISCC_PATH=" in workflow
+    action = PACKAGE_ACTION_PATH.read_text(encoding="utf-8")
+    assert "innosetup-6.7.3.exe" in action
+    assert "is-6_7_3" in action
+    assert "9C73C3BAE7ED48D44112A0F48E66742C00090BDB5BEF71D9D3C056C66E97B732" in action
+    assert "ISCC_PATH=" in action
 
 
 def test_ci_exercises_running_app_upgrade_and_uninstall_paths() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "_validation.yml").read_text(encoding="utf-8")
-    assert "Exercise installer upgrade runtime path" in workflow
-    assert "worktrace-installer-smoke" in workflow
-    assert '"C:\\legacy\\WorkTrace.exe" --background' in workflow
-    assert '"Upgrade install"' in workflow
-    assert workflow.count('/TASKS=`"startup`"') >= 2
-    assert "/NOFORCECLOSEAPPLICATIONS" in workflow
-    assert workflow.count("-KeepRunning") >= 2
-    assert "unins000.exe" in workflow
-    assert "Get-ItemPropertyValue" in workflow
+    workflow = INSTALLER_WORKFLOW_PATH.read_text(encoding="utf-8")
+    runtime = INSTALLER_RUNTIME_SMOKE_PATH.read_text(encoding="utf-8")
+
+    assert "Exercise installer runtime lifecycle" in workflow
+    assert r"scripts\ci\installer_runtime_smoke.ps1" in workflow
+    assert "worktrace-installer-smoke" in runtime
+    assert '"C:\\legacy\\WorkTrace.exe" --background' in runtime
+    assert '"Upgrade install"' in runtime
+    assert runtime.count('/TASKS=`"startup`"') >= 2
+    assert "/NOFORCECLOSEAPPLICATIONS" in runtime
+    assert runtime.count("-KeepRunning") >= 2
+    assert "unins000.exe" in runtime
+    assert "Get-ItemPropertyValue" in runtime
+    assert "Get-ItemProperty" in runtime
 
 
 def test_installed_launch_smoke_targets_trace_but_keeps_legacy_state_root() -> None:

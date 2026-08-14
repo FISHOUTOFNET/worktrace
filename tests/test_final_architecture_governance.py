@@ -218,6 +218,7 @@ def test_no_acceptance_temporary_workflow_or_agent_script():
     assert workflow_names == {
         "ci.yml",
         "_validation.yml",
+        "installer-validation.yml",
         "performance-validation.yml",
         "standard-timing-validation.yml",
     }

@@ -22,6 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_ALLOWLIST = {
     "_validation.yml",
     "ci.yml",
+    "installer-validation.yml",
     "performance-validation.yml",
     "standard-timing-validation.yml",
 }
