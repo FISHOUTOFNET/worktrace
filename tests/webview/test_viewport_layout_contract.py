@@ -52,6 +52,7 @@ def test_overview_keeps_summary_fixed_and_delegates_scroll_to_recent_list():
 
     assert "flex: 1 1 auto" in recent_list
     assert "min-height: 0" in recent_list
+    assert "display: block" in recent_list
     assert "overflow: auto" in recent_list
     assert "scrollbar-gutter: stable" in recent_list
 
