@@ -98,6 +98,60 @@ th,
     max-width: 100%;
 }
 
+/* Keep viewport ownership stable: pages that genuinely scroll reserve their gutter,
+   while Overview and Timeline delegate scrolling to their content panes. */
+.page {
+    min-height: 0;
+    scrollbar-gutter: stable;
+}
+
+.overview-page.active,
+.timeline-page.active {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.overview-page > .page-header,
+.overview-page > .inline-alert,
+.overview-page > .current-activity,
+.overview-page > .overview-project-bar,
+.timeline-page > .page-header,
+.timeline-page > .timeline-toolbar,
+.timeline-page > .inline-alert,
+.timeline-page > .loading-state {
+    flex: 0 0 auto;
+}
+
+.recent-section {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+#recent-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    scrollbar-gutter: stable;
+}
+
+.timeline-workspace {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+}
+
+.timeline-list,
+.timeline-inspector {
+    overflow: auto;
+    scrollbar-gutter: stable;
+}
+
 @media (min-width: 960px) {
     .statistics-date-range { min-width: 310px; }
     .statistics-all-time-label { width: 100%; }
