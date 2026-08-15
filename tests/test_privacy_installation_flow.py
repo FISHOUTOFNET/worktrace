@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from worktrace.api.settings_api import get_first_run_notice_for_webview
 from worktrace.privacy_policy import (
     PRIVACY_POLICY_EFFECTIVE_DATE,
     PRIVACY_POLICY_TEXT,
@@ -18,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_PATH = REPO_ROOT / "installer" / "WorkTrace.iss"
 SPEC_PATH = REPO_ROOT / "WorkTrace.spec"
 ENTRY_PATH = REPO_ROOT / "scripts" / "pyinstaller_entry.py"
+WEBVIEW_MAIN_PATH = REPO_ROOT / "worktrace" / "webview_main.py"
 POLICY_PATH = REPO_ROOT / "worktrace" / "privacy_policy_zh-CN.txt"
 
 
@@ -62,6 +64,20 @@ def test_privacy_gate_rejects_stale_installer_policy_version(temp_db):
     assert get_privacy_notice_version() == "2"
 
 
+def test_first_run_fallback_uses_same_versioned_policy(temp_db):
+    result = get_first_run_notice_for_webview()
+    assert result["ok"] is True
+    notice = result["notice"]
+
+    assert notice["title"] == "隐私与数据"
+    assert notice["policy_title"] == "有迹隐私政策"
+    assert notice["policy_version"] == PRIVACY_POLICY_VERSION
+    assert notice["effective_date"] == PRIVACY_POLICY_EFFECTIVE_DATE
+    assert notice["text"] == PRIVACY_POLICY_TEXT
+    assert notice["accepted"] is False
+    assert notice["accept_required"] is True
+
+
 def test_packaged_trace_contains_same_privacy_policy_resource():
     spec = _read(SPEC_PATH)
     assert "privacy_policy_zh-CN.txt" in spec
@@ -102,3 +118,13 @@ def test_installer_privacy_acceptance_cli_is_narrow_and_version_checked():
     assert 'argv[3] != "installer"' in source
     assert "accept_privacy_notice_version(argv[1])" in source
     assert "_run_installer_privacy_acceptance" in source
+
+
+def test_runtime_settings_projection_removes_read_only_privacy_status_noise():
+    source = _read(WEBVIEW_MAIN_PATH)
+
+    assert "healthSummary.remove()" in source
+    assert "核心工作轨迹本地保存" in source
+    assert "我已阅读并了解" in source
+    assert "查看《有迹隐私政策》" in source
+    assert "了解有迹处理哪些数据、数据存储在哪里，以及如何管理这些数据。" in source
