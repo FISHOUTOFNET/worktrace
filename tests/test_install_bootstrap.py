@@ -162,15 +162,23 @@ def test_composition_root_consumes_intent_before_authorized_startup() -> None:
     assert build_index < consume_index < startup_index
 
 
-def test_installer_exposes_desktop_and_fd_work_tasks_with_inline_notice() -> None:
+def test_installer_exposes_default_tasks_and_red_fd_work_notice() -> None:
     source = (ROOT / "installer" / "WorkTrace.iss").read_text(encoding="utf-8")
+    task_lines = [
+        line for line in source.splitlines() if line.startswith("Name: ")
+    ]
 
     assert 'GroupDescription: "附加任务："' in source
+    assert 'Name: startup; Description: "登录 Windows 时自动启动有迹"' in source
     assert 'Name: desktopicon; Description: "创建桌面快捷方式"' in source
-    assert (
-        'Name: fdwork; Description: "启用 FD Work 插件（仅方达律师事务所可用）"'
-        in source
-    )
+    assert 'Name: fdwork; Description: "启用 FD Work 插件"' in source
+
+    for task_name in ("startup", "desktopicon", "fdwork"):
+        task_line = next(
+            line for line in task_lines if line.startswith(f"Name: {task_name};")
+        )
+        assert "Flags: unchecked" not in task_line
+
     assert (
         'Name: "{autodesktop}\\有迹"; Filename: "{app}\\{#MyAppExeName}"; '
         'WorkingDir: "{app}"; IconFilename: "{app}\\{#MyAppExeName}"; Tasks: desktopicon'
@@ -180,5 +188,12 @@ def test_installer_exposes_desktop_and_fd_work_tasks_with_inline_notice() -> Non
     assert 'ValueName: "EnableFDWork"' in source
     assert "Tasks: fdwork" in source
     assert "Tasks: not fdwork" in source
-    assert "FDWorkNotice" not in source
-    assert "TasksList.Height :=" not in source
+
+    assert "FDWorkTaskNotice: TNewStaticText;" in source
+    assert "FDWorkTaskNotice.Parent := WizardForm.SelectTasksPage;" in source
+    assert "FDWorkTaskNotice.Font.Color := clRed;" in source
+    assert (
+        "'FD Work 仅方达律师事务所用户可用；非方达用户请取消勾选。';"
+        in source
+    )
+    assert "ConfigureFDWorkTaskNotice;" in source
