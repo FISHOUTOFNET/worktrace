@@ -118,7 +118,10 @@ def test_build_script_keeps_trace_output_contract() -> None:
     assert "ISCC_PATH" in source
     assert "installer\\WorkTrace.iss" in source
     assert "dist\\Trace.exe" in source
-    assert "dist\\Trace-Setup.exe" in source
+    assert "dist\\Trace-Setup-$version.exe" in source
+    assert '"Trace-Setup.exe"' in source
+    assert "MyAppVersion" in source
+    assert "[regex]::Replace" in source
     assert "/DMyAppExe=" in source
     assert "/O$distPath" in source
     assert "/F$name" in source
@@ -141,11 +144,14 @@ def test_build_script_auto_discovers_local_inno_setup_installation() -> None:
 def test_release_build_generates_trace_artifacts() -> None:
     source = RELEASE_BUILD_PATH.read_text(encoding="utf-8")
     assert 'Join-Path $repoRoot "dist\\Trace.exe"' in source
+    assert 'Join-Path $repoRoot "dist\\Trace-$version.exe"' in source
+    assert 'Join-Path $repoRoot "dist\\Trace-Setup-$version.exe"' in source
     assert 'Join-Path $repoRoot "dist\\Trace-Setup.exe"' in source
     pyinstaller_call = "& python -m PyInstaller --noconfirm --clean WorkTrace.spec"
     assert pyinstaller_call in source
     assert "build_windows_installer.ps1" in source
     assert "PyInstaller completed without generating dist\\Trace.exe" in source
+    assert "Installer build completed without generating dist\\Trace-Setup-$version.exe" in source
     assert "Installer build completed without generating dist\\Trace-Setup.exe" in source
 
 
