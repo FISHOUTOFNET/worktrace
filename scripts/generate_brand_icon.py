@@ -4,11 +4,15 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 ICON_SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
 CANVAS_SIZE = 256
 GLYPH = "迹"
+# Keep the icon in the same muted blue family as the shipping UI accent
+# (#226DA8), with only enough luminance change to keep the desktop icon crisp.
+BRAND_GRADIENT_START = (40, 117, 173)  # #2875AD
+BRAND_GRADIENT_END = (30, 101, 155)  # #1E659B
 
 
 def _font_candidates() -> list[Path]:
@@ -32,20 +36,30 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont:
 def _gradient_background(size: int) -> Image.Image:
     image = Image.new("RGBA", (size, size))
     pixels = image.load()
-    start = (49, 87, 213)
-    end = (23, 55, 143)
     denominator = max(1, 2 * (size - 1))
     for y in range(size):
         for x in range(size):
             t = (x + y) / denominator
             pixels[x, y] = tuple(
-                round(start[channel] * (1 - t) + end[channel] * t)
+                round(
+                    BRAND_GRADIENT_START[channel] * (1 - t)
+                    + BRAND_GRADIENT_END[channel] * t
+                )
                 for channel in range(3)
             ) + (255,)
     return image
 
 
-def render_icon(size: int = CANVAS_SIZE) -> Image.Image:
+def _grayscale_image(image: Image.Image) -> Image.Image:
+    """Return a deterministic grayscale RGBA derivative preserving alpha."""
+
+    rgba = image.convert("RGBA")
+    alpha = rgba.getchannel("A")
+    gray = ImageOps.grayscale(rgba.convert("RGB"))
+    return Image.merge("RGBA", (gray, gray, gray, alpha))
+
+
+def render_icon(size: int = CANVAS_SIZE, *, grayscale: bool = False) -> Image.Image:
     background = _gradient_background(size)
     mask = Image.new("L", (size, size), 0)
     mask_draw = ImageDraw.Draw(mask)
@@ -71,13 +85,13 @@ def render_icon(size: int = CANVAS_SIZE) -> Image.Image:
         stroke_width=1,
         stroke_fill=(255, 255, 255, 255),
     )
-    return canvas
+    return _grayscale_image(canvas) if grayscale else canvas
 
 
-def generate_icon(output_path: str | Path) -> Path:
+def generate_icon(output_path: str | Path, *, grayscale: bool = False) -> Path:
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    image = render_icon()
+    image = render_icon(grayscale=grayscale)
     image.save(output, format="ICO", sizes=[(size, size) for size in ICON_SIZES])
     return output
 
@@ -92,8 +106,13 @@ def main() -> int:
         default="build/brand/trace.ico",
         help="ICO output path",
     )
+    parser.add_argument(
+        "--grayscale",
+        action="store_true",
+        help="Generate the paused grayscale derivative",
+    )
     args = parser.parse_args()
-    print(generate_icon(args.output))
+    print(generate_icon(args.output, grayscale=args.grayscale))
     return 0
 
 
