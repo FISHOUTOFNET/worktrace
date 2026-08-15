@@ -6,7 +6,7 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
-PRIVACY_POLICY_VERSION = "2"
+PRIVACY_POLICY_VERSION = "1"
 PRIVACY_POLICY_EFFECTIVE_DATE = "2026-08-15"
 PRIVACY_POLICY_TITLE = "有迹隐私政策"
 PRIVACY_NOTICE_TITLE = "隐私与数据"
