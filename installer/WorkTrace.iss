@@ -32,9 +32,9 @@ CloseApplications=force
 RestartApplications=no
 
 [Tasks]
-Name: startup; Description: "登录 Windows 时自动启动有迹"; GroupDescription: "附加任务："; Flags: unchecked
-Name: desktopicon; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："; Flags: unchecked
-Name: fdwork; Description: "启用 FD Work 插件（仅方达律师事务所可用）"; GroupDescription: "附加任务："; Flags: unchecked
+Name: startup; Description: "登录 Windows 时自动启动有迹"; GroupDescription: "附加任务："
+Name: desktopicon; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："
+Name: fdwork; Description: "启用 FD Work 插件"; GroupDescription: "附加任务："
 
 [Files]
 Source: "{#MyAppExe}"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion
@@ -64,6 +64,9 @@ const
   WebView2BootstrapperUrl = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703';
   WebView2BootstrapperName = 'MicrosoftEdgeWebview2Setup.exe';
   MaintenanceShutdownArgument = '--shutdown-for-maintenance';
+
+var
+  FDWorkTaskNotice: TNewStaticText;
 
 function IsUpgradeInstall: Boolean;
 begin
@@ -179,6 +182,31 @@ begin
     Result := True;
 end;
 
+procedure ConfigureFDWorkTaskNotice;
+var
+  NoticeHeight: Integer;
+  NoticeSpacing: Integer;
+begin
+  NoticeHeight := ScaleY(28);
+  NoticeSpacing := ScaleY(6);
+
+  WizardForm.TasksList.Height :=
+    WizardForm.TasksList.Height - NoticeHeight - NoticeSpacing;
+
+  FDWorkTaskNotice := TNewStaticText.Create(WizardForm);
+  FDWorkTaskNotice.Parent := WizardForm.SelectTasksPage.Surface;
+  FDWorkTaskNotice.Left := WizardForm.TasksList.Left;
+  FDWorkTaskNotice.Top :=
+    WizardForm.TasksList.Top + WizardForm.TasksList.Height + NoticeSpacing;
+  FDWorkTaskNotice.Width := WizardForm.TasksList.Width;
+  FDWorkTaskNotice.Height := NoticeHeight;
+  FDWorkTaskNotice.AutoSize := False;
+  FDWorkTaskNotice.WordWrap := True;
+  FDWorkTaskNotice.Caption :=
+    'FD Work 仅方达律师事务所用户可用；非方达用户请取消勾选。';
+  FDWorkTaskNotice.Font.Color := clRed;
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   BootstrapperPath: String;
@@ -251,6 +279,8 @@ end;
 
 procedure InitializeWizard;
 begin
+  ConfigureFDWorkTaskNotice;
+
   if not IsUpgradeInstall then
     WizardSelectTasks('startup')
   else if ExistingStartupEnabled then
