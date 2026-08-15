@@ -6,7 +6,14 @@ import os
 from typing import Any
 
 from ..config import resolve_paths
-from ..constants import PRIVACY_NOTICE_TEXT
+from ..privacy_policy import (
+    PRIVACY_NOTICE_HIGHLIGHTS,
+    PRIVACY_NOTICE_TITLE,
+    PRIVACY_POLICY_EFFECTIVE_DATE,
+    PRIVACY_POLICY_TEXT,
+    PRIVACY_POLICY_TITLE,
+    PRIVACY_POLICY_VERSION,
+)
 from ..services import (
     database_maintenance_service,
     export_service,
@@ -123,6 +130,8 @@ def get_settings_privacy_status() -> dict[str, Any]:
                     "accepted": notice_accepted,
                     "view_available_in_webview": True,
                     "accept_required": not notice_accepted,
+                    "policy_version": PRIVACY_POLICY_VERSION,
+                    "effective_date": PRIVACY_POLICY_EFFECTIVE_DATE,
                 },
             },
         }
@@ -308,29 +317,23 @@ def set_clipboard_capture_enabled_for_webview(enabled: bool) -> dict[str, Any]:
         return {"ok": False, "error": "设置剪贴板记录失败"}
 
 
-_FIRST_RUN_NOTICE_HIGHLIGHTS = [
-    "本地保存",
-    "不截屏录屏",
-    "不主动读正文",
-    "用户可清空",
-]
-_FIRST_RUN_NOTICE_TITLE = "有迹隐私说明"
-
-
 def get_first_run_notice_for_webview() -> dict[str, Any]:
     try:
         accepted = first_run_notice_accepted()
     except Exception:
         return {
             "ok": False,
-            "error": "隐私说明加载失败。为保护隐私，有迹暂不会启动记录。请重启应用或重新安装。",
+            "error": "隐私政策加载失败。为保护隐私，有迹暂不会启动记录。请重启应用或重新安装。",
         }
     return {
         "ok": True,
         "notice": {
-            "title": _FIRST_RUN_NOTICE_TITLE,
-            "text": PRIVACY_NOTICE_TEXT,
-            "highlights": list(_FIRST_RUN_NOTICE_HIGHLIGHTS),
+            "title": PRIVACY_NOTICE_TITLE,
+            "policy_title": PRIVACY_POLICY_TITLE,
+            "policy_version": PRIVACY_POLICY_VERSION,
+            "effective_date": PRIVACY_POLICY_EFFECTIVE_DATE,
+            "text": PRIVACY_POLICY_TEXT,
+            "highlights": list(PRIVACY_NOTICE_HIGHLIGHTS),
             "accepted": accepted,
             "accept_required": not accepted,
         },
@@ -341,7 +344,7 @@ def accept_first_run_notice_for_webview() -> dict[str, Any]:
     try:
         accept_first_run_notice()
     except Exception:
-        return {"ok": False, "error": "确认隐私说明失败"}
+        return {"ok": False, "error": "确认隐私政策失败"}
     return {"ok": True, "accepted": True}
 
 
