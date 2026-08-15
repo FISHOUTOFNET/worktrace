@@ -1,5 +1,5 @@
 name: Build Windows package
-description: Build and verify Trace.exe and Trace-Setup.exe without exercising installer runtime lifecycle.
+description: Build and verify versioned 有迹 Windows executable and installer artifacts.
 
 runs:
   using: composite
@@ -17,6 +17,17 @@ runs:
       shell: pwsh
       run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt
 
+    - name: Resolve application version
+      shell: pwsh
+      run: |
+        $version = (python -c 'from worktrace.version import __version__; print(__version__)').Trim()
+        if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+          throw "Invalid application version: $version"
+        }
+        "TRACE_VERSION=$version" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding UTF8
+        "trace_version=$version" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+        Write-Host "trace_version=$version"
+
     - name: Record pywebview runtime
       shell: pwsh
       run: |
@@ -33,6 +44,11 @@ runs:
       run: |
         if (-not (Test-Path -LiteralPath "dist\Trace.exe")) {
           throw "dist\Trace.exe was not generated"
+        }
+        $versionedExe = "dist\Trace-$env:TRACE_VERSION.exe"
+        Copy-Item -Force -LiteralPath "dist\Trace.exe" -Destination $versionedExe
+        if (-not (Test-Path -LiteralPath $versionedExe)) {
+          throw "$versionedExe was not generated"
         }
 
     - name: Prepare pinned Inno Setup compiler
@@ -79,6 +95,10 @@ runs:
     - name: Verify installer
       shell: pwsh
       run: |
+        $versionedSetup = "dist\Trace-Setup-$env:TRACE_VERSION.exe"
+        if (-not (Test-Path -LiteralPath $versionedSetup)) {
+          throw "$versionedSetup was not generated"
+        }
         if (-not (Test-Path -LiteralPath "dist\Trace-Setup.exe")) {
-          throw "dist\Trace-Setup.exe was not generated"
+          throw "dist\Trace-Setup.exe compatibility alias was not generated"
         }

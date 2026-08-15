@@ -9,11 +9,22 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptDir "..")
 
+[string]$version = (& python -c 'from worktrace.version import __version__; print(__version__)').Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {
+    throw "Failed to resolve the 有迹 application version."
+}
+if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+    throw "Invalid 有迹 application version '$version'; expected MAJOR.MINOR.PATCH."
+}
+
 if (-not $ExePath) { $ExePath = Join-Path $repoRoot "dist\Trace.exe" }
-if (-not $OutputPath) { $OutputPath = Join-Path $repoRoot "dist\Trace-Setup.exe" }
+$useDefaultOutput = -not $OutputPath
+if ($useDefaultOutput) {
+    $OutputPath = Join-Path $repoRoot "dist\Trace-Setup-$version.exe"
+}
 
 $exe = Resolve-Path -LiteralPath $ExePath
-$installerScript = Resolve-Path -LiteralPath (Join-Path $repoRoot "installer\WorkTrace.iss")
+$installerSource = Resolve-Path -LiteralPath (Join-Path $repoRoot "installer\WorkTrace.iss")
 $target = [System.IO.Path]::GetFullPath($OutputPath)
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
 
@@ -56,10 +67,38 @@ if (-not $ISCCPath -or -not (Test-Path -LiteralPath $ISCCPath)) {
     throw "Inno Setup compiler ISCC.exe was not found. Pass -ISCCPath or set ISCC_PATH."
 }
 
+$installerText = Get-Content -Raw -LiteralPath $installerSource
+$versionPattern = '(?m)^#define MyAppVersion\s+"[^"]+"\s*$'
+$versionMatches = [regex]::Matches($installerText, $versionPattern)
+if ($versionMatches.Count -ne 1) {
+    throw "Installer source must contain exactly one MyAppVersion definition."
+}
+$installerText = [regex]::Replace(
+    $installerText,
+    $versionPattern,
+    "#define MyAppVersion `"$version`""
+)
+$generatedInstaller = Join-Path (Split-Path -Parent $installerSource) "WorkTrace.generated.$PID.iss"
+Set-Content -LiteralPath $generatedInstaller -Value $installerText -Encoding UTF8
+
 $name = [System.IO.Path]::GetFileNameWithoutExtension($target)
 $distPath = Split-Path -Parent $target
-& $ISCCPath "/Qp" "/DMyAppExe=$exe" "/O$distPath" "/F$name" $installerScript
-if ($LASTEXITCODE -ne 0) {
-    throw "Inno Setup compiler failed with exit code $LASTEXITCODE"
+try {
+    & $ISCCPath "/Qp" "/DMyAppExe=$exe" "/O$distPath" "/F$name" $generatedInstaller
+    if ($LASTEXITCODE -ne 0) {
+        throw "Inno Setup compiler failed with exit code $LASTEXITCODE"
+    }
+} finally {
+    Remove-Item -Force -LiteralPath $generatedInstaller -ErrorAction SilentlyContinue
 }
+
+if (-not (Test-Path -LiteralPath $target)) {
+    throw "Installer build completed without generating $target"
+}
+
+if ($useDefaultOutput) {
+    $compatTarget = Join-Path $distPath "Trace-Setup.exe"
+    Copy-Item -Force -LiteralPath $target -Destination $compatTarget
+}
+
 Get-Item -LiteralPath $target

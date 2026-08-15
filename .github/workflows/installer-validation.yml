@@ -23,6 +23,9 @@ on:
       - "scripts/ci/installer_runtime_smoke.ps1"
       - "scripts/pyinstaller_entry.py"
       - "scripts/smoke_installed_launch.ps1"
+      - "worktrace/__init__.py"
+      - "worktrace/constants.py"
+      - "worktrace/version.py"
       - "worktrace/assets/**"
       - "worktrace/desktop/**"
       - "worktrace/main.py"
@@ -79,8 +82,6 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: trace-windows-${{ env.VALIDATION_REVISION }}
-          path: |
-            dist/Trace.exe
-            dist/Trace-Setup.exe
+          path: dist/Trace*.exe
           if-no-files-found: error
           retention-days: 7

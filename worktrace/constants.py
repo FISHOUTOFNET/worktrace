@@ -1,7 +1,8 @@
 from .privacy_policy import PRIVACY_POLICY_TEXT, PRIVACY_POLICY_VERSION
+from .version import __version__
 
 APP_NAME = "有迹"
-APP_VERSION = "0.1.0"
+APP_VERSION = __version__
 
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
