@@ -170,6 +170,36 @@ def _navigation_brand_script() -> str:
     }} else if (typeof compactSidebar.addListener === 'function') {{
         compactSidebar.addListener(syncBrandMark);
     }}
+
+    // Settings shows controls and actionable exceptions, not a healthy-state
+    // dashboard. Abnormal recovery remains in its dedicated recovery card.
+    const healthSummary = document.getElementById('settings-health-summary');
+    if (healthSummary) healthSummary.remove();
+
+    // Avoid an absolute local-only claim: optional integrations can perform
+    // user-initiated network operations while core work-trace data is local-first.
+    const localStatus = document.querySelector('.topbar-local');
+    if (localStatus) localStatus.textContent = '核心工作轨迹本地保存';
+
+    const privacyAccept = document.getElementById('first-run-notice-accept-btn');
+    if (privacyAccept) privacyAccept.textContent = '我已阅读并了解';
+
+    // Privacy is an information/action entry, not an "accepted" status setting.
+    const privacyButton = document.getElementById('settings-privacy-notice-btn');
+    if (privacyButton) {{
+        privacyButton.textContent = '查看《有迹隐私政策》';
+        const row = privacyButton.closest('.setting-row');
+        const copy = row ? row.querySelector('span') : null;
+        if (copy) {{
+            while (copy.firstChild) copy.removeChild(copy.firstChild);
+            const title = document.createElement('strong');
+            title.textContent = '隐私政策';
+            const detail = document.createElement('small');
+            detail.textContent = '了解有迹处理哪些数据、数据存储在哪里，以及如何管理这些数据。';
+            copy.appendChild(title);
+            copy.appendChild(detail);
+        }}
+    }}
 }})();
 """.strip()
 
