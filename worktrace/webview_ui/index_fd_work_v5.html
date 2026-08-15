@@ -162,8 +162,7 @@
                             <label class="setting-row" for="settings-launch-at-login-toggle"><span><strong>登录 Windows 时自动启动有迹</strong></span><span class="toggle-wrap"><span id="settings-launch-at-login-toggle-status" class="toggle-status">未加载</span><input id="settings-launch-at-login-toggle" type="checkbox" disabled></span></label>
                             <label id="settings-privacy-card" class="setting-row" for="settings-clipboard-toggle"><span><strong id="settings-clipboard-toggle-label">记录剪贴板复制的文本</strong></span><span class="toggle-wrap"><span id="settings-clipboard-toggle-status" class="toggle-status">未加载</span><input id="settings-clipboard-toggle" type="checkbox" disabled></span></label>
                             <div id="settings-health-summary" class="setting-row"><span><strong>系统状态</strong><small>正在检查记录服务</small></span><span class="badge">检查中</span></div>
-                            <article id="settings-storage-card" class="setting-row"><span><strong>本地数据</strong></span><span>本机</span></article>
-                            <div class="setting-row"><span><strong data-settings-key="export_path_configured">未加载</strong></span><span>本地目录</span></div>
+                            <article id="settings-storage-card" class="setting-row"><span><strong>本地数据</strong></span><span id="settings-local-data-path" class="settings-local-data-path">未加载</span></article>
                         </section>
                         <section id="settings-section-privacy" class="settings-section" hidden><h2>隐私</h2><div class="setting-row"><span><strong id="settings-privacy-notice-status">未加载</strong></span><button id="settings-privacy-notice-btn" type="button">查看隐私说明</button></div></section>
                         <section id="settings-section-data" class="settings-section" hidden>
@@ -177,7 +176,6 @@
                         <section id="settings-section-advanced" class="settings-section" hidden>
                             <h2>高级</h2><label class="setting-row" for="settings-fd-work-toggle"><span><strong>FD Work 插件</strong></span><span class="toggle-wrap"><span id="settings-fd-work-toggle-status" class="toggle-status">未加载</span><input id="settings-fd-work-toggle" type="checkbox" disabled></span></label><button id="settings-fd-work-reconnect" type="button" class="button" hidden>登录 FD Work</button>
                             <article id="settings-recovery-card" class="setting-row" hidden><span><strong>数据库维护未完成</strong><small id="settings-recovery-reason">阻断原因：未加载</small></span><button id="settings-recovery-btn" type="button" class="button primary" disabled>尝试恢复</button></article><p id="settings-recovery-status" class="inline-status" role="status" aria-live="polite" hidden></p>
-                            <details><summary>技术诊断</summary><div class="diagnostic-list"><p data-settings-key="maintenance_in_progress">数据库维护进行中：未加载</p><p data-settings-key="maintenance_restored">维护恢复完成：未加载</p><p data-settings-key="recovery_blocked">维护恢复阻断：未加载</p><p data-settings-key="blocked_reason">阻断原因：无</p><p data-settings-key="collector_running">采集器运行中：未加载</p><p data-settings-key="collector_status">采集器状态：未加载</p><p data-settings-key="user_paused">用户暂停：未加载</p></div></details>
                         </section>
                     </div>
                 </div>
