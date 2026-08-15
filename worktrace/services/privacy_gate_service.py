@@ -14,6 +14,11 @@ from .installation_metadata_store import (
     set_privacy_notice_version,
 )
 
+# Version 2 was briefly used by an unpublished build while the policy text was
+# being centralized. It must not invalidate an existing version-1 acceptance,
+# and it must not survive as a future acceptance for a genuinely published v2.
+_UNPUBLISHED_NOTICE_VERSION = "2"
+
 
 class PrivacyGateRequiredError(PermissionError):
     """Raised when a sensitive runtime operation is attempted before consent."""
@@ -24,7 +29,18 @@ def accepted_privacy_notice_version() -> str:
 
 
 def is_privacy_notice_accepted() -> bool:
-    return accepted_privacy_notice_version() == PRIVACY_NOTICE_VERSION
+    accepted_version = accepted_privacy_notice_version()
+    if accepted_version == PRIVACY_NOTICE_VERSION:
+        return True
+    if (
+        PRIVACY_NOTICE_VERSION == "1"
+        and accepted_version == _UNPUBLISHED_NOTICE_VERSION
+    ):
+        # Normalize the unpublished marker immediately so a future, genuinely
+        # published v2 still requires a fresh acceptance.
+        set_privacy_notice_version(PRIVACY_NOTICE_VERSION)
+        return True
+    return False
 
 
 def accept_privacy_notice_version(version: str) -> bool:
