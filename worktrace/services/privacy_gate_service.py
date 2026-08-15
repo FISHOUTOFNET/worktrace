@@ -27,8 +27,23 @@ def is_privacy_notice_accepted() -> bool:
     return accepted_privacy_notice_version() == PRIVACY_NOTICE_VERSION
 
 
-def accept_privacy_notice() -> None:
+def accept_privacy_notice_version(version: str) -> bool:
+    """Persist acceptance only when ``version`` is the policy shipped now.
+
+    This narrow entry point is used by trusted interactive installer bootstrap
+    code. Rejecting stale/future versions prevents an installer or script from
+    bypassing a newly required privacy notice.
+    """
+
+    if str(version or "").strip() != PRIVACY_NOTICE_VERSION:
+        return False
     set_privacy_notice_version(PRIVACY_NOTICE_VERSION)
+    return True
+
+
+def accept_privacy_notice() -> None:
+    if not accept_privacy_notice_version(PRIVACY_NOTICE_VERSION):
+        raise RuntimeError("privacy_notice_version_mismatch")
 
 
 def is_sensitive_runtime_allowed() -> bool:
@@ -46,6 +61,7 @@ def require_sensitive_runtime_allowed() -> None:
 __all__ = [
     "PrivacyGateRequiredError",
     "accept_privacy_notice",
+    "accept_privacy_notice_version",
     "accepted_privacy_notice_version",
     "is_privacy_notice_accepted",
     "is_sensitive_runtime_allowed",
