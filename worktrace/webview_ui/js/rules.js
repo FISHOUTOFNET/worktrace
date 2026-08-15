@@ -13,9 +13,11 @@
     function loadProjectRules(options) {
         options = options || {};
         var forceFresh = options.forceFresh === true;
+        var showLoading = options.showLoading === true
+            || (!App.rulesLoaded && options.showLoading !== false);
         if (App.rulesLoadPromise && !forceFresh) return App.rulesLoadPromise;
         var token = App.requestCoordinator.beginLatest("rules", "home");
-        App.setRulesLoading(true);
+        if (showLoading) App.setRulesLoading(true);
         App.clearRulesError();
         var request = App.bridge.getProjectRules().then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return null;
@@ -31,14 +33,14 @@
             return null;
         }).finally(function () {
             if (App.rulesLoadPromise === request) App.rulesLoadPromise = null;
-            if (App.requestCoordinator.isCurrent(token)) App.setRulesLoading(false);
+            if (showLoading && App.requestCoordinator.isCurrent(token)) App.setRulesLoading(false);
         });
         App.rulesLoadPromise = request;
         return request;
     }
     App.loadProjectRules = loadProjectRules;
     App.reloadProjectRules = function () {
-        return loadProjectRules({ forceFresh: true });
+        return loadProjectRules({ forceFresh: true, showLoading: false });
     };
 
     function sortProjectsForRulesHome(projects) {
@@ -63,8 +65,53 @@
     }
     App.sortProjectsForRulesHome = sortProjectsForRulesHome;
 
+    function captureExpandedProjects(list) {
+        var expanded = {};
+        if (!list || typeof list.querySelectorAll !== "function") return expanded;
+        var cards = list.querySelectorAll(".rules-project-card");
+        for (var index = 0; index < cards.length; index++) {
+            var card = cards[index];
+            var toggle = card.querySelector && card.querySelector(".rules-project-toggle");
+            var projectId = card.getAttribute && card.getAttribute("data-project-id");
+            if (projectId && toggle && toggle.getAttribute("aria-expanded") === "true") {
+                expanded[String(projectId)] = true;
+            }
+        }
+        return expanded;
+    }
+
+    function restoreExpandedProjects(list, expanded) {
+        if (!list || !expanded || typeof list.querySelectorAll !== "function") return;
+        var cards = list.querySelectorAll(".rules-project-card");
+        for (var index = 0; index < cards.length; index++) {
+            var card = cards[index];
+            var projectId = card.getAttribute && card.getAttribute("data-project-id");
+            if (!projectId || !expanded[String(projectId)]) continue;
+            var toggle = card.querySelector && card.querySelector(".rules-project-toggle");
+            var rows = card.querySelector && card.querySelector(".rules-row-list");
+            if (rows) rows.hidden = false;
+            if (toggle) {
+                toggle.setAttribute("aria-expanded", "true");
+                toggle.classList.toggle("is-expanded", true);
+                toggle.setAttribute("aria-label", "收起项目规则");
+                toggle.setAttribute("data-tooltip", "收起规则");
+            }
+        }
+    }
+
+    function renderProjectRulesList(list, projects) {
+        var expanded = captureExpandedProjects(list);
+        list.innerHTML = projects.map(function (project) {
+            return App.renderProjectRuleProject(project);
+        }).join("");
+        restoreExpandedProjects(list, expanded);
+        if (App.bindProjectRuleDeleteEvents) App.bindProjectRuleDeleteEvents();
+        applyRulesSearch();
+    }
+
     function showProjectRules(data) {
         App.rulesLoaded = true;
+        App.rulesRefreshPending = false;
         App.lastProjectRulesData = data || { projects: [] };
         var list = document.getElementById("rules-list");
         var empty = document.getElementById("rules-empty");
@@ -77,11 +124,7 @@
             return;
         }
         empty.hidden = true;
-        list.innerHTML = projects.map(function (project) {
-            return App.renderProjectRuleProject(project);
-        }).join("");
-        if (App.bindProjectRuleDeleteEvents) App.bindProjectRuleDeleteEvents();
-        applyRulesSearch();
+        renderProjectRulesList(list, projects);
     }
     App.showProjectRules = showProjectRules;
 
@@ -94,11 +137,7 @@
         }
         var projects = sortProjectsForRulesHome(App.lastProjectRulesData.projects || []);
         if (!projects.length) return;
-        list.innerHTML = projects.map(function (project) {
-            return App.renderProjectRuleProject(project);
-        }).join("");
-        if (App.bindProjectRuleDeleteEvents) App.bindProjectRuleDeleteEvents();
-        applyRulesSearch();
+        renderProjectRulesList(list, projects);
     };
 
     function applyRulesSearch() {
@@ -128,6 +167,7 @@
 
     function resetRulesGeneration() {
         App.rulesLoaded = false;
+        App.rulesRefreshPending = false;
         App.lastProjectRulesData = null;
         App.rulesLoadPromise = null;
         App.rulesRequestToken = (App.rulesRequestToken || 0) + 1;
