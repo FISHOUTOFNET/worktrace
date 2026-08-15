@@ -37,10 +37,10 @@ Name: desktopicon; Description: "创建桌面快捷方式"; GroupDescription: "�
 Name: fdwork; Description: "启用 FD Work 插件"; GroupDescription: "附加任务："
 
 [Files]
+; Keep temporary policy material first: solid compression otherwise forces Setup
+; to decompress all preceding payload before the pre-install page can open.
+Source: "..\worktrace\privacy_policy_zh-CN.txt"; Flags: dontcopy noencryption
 Source: "{#MyAppExe}"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion
-; Bundled only for the pre-install privacy page. The application has the same
-; policy resource inside Trace.exe via the PyInstaller spec.
-Source: "..\worktrace\privacy_policy_zh-CN.txt"; Flags: dontcopy
 
 [InstallDelete]
 Type: files; Name: "{app}\{#LegacyAppExeName}"
@@ -78,6 +78,7 @@ var
   PrivacyMemo: TNewMemo;
   PrivacyAcceptedCheck: TNewCheckBox;
   PrivacyAcceptedForInstall: Boolean;
+  PrivacyPolicyLoaded: Boolean;
 
 function IsUpgradeInstall: Boolean;
 begin
@@ -207,9 +208,22 @@ begin
     Result := True;
 end;
 
+function JoinPolicyLines(const Lines: TArrayOfString): String;
+var
+  Index: Integer;
+begin
+  Result := '';
+  for Index := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    if Index > 0 then
+      Result := Result + #13#10;
+    Result := Result + Lines[Index];
+  end;
+end;
+
 procedure ConfigurePrivacyPage;
 var
-  PolicyText: AnsiString;
+  PolicyLines: TArrayOfString;
 begin
   PrivacyPage := CreateCustomPage(
     wpWelcome,
@@ -227,20 +241,24 @@ begin
   PrivacyMemo.ScrollBars := ssVertical;
   PrivacyMemo.WordWrap := True;
 
+  PrivacyPolicyLoaded := False;
   try
     ExtractTemporaryFile(PrivacyPolicyFileName);
-    if LoadStringFromFile(
+    if LoadStringsFromFile(
       ExpandConstant('{tmp}\') + PrivacyPolicyFileName,
-      PolicyText
+      PolicyLines
     ) then
-      PrivacyMemo.Text := PolicyText
-    else
-      PrivacyMemo.Text :=
-        '无法加载完整《有迹隐私政策》。请退出安装并重新运行安装程序。';
+    begin
+      PrivacyMemo.Text := JoinPolicyLines(PolicyLines);
+      PrivacyPolicyLoaded := Trim(PrivacyMemo.Text) <> '';
+    end;
   except
+    PrivacyPolicyLoaded := False;
+  end;
+
+  if not PrivacyPolicyLoaded then
     PrivacyMemo.Text :=
       '无法加载完整《有迹隐私政策》。请退出安装并重新运行安装程序。';
-  end;
 
   PrivacyAcceptedCheck := TNewCheckBox.Create(PrivacyPage);
   PrivacyAcceptedCheck.Parent := PrivacyPage.Surface;
@@ -251,6 +269,7 @@ begin
   PrivacyAcceptedCheck.Caption :=
     '我已阅读并了解《有迹隐私政策》及上述数据处理方式。';
   PrivacyAcceptedCheck.Checked := False;
+  PrivacyAcceptedCheck.Enabled := PrivacyPolicyLoaded;
 end;
 
 procedure ConfigureFDWorkTaskNotice;
@@ -281,8 +300,21 @@ end;
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
+  if WizardSilent then
+    exit;
   if CurPageID <> PrivacyPage.ID then
     exit;
+
+  if not PrivacyPolicyLoaded then
+  begin
+    MsgBox(
+      '完整《有迹隐私政策》未能加载。请退出安装并重新运行安装程序。',
+      mbError,
+      MB_OK
+    );
+    Result := False;
+    exit;
+  end;
 
   if not PrivacyAcceptedCheck.Checked then
   begin
@@ -316,6 +348,7 @@ begin
 
   Arguments :=
     '--accept-privacy-notice ' + PrivacyNoticeVersion + ' --source installer';
+  ResultCode := -1;
   if Exec(
     ExpandConstant('{app}\{#MyAppExeName}'),
     Arguments,
