@@ -1,6 +1,7 @@
 """WebView UI entry point (default and only shipping UI)."""
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import threading
@@ -149,12 +150,48 @@ def _background_start_allowed(services, startup_result: dict[str, Any]) -> bool:
         return False
 
 
+def _navigation_brand_script() -> str:
+    display_name = json.dumps(PRODUCT_DISPLAY_NAME, ensure_ascii=False)
+    return f"""
+(() => {{
+    const brand = document.querySelector('.app-brand');
+    if (!brand) return;
+    const mark = brand.querySelector('.brand-mark');
+    const label = brand.querySelector('.nav-label');
+    if (label) label.textContent = {display_name};
+    brand.setAttribute('aria-label', {display_name});
+    const compactSidebar = window.matchMedia('(max-width: 959px)');
+    const syncBrandMark = () => {{
+        if (mark) mark.style.display = compactSidebar.matches ? '' : 'none';
+    }};
+    syncBrandMark();
+    if (typeof compactSidebar.addEventListener === 'function') {{
+        compactSidebar.addEventListener('change', syncBrandMark);
+    }} else if (typeof compactSidebar.addListener === 'function') {{
+        compactSidebar.addListener(syncBrandMark);
+    }}
+}})();
+""".strip()
+
+
+def _apply_navigation_brand(window) -> None:
+    try:
+        window.evaluate_js(_navigation_brand_script())
+    except Exception:
+        logging.debug("navigation brand projection deferred", exc_info=True)
+
+
 def _bind_shell_events(window, shell: DesktopShellController) -> None:
     events = getattr(window, "events", None)
     if events is None:
         return
+
+    def handle_loaded() -> None:
+        _apply_navigation_brand(window)
+        shell.handle_window_loaded()
+
     events.closing += shell.handle_window_closing
-    events.loaded += shell.handle_window_loaded
+    events.loaded += handle_loaded
 
 
 _RENDERER_UNAVAILABLE_MESSAGE = (
