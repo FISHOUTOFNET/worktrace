@@ -38,6 +38,9 @@ Name: fdwork; Description: "启用 FD Work 插件"; GroupDescription: "附加任
 
 [Files]
 Source: "{#MyAppExe}"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion
+; Bundled only for the pre-install privacy page. The application has the same
+; policy resource inside Trace.exe via the PyInstaller spec.
+Source: "..\worktrace\privacy_policy_zh-CN.txt"; Flags: dontcopy
 
 [InstallDelete]
 Type: files; Name: "{app}\{#LegacyAppExeName}"
@@ -64,9 +67,17 @@ const
   WebView2BootstrapperUrl = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703';
   WebView2BootstrapperName = 'MicrosoftEdgeWebview2Setup.exe';
   MaintenanceShutdownArgument = '--shutdown-for-maintenance';
+  PrivacyPolicyFileName = 'privacy_policy_zh-CN.txt';
+  PrivacyNoticeVersion = '2';
+  InstallBootstrapKey = 'Software\WorkTrace\InstallBootstrap';
+  PrivacyNoticeValueName = 'PrivacyNoticeVersion';
 
 var
   FDWorkTaskNotice: TNewStaticText;
+  PrivacyPage: TWizardPage;
+  PrivacyMemo: TNewMemo;
+  PrivacyAcceptedCheck: TNewCheckBox;
+  PrivacyAcceptedForInstall: Boolean;
 
 function IsUpgradeInstall: Boolean;
 begin
@@ -88,6 +99,20 @@ begin
     ExistingValue
   ) then
     Result := Trim(ExistingValue) <> '';
+end;
+
+function ExistingPrivacyVersionAccepted: Boolean;
+var
+  ExistingValue: String;
+begin
+  Result := False;
+  if RegQueryStringValue(
+    HKCU,
+    InstallBootstrapKey,
+    PrivacyNoticeValueName,
+    ExistingValue
+  ) then
+    Result := CompareText(Trim(ExistingValue), PrivacyNoticeVersion) = 0;
 end;
 
 function ExistingApplicationExePath: String;
@@ -182,6 +207,52 @@ begin
     Result := True;
 end;
 
+procedure ConfigurePrivacyPage;
+var
+  PolicyText: AnsiString;
+begin
+  PrivacyPage := CreateCustomPage(
+    wpWelcome,
+    '隐私与数据',
+    '安装前，请了解有迹如何处理工作数据'
+  );
+
+  PrivacyMemo := TNewMemo.Create(PrivacyPage);
+  PrivacyMemo.Parent := PrivacyPage.Surface;
+  PrivacyMemo.Left := 0;
+  PrivacyMemo.Top := 0;
+  PrivacyMemo.Width := PrivacyPage.SurfaceWidth;
+  PrivacyMemo.Height := PrivacyPage.SurfaceHeight - ScaleY(54);
+  PrivacyMemo.ReadOnly := True;
+  PrivacyMemo.ScrollBars := ssVertical;
+  PrivacyMemo.WordWrap := True;
+
+  try
+    ExtractTemporaryFile(PrivacyPolicyFileName);
+    if LoadStringFromFile(
+      ExpandConstant('{tmp}\') + PrivacyPolicyFileName,
+      PolicyText
+    ) then
+      PrivacyMemo.Text := PolicyText
+    else
+      PrivacyMemo.Text :=
+        '无法加载完整《有迹隐私政策》。请退出安装并重新运行安装程序。';
+  except
+    PrivacyMemo.Text :=
+      '无法加载完整《有迹隐私政策》。请退出安装并重新运行安装程序。';
+  end;
+
+  PrivacyAcceptedCheck := TNewCheckBox.Create(PrivacyPage);
+  PrivacyAcceptedCheck.Parent := PrivacyPage.Surface;
+  PrivacyAcceptedCheck.Left := 0;
+  PrivacyAcceptedCheck.Top := PrivacyMemo.Top + PrivacyMemo.Height + ScaleY(12);
+  PrivacyAcceptedCheck.Width := PrivacyPage.SurfaceWidth;
+  PrivacyAcceptedCheck.Height := ScaleY(30);
+  PrivacyAcceptedCheck.Caption :=
+    '我已阅读并了解《有迹隐私政策》及上述数据处理方式。';
+  PrivacyAcceptedCheck.Checked := False;
+end;
+
 procedure ConfigureFDWorkTaskNotice;
 var
   NoticeHeight: Integer;
@@ -205,6 +276,68 @@ begin
   FDWorkTaskNotice.Caption :=
     'FD Work 仅方达律师事务所用户可用；非方达用户请取消勾选。';
   FDWorkTaskNotice.Font.Color := clRed;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if CurPageID <> PrivacyPage.ID then
+    exit;
+
+  if not PrivacyAcceptedCheck.Checked then
+  begin
+    MsgBox(
+      '继续安装前，请阅读《有迹隐私政策》并勾选确认。',
+      mbInformation,
+      MB_OK
+    );
+    Result := False;
+    exit;
+  end;
+
+  PrivacyAcceptedForInstall := True;
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PageID = PrivacyPage.ID) and PrivacyAcceptedForInstall;
+end;
+
+procedure PersistPrivacyAcceptanceFromInstaller;
+var
+  ResultCode: Integer;
+  Arguments: String;
+begin
+  if not PrivacyAcceptedForInstall then
+  begin
+    Log('Privacy acceptance bootstrap skipped: no interactive or prior acceptance.');
+    exit;
+  end;
+
+  Arguments :=
+    '--accept-privacy-notice ' + PrivacyNoticeVersion + ' --source installer';
+  if Exec(
+    ExpandConstant('{app}\{#MyAppExeName}'),
+    Arguments,
+    ExpandConstant('{app}'),
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  ) and (ResultCode = 0) then
+  begin
+    RegWriteStringValue(
+      HKCU,
+      InstallBootstrapKey,
+      PrivacyNoticeValueName,
+      PrivacyNoticeVersion
+    );
+    Log('Privacy policy version ' + PrivacyNoticeVersion + ' accepted and persisted.');
+  end
+  else
+    Log(
+      'Privacy acceptance bootstrap did not complete; first-run gate remains authoritative. ' +
+      'Exit code: ' + IntToStr(ResultCode)
+    );
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -279,6 +412,8 @@ end;
 
 procedure InitializeWizard;
 begin
+  PrivacyAcceptedForInstall := ExistingPrivacyVersionAccepted;
+  ConfigurePrivacyPage;
   ConfigureFDWorkTaskNotice;
 
   if not IsUpgradeInstall then
@@ -289,12 +424,25 @@ begin
     WizardSelectTasks('!startup');
 end;
 
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    PersistPrivacyAcceptanceFromInstaller;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
+  begin
     RegDeleteValue(
       HKCU,
       'Software\Microsoft\Windows\CurrentVersion\Run',
       'WorkTrace'
     );
+    RegDeleteValue(
+      HKCU,
+      InstallBootstrapKey,
+      PrivacyNoticeValueName
+    );
+  end;
 end;
