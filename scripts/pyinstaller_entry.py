@@ -11,6 +11,7 @@ from typing import TextIO
 
 _STARTUP_LOG_NAME = "startup.log"
 _MAINTENANCE_SHUTDOWN_ARGUMENT = "--shutdown-for-maintenance"
+_PRIVACY_ACCEPT_ARGUMENT = "--accept-privacy-notice"
 
 
 def _startup_log_candidates() -> list[Path]:
@@ -92,6 +93,32 @@ def _run_windows_probe_helper() -> int:
     return main(sys.argv[2:])
 
 
+def _run_installer_privacy_acceptance(argv: list[str]) -> int:
+    """Persist one explicitly confirmed installer privacy-policy version.
+
+    The command is intentionally narrow: only the interactive installer source
+    may use it, and only the policy version shipped by this executable is
+    accepted. It exits before normal application/runtime initialization.
+    """
+
+    if (
+        len(argv) != 4
+        or argv[0] != _PRIVACY_ACCEPT_ARGUMENT
+        or argv[2] != "--source"
+        or argv[3] != "installer"
+    ):
+        return 64
+
+    try:
+        from worktrace.services.privacy_gate_service import (
+            accept_privacy_notice_version,
+        )
+
+        return 0 if accept_privacy_notice_version(argv[1]) else 65
+    except Exception:
+        return 1
+
+
 def _run_application(argv: list[str]) -> int:
     stream, log_path = _open_startup_log()
     _attach_windowed_streams(stream)
@@ -127,4 +154,6 @@ def _run_application(argv: list[str]) -> int:
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "--windows-probe-helper":
         raise SystemExit(_run_windows_probe_helper())
+    if len(sys.argv) >= 2 and sys.argv[1] == _PRIVACY_ACCEPT_ARGUMENT:
+        raise SystemExit(_run_installer_privacy_acceptance(list(sys.argv[1:])))
     raise SystemExit(_run_application(list(sys.argv[1:])))
