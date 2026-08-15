@@ -48,7 +48,7 @@ def test_privacy_policy_v2_has_formal_data_lifecycle_sections():
         assert section in PRIVACY_POLICY_TEXT
 
     assert "核心工作轨迹默认" in PRIVACY_POLICY_TEXT
-    assert "“记录复制文字”默认关闭" in PRIVACY_POLICY_TEXT
+    assert "复制文字记录默认关闭" in PRIVACY_POLICY_TEXT
     assert "最长保留 30 天" in PRIVACY_POLICY_TEXT
     assert "FD Work" in PRIVACY_POLICY_TEXT
     assert "所有数据默认保存在本机，不上传到云端" not in PRIVACY_POLICY_TEXT
