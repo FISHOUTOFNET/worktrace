@@ -27,16 +27,16 @@
         <symbol id="icon-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
     </svg>
     <div class="app-shell">
-        <div id="first-run-notice-overlay" class="modal-layer" hidden>
+        <div id="first-run-notice-overlay" class="modal-layer">
             <section id="first-run-notice-dialog" class="dialog first-run-dialog" role="dialog" aria-modal="true" aria-labelledby="first-run-notice-title">
-                <h1 id="first-run-notice-title" class="dialog-title"></h1>
+                <h1 id="first-run-notice-title" class="dialog-title">正在检查隐私设置…</h1>
                 <ul id="first-run-notice-highlights" class="first-run-notice-highlights"></ul>
                 <pre id="first-run-notice-text" class="first-run-notice-text"></pre>
                 <p id="first-run-notice-error" class="inline-alert error" role="alert" hidden></p>
                 <div class="dialog-actions">
                     <button id="first-run-notice-retry-btn" type="button" hidden>重新加载</button>
                     <button id="first-run-notice-close-btn" type="button" hidden>关闭</button>
-                    <button id="first-run-notice-accept-btn" type="button" class="button primary">我已阅读并同意</button>
+                    <button id="first-run-notice-accept-btn" type="button" class="button primary" hidden>我已阅读并同意</button>
                 </div>
             </section>
         </div>
@@ -169,7 +169,7 @@
                             <h2>数据与备份</h2><article id="settings-backup-card" class="settings-backup-card">
                                 <div class="credential-list"><label class="credential-row"><span class="credential-label">备份口令</span><span class="password-control"><input id="settings-backup-passphrase" type="password" autocomplete="off" disabled><button id="settings-backup-passphrase-reveal" type="button" class="password-reveal-button" data-password-input="settings-backup-passphrase" aria-label="按住查看口令" aria-pressed="false" disabled><svg class="icon password-eye" aria-hidden="true"><use href="#icon-eye"/></svg><svg class="icon password-eye-off" aria-hidden="true"><use href="#icon-eye-off"/></svg></button></span></label><label class="credential-row"><span class="credential-label">确认口令</span><span class="password-control"><input id="settings-backup-passphrase-confirm" type="password" autocomplete="off" disabled><button id="settings-backup-passphrase-confirm-reveal" type="button" class="password-reveal-button" data-password-input="settings-backup-passphrase-confirm" aria-label="按住查看口令" aria-pressed="false" disabled><svg class="icon password-eye" aria-hidden="true"><use href="#icon-eye"/></svg><svg class="icon password-eye-off" aria-hidden="true"><use href="#icon-eye-off"/></svg></button></span></label></div>
                                 <div class="button-row"><button id="settings-backup-export-btn" type="button" disabled>导出加密备份</button><button id="settings-backup-manifest-btn" type="button" disabled>预览备份清单</button></div><p id="settings-backup-status" class="inline-status" role="status" hidden></p><div id="settings-backup-manifest" class="backup-manifest" hidden><p class="settings-backup-manifest-filename"></p><dl class="settings-backup-manifest-fields"></dl></div>
-                                <div class="maintenance-section"><h3>导入并替换数据</h3><div class="credential-list"><label class="credential-row"><span class="credential-label">备份口令</span><span class="password-control"><input id="settings-backup-import-passphrase" type="password" autocomplete="off" disabled><button id="settings-backup-import-passphrase-reveal" type="button" class="password-reveal-button" data-password-input="settings-backup-import-passphrase" aria-label="按住查看口令" aria-pressed="false" disabled><svg class="icon password-eye" aria-hidden="true"><use href="#icon-eye"/></svg><svg class="icon password-eye-off" aria-hidden="true"><use href="#icon-eye-off"/></svg></button></span></label></div><div class="button-row"><button id="settings-backup-import-btn" type="button" disabled>导入加密备份</button></div><p id="settings-backup-import-status" class="inline-status" role="status" hidden></p></div>
+                                <div class="maintenance-section"><h3>导入并替换数据</h3><div class="credential-list"><label class="credential-row"><span class="credential-label">备份口令</span><span class="password-control"><input id="settings-backup-import-passphrase" type="password" autocomplete="off" disabled><button id="settings-backup-import-passphrase-reveal" type="button" class="password-reveal-button" data-password-input="settings-backup-import-passphrase" aria-label="按住查看口令" aria-pressed="false" disabled><svg class="icon password-eye" aria-hidden="true"><use href="#icon-eye"/></svg><svg class="icon password-eye-off" aria-hidden="true"><use href="#icon-eye-off"/></svg></button></span></label></div><div class="button-row"><button id="settings-backup-import-btn" type="button" disabled>导入加密备份</button></div><p id="settings-backup-import-status" class="inline-status" role="status" aria-live="polite" hidden></p></div>
                             </article>
                             <article id="settings-danger-card" class="danger-zone"><h2>危险操作</h2><div class="setting-row"><span><strong>清空本地数据</strong><small>此操作不可撤销。</small></span><div class="danger-inline"><input id="settings-clear-confirm" type="text" autocomplete="off" placeholder="清空本地数据" disabled><button id="settings-clear-local-data-btn" type="button" class="button danger" disabled>清空本地数据</button></div></div><p id="settings-clear-status" class="inline-status" role="status" hidden></p></article>
                         </section>
