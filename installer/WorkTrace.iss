@@ -194,7 +194,7 @@ begin
     WizardForm.TasksList.Height - NoticeHeight - NoticeSpacing;
 
   FDWorkTaskNotice := TNewStaticText.Create(WizardForm);
-  FDWorkTaskNotice.Parent := WizardForm.SelectTasksPage.Surface;
+  FDWorkTaskNotice.Parent := WizardForm.SelectTasksPage;
   FDWorkTaskNotice.Left := WizardForm.TasksList.Left;
   FDWorkTaskNotice.Top :=
     WizardForm.TasksList.Top + WizardForm.TasksList.Height + NoticeSpacing;
