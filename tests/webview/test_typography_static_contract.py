@@ -53,6 +53,21 @@ def test_mixed_script_emphasis_uses_real_bold_face() -> None:
         assert selector in selectors
 
 
+def test_record_start_times_share_secondary_typography() -> None:
+    final_css = _read(FINAL_CSS)
+    block = re.search(
+        r"\.recent-start-time,\s*\.timeline-item-time\s*\{(?P<body>[^}]*)\}",
+        final_css,
+        re.DOTALL,
+    )
+    assert block, "expected one final start-time typography rule"
+    body = block.group("body")
+    assert "color: var(--color-text-secondary);" in body
+    assert "font-size: var(--font-size-sm);" in body
+    assert "font-weight: 500;" in body
+    assert "font-variant-numeric: tabular-nums;" in body
+
+
 def test_numeric_alignment_remains_tabular_without_a_separate_font_family() -> None:
     base_css = _read(BASE_CSS)
     final_css = _read(FINAL_CSS)
