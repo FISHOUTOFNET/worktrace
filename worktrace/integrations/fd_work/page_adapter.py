@@ -11,8 +11,49 @@ from ._page_adapter_core import (
     FDWorkPageAdapter as _CoreFDWorkPageAdapter,
     FDWorkPagePhase,
     FDWorkPageType,
-    _WORK_SHELL_WINDOW_RESOLVER,
 )
+
+
+_VERIFIED_WORK_SHELL_WINDOW_RESOLVER = r"""
+function workTraceVerifiedWorkShellCandidates() {
+  var windows = [window];
+  var cursor = 0;
+  while (cursor < windows.length && windows.length < 16) {
+    var owner = windows[cursor++];
+    try {
+      var frames = owner.document.querySelectorAll("iframe");
+      Array.prototype.forEach.call(frames, function(frame) {
+        if (windows.length >= 16) return;
+        try {
+          var child = frame.contentWindow;
+          if (child && windows.indexOf(child) < 0) windows.push(child);
+        } catch (_error) {}
+      });
+    } catch (_error) {}
+  }
+  var candidates = [];
+  for (var index = 0; index < windows.length; index += 1) {
+    try {
+      var candidate = windows[index];
+      var path = String(candidate.location.pathname || "")
+        .replace(/\/$/, "").toLowerCase() || "/";
+      var rootReady = !!(candidate.document.documentElement && candidate.document.body);
+      var loginMarker = !!candidate.document.querySelector(".loginPage");
+      var shellMarker = !!candidate.document.querySelector(
+        ".workHourList, input[placeholder='请选择日期']"
+      );
+      if (path === "/works/workhourlist" && rootReady && !loginMarker && shellMarker) {
+        candidates.push(candidate);
+      }
+    } catch (_error) {}
+  }
+  return candidates;
+}
+function workTraceWorkShellWindow() {
+  var candidates = workTraceVerifiedWorkShellCandidates();
+  return candidates.length === 1 ? candidates[0] : null;
+}
+""".strip()
 
 
 class FDWorkPageAdapter(_CoreFDWorkPageAdapter):
@@ -47,7 +88,78 @@ class FDWorkPageAdapter(_CoreFDWorkPageAdapter):
                 self._picker_source = handle.read()
         return base_source
 
+    @staticmethod
+    def probe_page_phase(window: Any, callback: Any) -> None:
+        script = (
+            "(function(){"
+            f"{_VERIFIED_WORK_SHELL_WINDOW_RESOLVER}"
+            r"""
+  function visible(element) {
+    if (!element) return false;
+    var style = window.getComputedStyle ? window.getComputedStyle(element) : null;
+    if (style && (style.display === "none" || style.visibility === "hidden")) return false;
+    var rect = element.getBoundingClientRect ? element.getBoundingClientRect() : null;
+    return !rect || (rect.width > 0 && rect.height > 0);
+  }
+  var path = String(window.location.pathname || "").replace(/\/$/, "").toLowerCase() || "/";
+  var bodyReady = !!(document.body && document.body.firstElementChild);
+  if (path === "/login") {
+    var account = Array.prototype.find.call(
+      document.querySelectorAll('input:not([type="password"]):not([type="hidden"]):not([type="checkbox"])'),
+      visible
+    );
+    var password = Array.prototype.find.call(document.querySelectorAll('input[type="password"]'), visible);
+    return {phase:"login_credentials", body_exists:bodyReady, input_exists:!!(account && password)};
+  }
+  if (path === "/logintoken") {
+    return {phase:"login_confirmation", body_exists:bodyReady, input_exists:false};
+  }
+  if (["/permission","/unauthorized","/forbidden"].indexOf(path) >= 0) {
+    return {phase:"unauthorized", body_exists:bodyReady};
+  }
+  if (["/404","/error","/500"].indexOf(path) >= 0) {
+    return {phase:"error", body_exists:bodyReady};
+  }
+  var workCandidates = workTraceVerifiedWorkShellCandidates();
+  var editorExists = false;
+  if (workCandidates.length === 1) {
+    try {
+      var owner = workCandidates[0].document;
+      var form = owner.querySelector("form[id='basic']");
+      var matter = owner.querySelector("[id='basic_caseId']");
+      editorExists = !!(form && matter && form.contains(matter));
+    } catch (_error) {}
+  }
+  var shellFacts = {
+    body_exists: bodyReady,
+    work_page_candidate_count: workCandidates.length,
+    editor_exists: editorExists,
+    work_shell_verified: workCandidates.length === 1
+  };
+  if (workCandidates.length === 1) return Object.assign({phase:"work_shell"}, shellFacts);
+  return Object.assign({phase:"unknown"}, shellFacts);
+"""
+            "})()"
+        )
+        callback(window.evaluate_js(script))
+
+    @staticmethod
+    def _verified_work_shell_available(window: Any) -> bool:
+        script = (
+            "(function(){"
+            f"{_VERIFIED_WORK_SHELL_WINDOW_RESOLVER}"
+            "return {ok:!!workTraceWorkShellWindow()};"
+            "})()"
+        )
+        try:
+            value = window.evaluate_js(script)
+        except Exception:
+            return False
+        return isinstance(value, Mapping) and value.get("ok") is True
+
     def install_adapter(self, window: Any) -> dict[str, Any]:
+        if not self._verified_work_shell_available(window):
+            return {"ok": False, "error": "adapter_injection_failed"}
         result = dict(super().install_adapter(window))
         if result.get("ok") is not True:
             return result
@@ -56,10 +168,21 @@ class FDWorkPageAdapter(_CoreFDWorkPageAdapter):
             return {"ok": False, "error": "adapter_injection_failed"}
         return {"ok": True, "version": self.adapter_version}
 
+    def _run_action(
+        self,
+        window: Any,
+        action: str,
+        contract: Mapping[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        if not self._verified_work_shell_available(window):
+            return {"ok": False, "error": "page_contract_changed"}
+        return super()._run_action(window, action, contract, **kwargs)
+
     def _ensure_picker_session(self, window: Any) -> Mapping[str, Any]:
         probe_script = (
             "(function(){"
-            f"{_WORK_SHELL_WINDOW_RESOLVER}"
+            f"{_VERIFIED_WORK_SHELL_WINDOW_RESOLVER}"
             "var target=workTraceWorkShellWindow();"
             "if(!target)return {ok:false,error:'adapter_injection_failed'};"
             "var p=target.WorkTraceFDWorkPickerSession;"
@@ -104,7 +227,7 @@ class FDWorkPageAdapter(_CoreFDWorkPageAdapter):
                 body += "return {ok:true,staged:true};"
             script = (
                 "(function(){"
-                f"{_WORK_SHELL_WINDOW_RESOLVER}"
+                f"{_VERIFIED_WORK_SHELL_WINDOW_RESOLVER}"
                 "var target=workTraceWorkShellWindow();"
                 "if(!target)return {ok:false,error:'adapter_injection_failed'};"
                 + body
