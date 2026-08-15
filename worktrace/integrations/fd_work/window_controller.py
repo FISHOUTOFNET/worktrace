@@ -368,7 +368,20 @@ class FDWorkWindowController:
         with self._lock:
             if self._shutdown or self._window is not window:
                 return
+            self._navigation_generation += 1
+            self._operation_generation += 1
+            self._adapter_installed_generation = None
+            self._session_state = "probing"
+            self._page_phase = "none"
+            self._operation = "none"
+            self._error_code = None
+            self._probe_generation = None
+            self._probe_deadline = None
+            self._login_watch_generation = None
+            self._login_watch_deadline = None
+            status = self._status_locked()
         self._cancel_pending_page_actions("navigation_changed")
+        self._emit(status)
         self._log_event("fd_work_before_load")
 
     def _on_loaded(self, window: Any) -> None:
