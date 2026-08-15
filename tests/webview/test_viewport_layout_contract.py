@@ -78,3 +78,19 @@ def test_timeline_uses_remaining_viewport_instead_of_magic_height_at_all_widths(
     assert "height: calc(100% - 86px)" in base
     assert "height: calc(100% - 82px)" in base
     assert index.index("styles.css?") < index.index("ui_components.css?")
+
+
+def test_loading_feedback_does_not_resize_rendered_timeline_or_settings():
+    final = _resource("ui_components.css")
+
+    timeline_loading = _rule(final, "#timeline-loading")
+    settings_loading = _rule(final, "#settings-loading")
+
+    assert "flex: 0 0 0" in timeline_loading
+    assert "height: 0" in timeline_loading
+    assert "min-height: 0" in timeline_loading
+    assert "overflow: visible" in timeline_loading
+
+    assert "height: 0" in settings_loading
+    assert "min-height: 0" in settings_loading
+    assert "overflow: visible" in settings_loading
