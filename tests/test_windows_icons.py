@@ -49,39 +49,70 @@ def _fake_win32_modules():
     return calls, con, gui, api
 
 
-def test_inactive_icon_variant_uses_win32_monochrome_flag() -> None:
+def test_inactive_icon_variant_prefers_packaged_paused_resource(tmp_path) -> None:
+    active_path = tmp_path / "app.ico"
+    paused_path = tmp_path / "app-paused.ico"
+    active_path.touch()
+    paused_path.touch()
     calls, con, gui, _api = _fake_win32_modules()
-    with patch.dict(sys.modules, {"win32con": con, "win32gui": gui}):
-        load_icon_variant(Path("app.ico"), active=True)
-        load_icon_variant(Path("app.ico"), active=False)
 
+    with patch.dict(sys.modules, {"win32con": con, "win32gui": gui}):
+        load_icon_variant(active_path, active=True)
+        load_icon_variant(active_path, active=False)
+
+    assert calls["load"][0][0] == str(active_path)
+    assert calls["load"][1][0] == str(paused_path)
     active_flags = calls["load"][0][4]
     inactive_flags = calls["load"][1][4]
     assert active_flags & con.LR_LOADFROMFILE
     assert active_flags & con.LR_DEFAULTSIZE
     assert not active_flags & con.LR_MONOCHROME
-    assert inactive_flags & con.LR_MONOCHROME
+    assert not inactive_flags & con.LR_MONOCHROME
 
 
-def test_window_icon_host_updates_large_and_small_taskbar_icons_nonblocking() -> None:
+def test_inactive_icon_variant_keeps_source_run_monochrome_fallback(tmp_path) -> None:
+    active_path = tmp_path / "app.ico"
+    active_path.touch()
+    calls, con, gui, _api = _fake_win32_modules()
+
+    with patch.dict(sys.modules, {"win32con": con, "win32gui": gui}):
+        load_icon_variant(active_path, active=False)
+
+    assert calls["load"][0][0] == str(active_path)
+    assert calls["load"][0][4] & con.LR_MONOCHROME
+
+
+def test_window_icon_host_updates_large_and_small_taskbar_icons_nonblocking(
+    tmp_path,
+) -> None:
+    active_path = tmp_path / "app.ico"
+    paused_path = tmp_path / "app-paused.ico"
+    active_path.touch()
+    paused_path.touch()
     calls, con, gui, api = _fake_win32_modules()
+
     with patch.dict(
         sys.modules,
         {"win32con": con, "win32gui": gui, "win32api": api},
     ):
         host = WindowsWindowIconHost(
             window_title="WorkTrace",
-            icon_path=Path("app.ico"),
+            icon_path=active_path,
         )
         host.set_collection_active(False)
         host.set_collection_active(True)
         host.stop()
 
     assert len(calls["load"]) == 4
-    inactive_flags = [call[4] for call in calls["load"][:2]]
-    active_flags = [call[4] for call in calls["load"][2:]]
-    assert all(flags & con.LR_MONOCHROME for flags in inactive_flags)
-    assert all(not flags & con.LR_MONOCHROME for flags in active_flags)
+    assert [Path(call[0]).name for call in calls["load"][:2]] == [
+        "app-paused.ico",
+        "app-paused.ico",
+    ]
+    assert [Path(call[0]).name for call in calls["load"][2:]] == [
+        "app.ico",
+        "app.ico",
+    ]
+    assert all(not call[4] & con.LR_MONOCHROME for call in calls["load"])
 
     assert [call[2] for call in calls["post"]] == [
         con.ICON_BIG,
