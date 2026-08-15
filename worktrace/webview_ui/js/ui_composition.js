@@ -206,8 +206,9 @@
     function backgroundRulesRefresh() {
         if (!App.bridge || typeof App.bridge.getProjectRules !== "function") return Promise.resolve(null);
         if (App.rulesLoading) return App.rulesLoadPromise || Promise.resolve(null);
+        if (App.rulesBackgroundRefreshPromise) return App.rulesBackgroundRefreshPromise;
         var token = App.requestCoordinator.beginLatest("rules", "background");
-        return App.bridge.getProjectRules().then(function (result) {
+        var request = App.bridge.getProjectRules().then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return null;
             var data = App.handleResult(result, function (message) {
                 if (typeof App.showRulesError === "function") App.showRulesError(message);
@@ -215,6 +216,7 @@
             if (!data) return null;
             if (typeof App.showProjectRules === "function") App.showProjectRules(data);
             App.rulesLoaded = true;
+            App.rulesRefreshPending = false;
             if (typeof App.clearRulesError === "function") App.clearRulesError();
             return data;
         }).catch(function () {
@@ -222,7 +224,13 @@
                 App.showRulesError("加载项目规则失败");
             }
             return null;
+        }).finally(function () {
+            if (App.rulesBackgroundRefreshPromise === request) {
+                App.rulesBackgroundRefreshPromise = null;
+            }
         });
+        App.rulesBackgroundRefreshPromise = request;
+        return request;
     }
     App.backgroundRulesRefresh = backgroundRulesRefresh;
 
@@ -264,11 +272,50 @@
     }
     App.backgroundStatisticsRefresh = backgroundStatisticsRefresh;
 
+    function backgroundSettingsRefresh() {
+        if (!App.bridge || typeof App.bridge.getSettingsPrivacyStatus !== "function") {
+            return Promise.resolve(null);
+        }
+        if (App.settingsLoading) return App.settingsLoadPromise || Promise.resolve(null);
+        if (App.settingsBackgroundRefreshPromise) return App.settingsBackgroundRefreshPromise;
+        if (typeof App.anySettingsOperationInProgress === "function"
+            && App.anySettingsOperationInProgress()) {
+            App.settingsRefreshPending = true;
+            return Promise.resolve(null);
+        }
+        var token = ++App.settingsRequestToken;
+        var request = App.bridge.getSettingsPrivacyStatus().then(function (result) {
+            if (token !== App.settingsRequestToken) return null;
+            var data = App.handleResult(result, function (message) {
+                if (typeof App.showSettingsError === "function") App.showSettingsError(message);
+            });
+            if (!data || !data.status) return null;
+            App.settingsLoaded = true;
+            App.lastSettingsStatus = data.status;
+            if (typeof App.renderSettingsStatus === "function") App.renderSettingsStatus(data.status);
+            App.settingsRefreshPending = false;
+            if (typeof App.clearSettingsError === "function") App.clearSettingsError();
+            return data;
+        }).catch(function () {
+            if (token === App.settingsRequestToken && typeof App.showSettingsError === "function") {
+                App.showSettingsError("加载设置状态失败");
+            }
+            return null;
+        }).finally(function () {
+            if (App.settingsBackgroundRefreshPromise === request) {
+                App.settingsBackgroundRefreshPromise = null;
+            }
+        });
+        App.settingsBackgroundRefreshPromise = request;
+        return request;
+    }
+    App.backgroundSettingsRefresh = backgroundSettingsRefresh;
+
     function refreshComposedPage(page, reason) {
         page = String(page || App.currentPage || "");
         reason = String(reason || "manual");
         if (page === "rules" && typeof App.loadProjectRules === "function") {
-            if (reason === "manual" || !App.rulesLoaded) return App.loadProjectRules();
+            if (!App.rulesLoaded) return App.loadProjectRules();
             return backgroundRulesRefresh();
         }
         if (page === "statistics" && typeof App.loadStatisticsExportSummary === "function") {
@@ -279,7 +326,8 @@
         }
         if (page === "settings" && typeof App.loadSettingsPrivacyStatus === "function") {
             if (App.settingsLoading) return App.settingsLoadPromise || Promise.resolve(null);
-            return App.loadSettingsPrivacyStatus();
+            if (!App.settingsLoaded) return App.loadSettingsPrivacyStatus();
+            return backgroundSettingsRefresh();
         }
         return Promise.resolve(null);
     }
@@ -356,6 +404,9 @@
             var settingsChanged = runtimeGeneration(previous, "settings")
                 !== runtimeGeneration(current, "settings");
             var page = String(App.currentPage || "");
+
+            if (classificationChanged) App.rulesRefreshPending = true;
+            if (settingsChanged) App.settingsRefreshPending = true;
 
             if (page === "timeline") {
                 App.suppressNextTimelineCollectionRefresh = !structureChanged && liveChanged;
@@ -435,8 +486,10 @@
         var navPage = event && event.type === "click" ? navPageFromTarget(event.target) : "";
         window.setTimeout(function () {
             if (navPage && App.currentPage === navPage) {
-                if (navPage === "rules" || navPage === "settings") {
-                    refreshComposedPage(navPage, "page-entry");
+                if (navPage === "rules" && App.rulesRefreshPending === true) {
+                    refreshComposedPage("rules", "page-entry");
+                } else if (navPage === "settings" && App.settingsRefreshPending === true) {
+                    refreshComposedPage("settings", "page-entry");
                 } else if (navPage === "statistics" && statisticsNeedsEntryRefresh()) {
                     refreshComposedPage("statistics", "page-entry");
                 }
