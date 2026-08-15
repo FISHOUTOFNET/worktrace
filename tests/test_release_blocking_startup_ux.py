@@ -12,15 +12,21 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_PATH = ROOT / "installer" / "WorkTrace.iss"
 
 
-def test_fd_work_availability_notice_is_bound_to_the_task_label() -> None:
+def test_fd_work_availability_notice_is_red_and_bound_to_tasks_page() -> None:
     source = INSTALLER_PATH.read_text(encoding="utf-8")
     fd_work_line = next(
         line for line in source.splitlines() if line.startswith("Name: fdwork;")
     )
 
-    assert 'Description: "启用 FD Work 插件（仅方达律师事务所可用）"' in fd_work_line
-    assert "FDWorkNotice" not in source
-    assert "TasksList.Height :=" not in source
+    assert 'Description: "启用 FD Work 插件"' in fd_work_line
+    assert "Flags: unchecked" not in fd_work_line
+    assert "FDWorkTaskNotice: TNewStaticText;" in source
+    assert "FDWorkTaskNotice.Parent := WizardForm.SelectTasksPage;" in source
+    assert (
+        "'FD Work 仅方达律师事务所用户可用；非方达用户请取消勾选。';"
+        in source
+    )
+    assert "FDWorkTaskNotice.Font.Color := clRed;" in source
 
 
 def test_packaged_foreground_runtime_missing_is_user_visible(monkeypatch, capsys) -> None:
