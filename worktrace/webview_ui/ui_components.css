@@ -123,6 +123,28 @@ th,
     flex: 0 0 auto;
 }
 
+/* Loading feedback must not resize an already rendered page. Timeline keeps
+   its skeleton as a zero-height overlay above the workspace, while Settings
+   can show its status text without pushing the settings grid down. */
+#timeline-loading {
+    position: relative;
+    z-index: 3;
+    flex: 0 0 0;
+    height: 0;
+    min-height: 0;
+    overflow: visible;
+    pointer-events: none;
+}
+
+#settings-loading {
+    position: relative;
+    z-index: 2;
+    height: 0;
+    min-height: 0;
+    overflow: visible;
+    pointer-events: none;
+}
+
 .recent-section {
     flex: 1 1 auto;
     min-height: 0;
