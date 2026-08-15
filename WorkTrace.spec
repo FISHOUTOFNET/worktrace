@@ -6,8 +6,10 @@ from PyInstaller.utils.hooks import collect_all
 
 root = Path(SPECPATH)
 brand_icon = root / 'build' / 'brand' / 'worktrace.ico'
+paused_brand_icon = root / 'build' / 'brand' / 'worktrace-paused.ico'
 icon_generator = runpy.run_path(str(root / 'scripts' / 'generate_brand_icon.py'))
 icon_generator['generate_icon'](brand_icon)
+icon_generator['generate_icon'](paused_brand_icon, grayscale=True)
 
 datas = [
     (str(root / 'worktrace' / 'schema.sql'), 'worktrace'),
@@ -39,6 +41,7 @@ datas = [
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'init_fd_work_v5.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'ui_composition.js'), 'worktrace/webview_ui/js'),
     (str(brand_icon), 'worktrace/assets'),
+    (str(paused_brand_icon), 'worktrace/assets'),
 ]
 binaries = []
 hiddenimports = ['win32api', 'win32con', 'win32gui', 'win32timezone']
