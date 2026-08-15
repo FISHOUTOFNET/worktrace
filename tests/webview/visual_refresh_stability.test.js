@@ -40,6 +40,13 @@ function row(duration, percentage) {
   };
 }
 
+function navTarget(page, document) {
+  return {
+    getAttribute(name) { return name === "data-page" ? page : null; },
+    parentNode: document,
+  };
+}
+
 function harness(initialRuntime) {
   let runtimeState = initialRuntime || runtime();
   const listeners = {};
@@ -53,6 +60,8 @@ function harness(initialRuntime) {
   let baseStatusRenders = 0;
   let rulesRequests = 0;
   let statisticsRequests = 0;
+  let settingsRequests = 0;
+  let visibleSettingsLoads = 0;
   let tokenId = 0;
   const currentTokens = new Map();
   const requestCoordinator = {
@@ -67,9 +76,12 @@ function harness(initialRuntime) {
     formatDuration,
     currentPage: "overview",
     rulesLoaded: true,
+    rulesLoading: false,
     statisticsLoaded: true,
     statisticsLoading: false,
     settingsLoaded: true,
+    settingsLoading: false,
+    settingsRequestToken: 0,
     requestCoordinator,
     bridge: {
       getProjectRules() {
@@ -89,6 +101,10 @@ function harness(initialRuntime) {
           export_ticket: { revision: "r1" },
         });
       },
+      getSettingsPrivacyStatus() {
+        settingsRequests += 1;
+        return Promise.resolve({ ok: true, status: { collector_running: true } });
+      },
     },
     handleResult(value) { return value && value.ok === false ? null : value; },
     applyLocalTicker() {},
@@ -96,11 +112,22 @@ function harness(initialRuntime) {
     refreshTimeline() { baseTimelineRefreshes += 1; return Promise.resolve("timeline"); },
     loadProjectRules() { return Promise.resolve(null); },
     loadStatisticsExportSummary() { return Promise.resolve(null); },
-    loadSettingsPrivacyStatus() { return Promise.resolve(null); },
+    loadSettingsPrivacyStatus() {
+      visibleSettingsLoads += 1;
+      return Promise.resolve(null);
+    },
+    anySettingsOperationInProgress() { return false; },
     showOverview() { baseOverviewRenders += 1; },
     showStatus() { baseStatusRenders += 1; },
     showProjectRules() {},
     showStatistics() {},
+    renderSettingsStatus() {},
+    showRulesError() {},
+    clearRulesError() {},
+    showStatisticsError() {},
+    clearStatisticsError() {},
+    showSettingsError() {},
+    clearSettingsError() {},
     selectedStatisticsFilters() {
       return { dateFrom: "2026-08-13", dateTo: "2026-08-13", projectId: "" };
     },
@@ -139,6 +166,7 @@ function harness(initialRuntime) {
   );
   return {
     App,
+    document,
     elements,
     listeners,
     counters: {
@@ -147,6 +175,8 @@ function harness(initialRuntime) {
       status: () => baseStatusRenders,
       rules: () => rulesRequests,
       statistics: () => statisticsRequests,
+      settings: () => settingsRequests,
+      visibleSettings: () => visibleSettingsLoads,
     },
   };
 }
@@ -154,6 +184,11 @@ function harness(initialRuntime) {
 async function flush() {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+async function flushTimers() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await flush();
 }
 
 test("Rules ignores live-only runtime changes but refreshes on classification generation", async () => {
@@ -167,6 +202,63 @@ test("Rules ignores live-only runtime changes but refreshes on classification ge
   App.acceptRefreshStateRuntime({ nextRuntime: runtime({ live: "l3", classification: 2 }) });
   await flush();
   assert.equal(counters.rules(), 1);
+  assert.equal(App.rulesRefreshPending, false);
+});
+
+test("Rules re-entry is a no-op until classification generation changes", async () => {
+  const { App, document, listeners, counters } = harness(runtime());
+  App.currentPage = "rules";
+
+  listeners.click({ type: "click", target: navTarget("rules", document) });
+  await flushTimers();
+  assert.equal(counters.rules(), 0);
+
+  App.currentPage = "overview";
+  App.acceptRefreshStateRuntime({ nextRuntime: runtime({ classification: 2 }) });
+  await flush();
+  assert.equal(counters.rules(), 0);
+  assert.equal(App.rulesRefreshPending, true);
+
+  App.currentPage = "rules";
+  listeners.click({ type: "click", target: navTarget("rules", document) });
+  await flushTimers();
+  assert.equal(counters.rules(), 1);
+  assert.equal(App.rulesRefreshPending, false);
+});
+
+test("Settings re-entry does not show loading or reread status until invalidated", async () => {
+  const { App, document, listeners, counters } = harness(runtime());
+  App.currentPage = "settings";
+
+  listeners.click({ type: "click", target: navTarget("settings", document) });
+  await flushTimers();
+  assert.equal(counters.settings(), 0);
+  assert.equal(counters.visibleSettings(), 0);
+
+  App.currentPage = "overview";
+  App.acceptRefreshStateRuntime({ nextRuntime: runtime({ settings: 2 }) });
+  await flush();
+  assert.equal(counters.settings(), 0);
+  assert.equal(App.settingsRefreshPending, true);
+
+  App.currentPage = "settings";
+  listeners.click({ type: "click", target: navTarget("settings", document) });
+  await flushTimers();
+  assert.equal(counters.settings(), 1);
+  assert.equal(counters.visibleSettings(), 0);
+  assert.equal(App.settingsRefreshPending, false);
+});
+
+test("Settings generation refresh while visible is background-only", async () => {
+  const { App, counters } = harness(runtime());
+  App.currentPage = "settings";
+
+  App.acceptRefreshStateRuntime({ nextRuntime: runtime({ settings: 2 }) });
+  await flush();
+
+  assert.equal(counters.settings(), 1);
+  assert.equal(counters.visibleSettings(), 0);
+  assert.equal(App.settingsRefreshPending, false);
 });
 
 test("Timeline consumes one live-only collection refresh but preserves structural refreshes", async () => {
