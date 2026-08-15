@@ -8,6 +8,11 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _paused_icon_path(icon_path: Path) -> Path:
+    path = Path(icon_path)
+    return path.with_name(f"{path.stem}-paused{path.suffix}")
+
+
 def load_icon_variant(
     icon_path: Path,
     *,
@@ -15,21 +20,29 @@ def load_icon_variant(
     width: int = 0,
     height: int = 0,
 ):
-    """Load the canonical icon, deriving the inactive variant via Win32."""
+    """Load the canonical active icon or its packaged paused derivative."""
 
     import win32con
     import win32gui
 
+    source_path = Path(icon_path)
     flags = win32con.LR_LOADFROMFILE
     if width <= 0 or height <= 0:
         flags |= win32con.LR_DEFAULTSIZE
         width = 0
         height = 0
     if not active:
-        flags |= getattr(win32con, "LR_MONOCHROME", 0x00000001)
+        paused_path = _paused_icon_path(source_path)
+        if paused_path.is_file():
+            source_path = paused_path
+        else:
+            # Source runs may not have gone through the release icon generator.
+            # Keep the legacy fallback there, while installed builds carry an
+            # explicit grayscale ICO and do not depend on LR_MONOCHROME.
+            flags |= getattr(win32con, "LR_MONOCHROME", 0x00000001)
     return win32gui.LoadImage(
         0,
-        str(Path(icon_path)),
+        str(source_path),
         win32con.IMAGE_ICON,
         int(width),
         int(height),
