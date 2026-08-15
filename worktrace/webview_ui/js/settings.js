@@ -224,6 +224,15 @@
         if (target) target.textContent = text;
     }
 
+    function renderLocalDataPath(status) {
+        var target = element("settings-local-data-path");
+        if (!target) return;
+        var path = String(status && status.local_data_path || "").trim();
+        target.textContent = path || "未加载";
+        target.title = path;
+    }
+    App.renderLocalDataPath = renderLocalDataPath;
+
     function setCaptureToggleStatus(text) {
         var target = element("settings-clipboard-toggle-status");
         if (target) target.textContent = text;
@@ -323,6 +332,7 @@
         renderCaptureToggle(status);
         renderLaunchAtLoginToggle(status);
         renderFDWorkToggle(status);
+        renderLocalDataPath(status);
         setLineText(
             "export_path_configured",
             status.export_path_configured ? "已配置" : "未配置"
@@ -362,7 +372,7 @@
             var detail = "采集和本地存储可用";
             if (status.recovery_blocked) {
                 title = "恢复尚未完成";
-                detail = "请在高级诊断中查看阻断原因";
+                detail = "请在高级设置中尝试恢复";
             } else if (status.maintenance_in_progress) {
                 title = "正在维护数据";
                 detail = "维护期间其他数据操作暂时不可用";
