@@ -560,7 +560,7 @@ def test_settings_recovery_blocked_shows_recovery_title():
 
     source = (ROOT / "worktrace/webview_ui/js/settings.js").read_text(encoding="utf-8")
     assert "恢复尚未完成" in source
-    assert "请在高级诊断中查看阻断原因" in source
+    assert "请在高级设置中尝试恢复" in source
 
 
 def test_settings_collector_not_running_shows_service_title():
