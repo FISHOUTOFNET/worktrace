@@ -125,6 +125,19 @@ def test_build_script_keeps_trace_output_contract() -> None:
     assert "$LASTEXITCODE" in source
 
 
+def test_build_script_auto_discovers_local_inno_setup_installation() -> None:
+    source = BUILD_PATH.read_text(encoding="utf-8")
+    assert '${env:ProgramFiles(x86)}' in source
+    assert '$env:ProgramFiles' in source
+    assert r'"Inno Setup 6\ISCC.exe"' in source
+    assert r"'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'" in source
+    assert r"'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'" in source
+    assert r"'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'" in source
+    assert "Get-ItemProperty $key -ErrorAction SilentlyContinue" in source
+    assert "InstallLocation" in source
+    assert source.index("Get-Command ISCC.exe") < source.index("${env:ProgramFiles(x86)}")
+
+
 def test_release_build_generates_trace_artifacts() -> None:
     source = RELEASE_BUILD_PATH.read_text(encoding="utf-8")
     assert 'Join-Path $repoRoot "dist\\Trace.exe"' in source
