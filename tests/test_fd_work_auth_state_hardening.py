@@ -47,11 +47,18 @@ def test_page_phase_probe_prioritizes_top_level_login_and_requires_verified_shel
     assert "candidate.document.body" in script
 
 
-def test_adapter_actions_fail_closed_without_verified_work_shell() -> None:
+def test_adapter_actions_use_verified_shell_without_extra_window_round_trip() -> None:
+    scripts: list[str] = []
+
     class Window:
         def evaluate_js(self, script, callback=None):
-            assert callback is None
-            return {"ok": False}
+            scripts.append(script)
+            assert "workTraceVerifiedWorkShellCandidates" in script
+            assert ".workHourList, input[placeholder='请选择日期']" in script
+            if callback is None:
+                return {"ok": False}
+            callback({"ok": False, "error": "page_contract_changed"})
+            return None
 
     adapter = FDWorkPageAdapter()
     window = Window()
@@ -60,10 +67,13 @@ def test_adapter_actions_fail_closed_without_verified_work_shell() -> None:
         "ok": False,
         "error": "adapter_injection_failed",
     }
+    before_action = len(scripts)
     assert adapter.await_stable_work_page(window, _operation()) == {
         "ok": False,
         "error": "page_contract_changed",
     }
+    assert len(scripts) == before_action + 1
+    assert '"action":"awaitStableWorkPage"' in scripts[-1]
 
 
 def test_before_load_immediately_invalidates_ready_navigation_state() -> None:
