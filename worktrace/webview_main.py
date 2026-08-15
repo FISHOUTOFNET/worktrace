@@ -187,8 +187,17 @@ def _bind_shell_events(window, shell: DesktopShellController) -> None:
         return
 
     def handle_loaded() -> None:
-        _apply_navigation_brand(window)
+        # The shell readiness marker must never wait on renderer-side scripting.
+        # pywebview evaluate_js can synchronously wait on WebView2 when invoked
+        # from the loaded event itself, so brand presentation is projected from
+        # a daemon thread only after the shell has accepted the loaded state.
         shell.handle_window_loaded()
+        threading.Thread(
+            target=_apply_navigation_brand,
+            args=(window,),
+            name="trace-navigation-brand",
+            daemon=True,
+        ).start()
 
     events.closing += shell.handle_window_closing
     events.loaded += handle_loaded
