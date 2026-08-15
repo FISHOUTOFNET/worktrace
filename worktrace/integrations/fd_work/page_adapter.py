@@ -11,6 +11,7 @@ from ._page_adapter_core import (
     FDWorkPageAdapter as _CoreFDWorkPageAdapter,
     FDWorkPagePhase,
     FDWorkPageType,
+    _WORK_SHELL_WINDOW_RESOLVER,
 )
 
 
@@ -54,6 +55,30 @@ function workTraceWorkShellWindow() {
   return candidates.length === 1 ? candidates[0] : null;
 }
 """.strip()
+
+
+def _with_verified_work_shell_resolver(script: str) -> str:
+    if _WORK_SHELL_WINDOW_RESOLVER not in script:
+        raise ValueError("FD Work shell resolver missing from adapter script")
+    return script.replace(
+        _WORK_SHELL_WINDOW_RESOLVER,
+        _VERIFIED_WORK_SHELL_WINDOW_RESOLVER,
+        1,
+    )
+
+
+class _VerifiedResolverWindow:
+    """Rewrite one core adapter script without adding another WebView round trip."""
+
+    def __init__(self, window: Any) -> None:
+        self._window = window
+
+    def evaluate_js(self, script: str, *args: Any, **kwargs: Any) -> Any:
+        return self._window.evaluate_js(
+            _with_verified_work_shell_resolver(script),
+            *args,
+            **kwargs,
+        )
 
 
 class FDWorkPageAdapter(_CoreFDWorkPageAdapter):
@@ -143,24 +168,8 @@ class FDWorkPageAdapter(_CoreFDWorkPageAdapter):
         )
         callback(window.evaluate_js(script))
 
-    @staticmethod
-    def _verified_work_shell_available(window: Any) -> bool:
-        script = (
-            "(function(){"
-            f"{_VERIFIED_WORK_SHELL_WINDOW_RESOLVER}"
-            "return {ok:!!workTraceWorkShellWindow()};"
-            "})()"
-        )
-        try:
-            value = window.evaluate_js(script)
-        except Exception:
-            return False
-        return isinstance(value, Mapping) and value.get("ok") is True
-
     def install_adapter(self, window: Any) -> dict[str, Any]:
-        if not self._verified_work_shell_available(window):
-            return {"ok": False, "error": "adapter_injection_failed"}
-        result = dict(super().install_adapter(window))
+        result = dict(super().install_adapter(_VerifiedResolverWindow(window)))
         if result.get("ok") is not True:
             return result
         picker = self._ensure_picker_session(window)
@@ -168,16 +177,27 @@ class FDWorkPageAdapter(_CoreFDWorkPageAdapter):
             return {"ok": False, "error": "adapter_injection_failed"}
         return {"ok": True, "version": self.adapter_version}
 
-    def _run_action(
-        self,
+    @staticmethod
+    def _evaluate_action(
         window: Any,
-        action: str,
-        contract: Mapping[str, Any],
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        if not self._verified_work_shell_available(window):
-            return {"ok": False, "error": "page_contract_changed"}
-        return super()._run_action(window, action, contract, **kwargs)
+        script: str,
+        *,
+        timeout_seconds: float,
+    ) -> tuple[Any, str | None, bool, str]:
+        try:
+            hardened_script = _with_verified_work_shell_resolver(script)
+        except ValueError:
+            return (
+                {"ok": False, "error": "page_contract_changed"},
+                "page_contract_changed",
+                False,
+                "none",
+            )
+        return _CoreFDWorkPageAdapter._evaluate_action(
+            window,
+            hardened_script,
+            timeout_seconds=timeout_seconds,
+        )
 
     def _ensure_picker_session(self, window: Any) -> Mapping[str, Any]:
         probe_script = (
