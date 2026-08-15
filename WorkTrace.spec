@@ -15,6 +15,7 @@ datas = [
     (str(root / 'worktrace' / 'schema.sql'), 'worktrace'),
     (str(root / 'worktrace' / 'schema_internal.sql'), 'worktrace'),
     (str(root / 'worktrace' / 'schema_indexes.sql'), 'worktrace'),
+    (str(root / 'worktrace' / 'privacy_policy_zh-CN.txt'), 'worktrace'),
     (str(root / 'worktrace' / 'platforms' / 'windows_probe_helper.py'), 'worktrace/platforms'),
     (str(root / 'worktrace' / 'integrations' / 'fd_work' / 'fd_work_adapter.js'), 'worktrace/integrations/fd_work'),
     (str(root / 'worktrace' / 'integrations' / 'fd_work' / 'fd_work_picker_session.js'), 'worktrace/integrations/fd_work'),
