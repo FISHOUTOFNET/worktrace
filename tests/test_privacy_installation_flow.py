@@ -28,8 +28,8 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_privacy_policy_v2_has_formal_data_lifecycle_sections():
-    assert PRIVACY_POLICY_VERSION == "2"
+def test_unpublished_privacy_policy_has_formal_data_lifecycle_sections():
+    assert PRIVACY_POLICY_VERSION == "1"
     assert PRIVACY_POLICY_EFFECTIVE_DATE == "2026-08-15"
     assert PRIVACY_POLICY_TEXT == _read(POLICY_PATH).strip()
 
@@ -54,14 +54,14 @@ def test_privacy_policy_v2_has_formal_data_lifecycle_sections():
     assert "所有数据默认保存在本机，不上传到云端" not in PRIVACY_POLICY_TEXT
 
 
-def test_privacy_gate_rejects_stale_installer_policy_version(temp_db):
-    assert privacy_gate_service.accept_privacy_notice_version("1") is False
+def test_privacy_gate_rejects_noncurrent_installer_policy_version(temp_db):
+    assert privacy_gate_service.accept_privacy_notice_version("2") is False
     assert privacy_gate_service.is_privacy_notice_accepted() is False
     assert get_privacy_notice_version() == ""
 
-    assert privacy_gate_service.accept_privacy_notice_version("2") is True
+    assert privacy_gate_service.accept_privacy_notice_version("1") is True
     assert privacy_gate_service.is_privacy_notice_accepted() is True
-    assert get_privacy_notice_version() == "2"
+    assert get_privacy_notice_version() == "1"
 
 
 def test_first_run_fallback_uses_same_versioned_policy(temp_db):
