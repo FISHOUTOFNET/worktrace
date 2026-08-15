@@ -105,7 +105,6 @@
             return App.renderProjectRuleProject(project);
         }).join("");
         restoreExpandedProjects(list, expanded);
-        if (App.bindProjectRuleDeleteEvents) App.bindProjectRuleDeleteEvents();
         applyRulesSearch();
     }
 
@@ -125,6 +124,7 @@
         }
         empty.hidden = true;
         renderProjectRulesList(list, projects);
+        if (App.bindProjectRuleDeleteEvents) App.bindProjectRuleDeleteEvents();
     }
     App.showProjectRules = showProjectRules;
 
@@ -138,6 +138,7 @@
         var projects = sortProjectsForRulesHome(App.lastProjectRulesData.projects || []);
         if (!projects.length) return;
         renderProjectRulesList(list, projects);
+        if (App.bindProjectRuleDeleteEvents) App.bindProjectRuleDeleteEvents();
     };
 
     function applyRulesSearch() {
