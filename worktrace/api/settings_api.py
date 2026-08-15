@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from ..config import resolve_paths
 from ..constants import PRIVACY_NOTICE_TEXT
 from ..services import (
     database_maintenance_service,
@@ -105,6 +106,7 @@ def get_settings_privacy_status() -> dict[str, Any]:
             "status": {
                 "page": "settings_privacy",
                 "storage_model": "local_only",
+                "local_data_path": str(resolve_paths().data_dir),
                 "clipboard_capture_enabled": is_clipboard_capture_enabled(),
                 "export_path_configured": bool(get_export_path()),
                 **maintenance,
