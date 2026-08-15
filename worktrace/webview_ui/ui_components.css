@@ -73,6 +73,15 @@ th,
     font-weight: 700;
 }
 
+.recent-start-time,
+.timeline-item-time {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+}
+
 .timeline-item {
     grid-template-columns: var(--record-start-time-width) minmax(0, 1fr) var(--record-duration-width);
 }
