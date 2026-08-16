@@ -120,7 +120,7 @@ def test_readme_points_to_release_validation_doc():
     [
         "有迹 (Trace) v0.1 Release Validation",
         "GitHub Actions Windows tests pass",
-        r"dist\Trace.exe",
+        r"dist\Trace-<version>.exe",
         r"dist\Trace-Setup-<version>.exe",
         "%LOCALAPPDATA%\\Programs\\Trace",
         "Release decision: pass / blocked",
@@ -163,12 +163,15 @@ def test_ci_layers_contain_required_release_smoke_steps():
         "constraints-release.txt",
         r"scripts\build_windows_release.ps1",
         "inno-setup-6.7.3",
-        r"dist\Trace.exe",
-        r"dist\Trace-Setup-$env:TRACE_VERSION.exe",
-        "Retired unversioned installer alias was generated",
+        '"Trace-$env:TRACE_VERSION.exe"',
+        '"Trace-Setup-$env:TRACE_VERSION.exe"',
+        "Unexpected release executable artifacts",
+        "Release staging residue remained after the canonical build",
     ):
         assert phrase in package_action, f"package action missing phrase: {phrase}"
 
+    assert r"dist\Trace.exe" not in package_action
+    assert r"dist\Trace-Setup.exe" not in package_action
     assert "python -m PyInstaller --noconfirm --clean WorkTrace.spec" not in package_action
     assert "uses: ./.github/actions/build-windows-package" in installer
     assert '"constraints-release.txt"' in installer
