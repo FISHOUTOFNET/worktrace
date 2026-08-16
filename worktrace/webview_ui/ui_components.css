@@ -205,7 +205,7 @@ th,
     align-self: stretch;
     display: flex;
     flex-direction: column;
-    padding-right: 13px;
+    padding-inline: 18px;
     overflow: hidden;
 }
 
