@@ -11,7 +11,7 @@ $repoRoot = Resolve-Path (Join-Path $scriptDir "..")
 
 & python (Join-Path $repoRoot "scripts\verify_release_environment.py") --scope installer
 if ($LASTEXITCODE -ne 0) {
-    throw "Windows installer build environment does not match the pinned release baseline."
+    throw "Windows installer build environment does not meet the minimum supported requirements."
 }
 
 [string]$version = (& python -c 'from worktrace.version import __version__; print(__version__)').Trim()
@@ -72,9 +72,8 @@ if (-not $ISCCPath -or -not (Test-Path -LiteralPath $ISCCPath)) {
     throw "Inno Setup compiler ISCC.exe was not found. Pass -ISCCPath or set ISCC_PATH."
 }
 
-$expectedInnoVersion = "6.7.3"
-$expectedPreprocVersion = 101122816
-$versionMarker = "WORKTRACE_PREPROCVER=$expectedPreprocVersion"
+$minimumInnoVersion = "6.3.0"
+$minimumPreprocVersion = 100859904
 $probeSource = @'
 #pragma message "WORKTRACE_PREPROCVER=" + Str(PREPROCVER)
 [Setup]
@@ -85,10 +84,15 @@ DefaultDirName={tmp}\WorkTraceCompilerProbe
 $probeOutput = @($probeSource | & $ISCCPath "/O-" "-" 2>&1)
 $probeExitCode = $LASTEXITCODE
 $probeText = $probeOutput -join "`n"
-if ($probeExitCode -ne 0 -or -not $probeText.Contains($versionMarker)) {
-    throw "有迹 release builds require Inno Setup $expectedInnoVersion. Detected compiler did not report the required PREPROCVER. ISCC: $ISCCPath"
+$versionMatch = [regex]::Match($probeText, 'WORKTRACE_PREPROCVER=(\d+)')
+if ($probeExitCode -ne 0 -or -not $versionMatch.Success) {
+    throw "Unable to determine the Inno Setup compiler version. 有迹 requires Inno Setup $minimumInnoVersion or newer. ISCC: $ISCCPath"
 }
-Write-Host "Inno Setup compiler verified: $expectedInnoVersion ($ISCCPath)"
+$actualPreprocVersion = [int64]$versionMatch.Groups[1].Value
+if ($actualPreprocVersion -lt $minimumPreprocVersion) {
+    throw "有迹 requires Inno Setup $minimumInnoVersion or newer. ISCC: $ISCCPath"
+}
+Write-Host "Inno Setup compiler verified: PREPROCVER=$actualPreprocVersion (minimum $minimumInnoVersion, ISCC: $ISCCPath)"
 
 $name = [System.IO.Path]::GetFileNameWithoutExtension($target)
 $distPath = Split-Path -Parent $target
