@@ -170,6 +170,8 @@ def test_ci_layers_contain_required_release_smoke_steps():
 
     assert "python -m PyInstaller --noconfirm --clean WorkTrace.spec" not in package_action
     assert "uses: ./.github/actions/build-windows-package" in installer
+    assert '"constraints-release.txt"' in installer
+    assert '"scripts/verify_release_environment.py"' in installer
     assert r"scripts\ci\installer_runtime_smoke.ps1" in installer
     assert 'tags: ["v*"]' in installer
     assert "workflow_dispatch:" in installer
