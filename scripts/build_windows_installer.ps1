@@ -31,13 +31,26 @@ if ($useDefaultOutput) {
 $exe = Resolve-Path -LiteralPath $ExePath
 $installerSource = Resolve-Path -LiteralPath (Join-Path $repoRoot "installer\WorkTrace.iss")
 $target = [System.IO.Path]::GetFullPath($OutputPath)
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+$distPath = Split-Path -Parent $target
+New-Item -ItemType Directory -Force -Path $distPath | Out-Null
+
+# Never allow a previous output at the same path to make a failed compiler run
+# look successful. Also retire the historical unversioned compatibility alias
+# when this script is used through its canonical default-output entry point.
+Remove-Item -Force -LiteralPath $target -ErrorAction SilentlyContinue
+if ($useDefaultOutput) {
+    Remove-Item `
+        -Force `
+        -LiteralPath (Join-Path $distPath "Trace-Setup.exe") `
+        -ErrorAction SilentlyContinue
+}
 
 $brandIcon = Join-Path $repoRoot "build\brand\worktrace.ico"
 & python (Join-Path $repoRoot "scripts\generate_brand_icon.py") $brandIcon
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $brandIcon)) {
     throw "Failed to generate the 有迹 Windows icon."
 }
+$brandIcon = (Resolve-Path -LiteralPath $brandIcon).Path
 
 if (-not $ISCCPath) { $ISCCPath = $env:ISCC_PATH }
 if (-not $ISCCPath) {
@@ -95,7 +108,6 @@ if ($actualPreprocVersion -lt $minimumPreprocVersion) {
 Write-Host "Inno Setup compiler verified: PREPROCVER=$actualPreprocVersion (minimum $minimumInnoVersion, ISCC: $ISCCPath)"
 
 $name = [System.IO.Path]::GetFileNameWithoutExtension($target)
-$distPath = Split-Path -Parent $target
 & $ISCCPath "/Qp" "/DMyAppExe=$exe" "/DMyAppVersion=$version" "/O$distPath" "/F$name" $installerSource
 if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup compiler failed with exit code $LASTEXITCODE"
@@ -105,9 +117,12 @@ if (-not (Test-Path -LiteralPath $target)) {
     throw "Installer build completed without generating $target"
 }
 
-if ($useDefaultOutput) {
-    $compatTarget = Join-Path $distPath "Trace-Setup.exe"
-    Copy-Item -Force -LiteralPath $target -Destination $compatTarget
+& python `
+    (Join-Path $repoRoot "scripts\verify_windows_exe_icon.py") `
+    --exe $target `
+    --ico $brandIcon
+if ($LASTEXITCODE -ne 0) {
+    throw "Installer build generated an executable without the canonical 有迹 icon."
 }
 
 Get-Item -LiteralPath $target
