@@ -11,7 +11,7 @@ from static_helpers import func_body, read_js, read_resource  # noqa: E402
 
 
 def _css_rule(source: str, selector: str) -> str:
-    match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", source)
+    match = re.search(r"(?m)^" + re.escape(selector) + r"\s*\{([^}]*)\}", source)
     assert match, f"styles.css must define {selector}"
     return match.group(1)
 
