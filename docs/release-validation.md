@@ -59,7 +59,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_instal
 - [ ] WebView Node behavior tests pass.
 - [ ] PyInstaller build smoke passes.
 - [ ] `dist\Trace.exe` is generated.
-- [ ] `dist\Trace-Setup.exe` is generated.
+- [ ] `dist\Trace-Setup-<version>.exe` is generated and embeds the canonical 有迹 icon resource.
+- [ ] `dist\Trace-Setup.exe` is not generated.
 - [ ] Installer upgrade smoke passes with both the current executable name and the legacy `WorkTrace.exe` compatibility path.
 - [ ] Upgrade removes a stale legacy executable and rewrites the enabled startup command to `Trace.exe`.
 - [ ] No administrator-permission requirement is introduced.
@@ -80,7 +81,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_instal
 - [ ] Main WebView title is `有迹 · Trace`.
 - [ ] Navigation brand displays `迹 / 有迹` and no user-facing `WorkTrace` label remains.
 - [ ] Main executable is `Trace.exe`.
-- [ ] Installer is `Trace-Setup.exe`.
+- [ ] Installer is `Trace-Setup-<version>.exe`; no unversioned installer alias is shipped.
 - [ ] Start Menu and optional desktop shortcut are named `有迹`.
 - [ ] Installer and application use the white `迹` icon on the product blue background.
 - [ ] Settings says `登录 Windows 时自动启动有迹`.
@@ -167,7 +168,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_instal
 
 ### L. Installer And Upgrade
 
-- [ ] `dist\Trace-Setup.exe` runs.
+- [ ] `dist\Trace-Setup-<version>.exe` runs and displays the canonical 有迹 icon.
 - [ ] Fresh install defaults to `%LOCALAPPDATA%\Programs\Trace`.
 - [ ] Current-user Start Menu shortcut is `有迹`; optional desktop shortcut is also `有迹`.
 - [ ] Setup requests no UAC and uses `PrivilegesRequired=lowest`.
