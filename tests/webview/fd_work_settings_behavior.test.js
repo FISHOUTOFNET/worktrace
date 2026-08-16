@@ -59,7 +59,7 @@ test("FD Work settings status renders disabled by default", () => {
   const { App, element } = harness();
   App.renderSettingsStatus({ fd_work: { supported: true, enabled: false } });
   assert.equal(element("settings-fd-work-toggle").checked, false);
-  assert.equal(element("settings-fd-work-toggle-status").textContent, "插件关闭");
+  assert.equal(element("settings-fd-work-toggle-status").textContent, "关闭");
 });
 
 test("FD Work settings write failure restores authoritative backend state", async () => {
@@ -77,7 +77,7 @@ test("FD Work settings write failure restores authoritative backend state", asyn
   await App.setFDWorkEnabled(true);
 
   assert.equal(element("settings-fd-work-toggle").checked, false);
-  assert.equal(element("settings-fd-work-toggle-status").textContent, "插件关闭");
+  assert.equal(element("settings-fd-work-toggle-status").textContent, "关闭");
   assert.match(element("settings-error").textContent, /write failed/);
 });
 
