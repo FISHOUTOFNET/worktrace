@@ -85,17 +85,31 @@ runs:
     - name: Verify release artifacts
       shell: pwsh
       run: |
-        $versionedExe = "dist\Trace-$env:TRACE_VERSION.exe"
-        $versionedSetup = "dist\Trace-Setup-$env:TRACE_VERSION.exe"
-        foreach ($artifact in @(
-          "dist\Trace.exe",
-          $versionedExe,
-          $versionedSetup
-        )) {
-          if (-not (Test-Path -LiteralPath $artifact)) {
-            throw "$artifact was not generated"
-          }
+        $expectedNames = @(
+          "Trace-$env:TRACE_VERSION.exe",
+          "Trace-Setup-$env:TRACE_VERSION.exe"
+        )
+        $releaseFiles = @(
+          Get-ChildItem -LiteralPath "dist" -File -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.Name -match '^(?:Trace|WorkTrace)(?:-Setup)?(?:-\d+\.\d+\.\d+)?\.exe$'
+            }
+        )
+        $releaseNames = @($releaseFiles | ForEach-Object { $_.Name })
+        $missingNames = @($expectedNames | Where-Object { $_ -notin $releaseNames })
+        $unexpectedNames = @($releaseNames | Where-Object { $_ -notin $expectedNames })
+
+        if ($missingNames.Count -gt 0) {
+          throw "Missing canonical release artifacts: $($missingNames -join ', ')"
         }
-        if (Test-Path -LiteralPath "dist\Trace-Setup.exe") {
-          throw "Retired unversioned installer alias was generated"
+        if ($unexpectedNames.Count -gt 0) {
+          throw "Unexpected release executable artifacts: $($unexpectedNames -join ', ')"
+        }
+
+        $stagingRoot = "build\release-staging"
+        if (Test-Path -LiteralPath $stagingRoot) {
+          $stagingResidue = @(Get-ChildItem -LiteralPath $stagingRoot -Force -ErrorAction SilentlyContinue)
+          if ($stagingResidue.Count -gt 0) {
+            throw "Release staging residue remained after the canonical build"
+          }
         }
