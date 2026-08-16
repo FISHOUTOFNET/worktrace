@@ -107,11 +107,46 @@ th,
     max-width: 100%;
 }
 
-/* Keep viewport ownership stable: pages that genuinely scroll reserve their gutter,
-   while Overview and Timeline delegate scrolling to their content panes. */
+/* Keep viewport ownership stable without letting native scrollbars consume layout width.
+   Scrolling remains owned by the same containers; only the scrollbar chrome is hidden. */
 .page {
     min-height: 0;
-    scrollbar-gutter: stable;
+}
+
+:where(
+    .page,
+    #recent-list,
+    .timeline-list,
+    .timeline-inspector,
+    .table-scroll,
+    .drawer,
+    .dialog,
+    .first-run-notice-text,
+    .settings-categories,
+    .project-autocomplete-menu,
+    textarea
+) {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    scrollbar-gutter: auto;
+}
+
+:where(
+    .page,
+    #recent-list,
+    .timeline-list,
+    .timeline-inspector,
+    .table-scroll,
+    .drawer,
+    .dialog,
+    .first-run-notice-text,
+    .settings-categories,
+    .project-autocomplete-menu,
+    textarea
+)::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
 }
 
 .overview-page.active,
@@ -120,6 +155,16 @@ th,
     flex-direction: column;
     overflow: hidden;
 }
+
+/* The visible scrollbar used to be compensated with a dedicated right inset.
+   With invisible scrollbars, Overview returns to each component's native
+   symmetric horizontal spacing instead of keeping that historical offset. */
+.overview-page {
+    --overview-time-right-inset: 0px;
+}
+.current-activity { padding-right: 18px; }
+.recent-section { padding-right: 13px; }
+.recent-section h2 { padding-right: 0; }
 
 .overview-page > .page-header,
 .overview-page > .inline-alert,
@@ -169,7 +214,6 @@ th,
     min-height: 0;
     display: block;
     overflow: auto;
-    scrollbar-gutter: stable;
 }
 
 .timeline-workspace {
@@ -181,7 +225,6 @@ th,
 .timeline-list,
 .timeline-inspector {
     overflow: auto;
-    scrollbar-gutter: stable;
 }
 
 @media (min-width: 960px) {
