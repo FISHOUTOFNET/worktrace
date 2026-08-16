@@ -43,19 +43,23 @@ def test_windows_builds_stamp_and_name_artifacts_from_canonical_version() -> Non
     assert '"/DMyAppVersion=$version"' in installer
     assert "[regex]::Replace" not in installer
     assert "WorkTrace.generated." not in installer
-    assert 'dist\\Trace-$version.exe' in release
-    assert 'dist\\Trace-Setup-$version.exe' in release
+    assert 'Join-Path $distPath "Trace-$version.exe"' in release
+    assert 'Join-Path $distPath "Trace-Setup-$version.exe"' in release
     assert 'Trace-$env:TRACE_VERSION.exe' in action
     assert 'Trace-Setup-$env:TRACE_VERSION.exe' in action
 
 
-def test_unversioned_setup_name_is_compatibility_only() -> None:
+def test_unversioned_setup_alias_is_retired() -> None:
     installer = BUILD_INSTALLER.read_text(encoding="utf-8")
     release = BUILD_RELEASE.read_text(encoding="utf-8")
+    action = PACKAGE_ACTION.read_text(encoding="utf-8")
     workflow = INSTALLER_WORKFLOW.read_text(encoding="utf-8")
 
     assert '$useDefaultOutput = -not $OutputPath' in installer
-    assert 'Copy-Item -Force -LiteralPath $target -Destination $compatTarget' in installer
-    assert '$compatSetupPath = Join-Path $repoRoot "dist\\Trace-Setup.exe"' in release
+    assert '$compatTarget' not in installer
+    assert 'Copy-Item -Force -LiteralPath $target -Destination' not in installer
+    assert '$compatSetupPath' not in release
+    assert '"dist\\Trace-Setup.exe"' not in release
+    assert "Retired unversioned installer alias was generated" in action
     assert "path: dist/Trace*.exe" in workflow
     assert '"worktrace/version.py"' in workflow
