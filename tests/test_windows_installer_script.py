@@ -173,16 +173,23 @@ def test_local_installer_accepts_inno_setup_6_3_and_newer() -> None:
 
 def test_release_build_generates_only_current_trace_release_artifacts() -> None:
     source = RELEASE_BUILD_PATH.read_text(encoding="utf-8")
-    assert 'Join-Path $distPath "Trace.exe"' in source
+    assert 'Join-Path $distPath "Trace.exe"' not in source
+    assert 'Join-Path $stagingDistPath "Trace.exe"' in source
     assert 'Join-Path $distPath "Trace-$version.exe"' in source
     assert 'Join-Path $distPath "Trace-Setup-$version.exe"' in source
+    assert 'Join-Path $repoRoot "build\\release-staging"' in source
+    assert "--distpath $stagingDistPath" in source
+    assert "--workpath $stagingWorkPath" in source
+    assert "Copy-Item -Force -LiteralPath $stagedExePath -Destination $portablePath" in source
+    assert "ExePath = $stagedExePath" in source
     assert "$compatSetupPath" not in source
-    assert "WorkTrace" in source
-    assert "Remove-Item -Force" in source
-    pyinstaller_call = "& python -m PyInstaller --noconfirm --clean WorkTrace.spec"
-    assert pyinstaller_call in source
+    assert "Remove-CanonicalReleaseArtifact" in source
+    assert "ExecutablePath" in source
+    assert "[System.StringComparison]::OrdinalIgnoreCase" in source
+    assert "Stop-Process -Id $process.ProcessId -Force" in source
     assert "build_windows_installer.ps1" in source
-    assert "PyInstaller completed without generating dist\\Trace.exe" in source
+    assert "PyInstaller completed without generating the staged Trace.exe" in source
+    assert "Canonical Windows release contains unexpected executable artifacts" in source
     assert "Installer build completed without generating dist\\Trace-Setup-$version.exe" in source
     assert "Installer build completed without generating dist\\Trace-Setup.exe" not in source
 
@@ -204,7 +211,8 @@ def test_ci_prepares_one_pinned_verified_inno_setup_version() -> None:
     assert "is-6_7_3" in action
     assert "9C73C3BAE7ED48D44112A0F48E66742C00090BDB5BEF71D9D3C056C66E97B732" in action
     assert "ISCC_PATH=" in action
-    assert "Retired unversioned installer alias was generated" in action
+    assert "Unexpected release executable artifacts" in action
+    assert "Release staging residue remained after the canonical build" in action
 
 
 def test_ci_exercises_running_app_upgrade_and_uninstall_paths() -> None:
