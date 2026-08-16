@@ -49,6 +49,38 @@ def _seed_verified_open(project_id: int, *, elapsed_seconds: int) -> tuple[int, 
     return activity_id, day
 
 
+def _publish_transient_runtime(
+    project_id: int,
+    project_name: str,
+    *,
+    elapsed_seconds: int,
+) -> str:
+    day = get_default_report_date()
+    publish_runtime_activity_snapshot(
+        {
+            "persisted_activity_id": 0,
+            "is_persisted": False,
+            "elapsed_seconds": int(elapsed_seconds),
+            "start_time": f"{day} 09:00:00",
+            "status": "normal",
+            "app_name": "Word",
+            "process_name": "winword.exe",
+            "resource_identity_key": r"C:\\Work\\transient.docx",
+            "resource_display_name": "transient.docx",
+            "display_project": {
+                "id": project_id,
+                "name": project_name,
+                "description": "",
+                "source": "manual",
+                "is_uncategorized": False,
+                "is_suggested_project": False,
+            },
+        },
+        reason="statistics_transient_as_of_test",
+    )
+    return day
+
+
 def test_statistics_realtime_summary_includes_verified_open_activity_without_persisting_close(temp_db):
     project_id = project_service.create_project("Live Client")
     activity_id, day = _seed_verified_open(project_id, elapsed_seconds=1800)
@@ -74,10 +106,68 @@ def test_statistics_realtime_summary_includes_verified_open_activity_without_per
     assert int(row["duration_seconds"] or 0) < 1800
 
 
+def test_statistics_realtime_summary_projects_transient_runtime_without_database_write(temp_db):
+    project_id = project_service.create_project("Transient Client")
+    day = _publish_transient_runtime(
+        project_id,
+        "Transient Client",
+        elapsed_seconds=12,
+    )
+
+    first = statistics_service.get_statistics_realtime_export_summary(day, day)
+
+    assert first["total_duration_seconds"] == 12
+    assert first["activity_count"] == 1
+    assert first["session_count"] == 1
+    assert first["export_row_count"] == 1
+    assert first["by_project"][0]["display_name"] == "Transient Client"
+    assert first["by_project"][0]["duration_seconds"] == 12
+    assert first["by_app"][0]["display_name"] == "Word"
+    assert first["live_target"]["enabled"] is True
+    assert first["live_target"]["elapsed_seconds_at_sample"] == 12
+
+    with get_connection() as conn:
+        count = conn.execute("SELECT COUNT(*) AS count FROM activity_log").fetchone()["count"]
+    assert int(count) == 0
+
+    _publish_transient_runtime(
+        project_id,
+        "Transient Client",
+        elapsed_seconds=19,
+    )
+    second = statistics_service.get_statistics_realtime_export_summary(day, day)
+    assert second["total_duration_seconds"] == 19
+    assert second["by_project"][0]["duration_seconds"] == 19
+
+    with get_connection() as conn:
+        count = conn.execute("SELECT COUNT(*) AS count FROM activity_log").fetchone()["count"]
+    assert int(count) == 0
+
+
 def test_statistics_realtime_project_scope_excludes_other_live_project(temp_db):
     selected_project = project_service.create_project("Selected")
     live_project = project_service.create_project("Live Other")
     _activity_id, day = _seed_verified_open(live_project, elapsed_seconds=900)
+
+    summary = statistics_service.get_statistics_realtime_export_summary(
+        day,
+        day,
+        selected_project,
+    )
+
+    assert summary["total_duration_seconds"] == 0
+    assert summary["by_project"] == []
+    assert summary["live_target"] is None
+
+
+def test_statistics_realtime_project_scope_excludes_other_transient_project(temp_db):
+    selected_project = project_service.create_project("Selected")
+    transient_project = project_service.create_project("Transient Other")
+    day = _publish_transient_runtime(
+        transient_project,
+        "Transient Other",
+        elapsed_seconds=15,
+    )
 
     summary = statistics_service.get_statistics_realtime_export_summary(
         day,
