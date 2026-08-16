@@ -42,10 +42,13 @@ class SettingsBridgeMixin:
         result: dict[str, Any],
         *,
         required_on_success: bool = False,
+        include_on_failure: bool = False,
         refresh_error: str = "加载设置状态失败",
     ) -> dict[str, Any]:
         payload = dict(result or {})
         payload.pop("status", None)
+        if payload.get("ok") is not True and not include_on_failure:
+            return payload
         status = self._authoritative_settings_status()
         if status is not None:
             payload["status"] = status
@@ -71,7 +74,8 @@ class SettingsBridgeMixin:
             )
             if result.get("ok") is not True:
                 result.pop("maintenance", None)
-                return self._with_authoritative_settings_status(result)
+                result.pop("status", None)
+                return result
             return self._with_authoritative_settings_status(result)
         except Exception:
             logger.exception("webview bridge recover_database_maintenance failed")
@@ -99,6 +103,7 @@ class SettingsBridgeMixin:
             return self._with_authoritative_settings_status(
                 result,
                 required_on_success=True,
+                include_on_failure=True,
                 refresh_error="设置登录启动状态刷新失败",
             )
         except Exception:
