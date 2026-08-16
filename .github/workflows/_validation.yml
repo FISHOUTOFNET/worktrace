@@ -65,15 +65,16 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.11.9"
           cache: pip
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
+            constraints-release.txt
 
       - name: Install dependencies
         shell: pwsh
-        run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt
+        run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt -c constraints-release.txt
 
       - name: Record pywebview runtime
         shell: pwsh
@@ -214,7 +215,7 @@ jobs:
       - name: Set up Python for typography acceptance
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.11.9"
 
       - name: Render typography acceptance
         id: typography
