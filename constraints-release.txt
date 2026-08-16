@@ -1,0 +1,11 @@
+# Exact direct dependency pins for reproducible Windows release validation.
+# Keep this file aligned with requirements.txt and requirements-dev.txt.
+cryptography==49.0.0
+pywin32==312; platform_system == "Windows"
+psutil==7.2.2
+openpyxl==3.1.5
+pywebview==6.2.1
+pytest==9.1.1
+pytest-timeout==2.4.0
+pyinstaller==6.21.0
+pillow==12.3.0
