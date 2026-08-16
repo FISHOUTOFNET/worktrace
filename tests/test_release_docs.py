@@ -121,7 +121,7 @@ def test_readme_points_to_release_validation_doc():
         "有迹 (Trace) v0.1 Release Validation",
         "GitHub Actions Windows tests pass",
         r"dist\Trace.exe",
-        r"dist\Trace-Setup.exe",
+        r"dist\Trace-Setup-<version>.exe",
         "%LOCALAPPDATA%\\Programs\\Trace",
         "Release decision: pass / blocked",
     ],
@@ -164,7 +164,8 @@ def test_ci_layers_contain_required_release_smoke_steps():
         r"scripts\build_windows_release.ps1",
         "inno-setup-6.7.3",
         r"dist\Trace.exe",
-        r"dist\Trace-Setup.exe",
+        r"dist\Trace-Setup-$env:TRACE_VERSION.exe",
+        "Retired unversioned installer alias was generated",
     ):
         assert phrase in package_action, f"package action missing phrase: {phrase}"
 
@@ -177,6 +178,7 @@ def test_ci_layers_contain_required_release_smoke_steps():
     assert "workflow_dispatch:" in installer
     assert "Upgrade install" in installer_runtime
     assert "Uninstall" in installer_runtime
+    assert r"dist\Trace-Setup-$version.exe" in installer_runtime
 
     combined = "\n".join(
         (standard, reusable, package_action, installer, installer_runtime)
