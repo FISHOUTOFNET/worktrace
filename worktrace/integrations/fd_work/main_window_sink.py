@@ -8,7 +8,12 @@ from typing import Any, Mapping
 
 
 def _window_loaded(window: Any) -> bool:
-    loaded_event = getattr(getattr(window, "events", None), "loaded", None)
+    events = getattr(window, "events", None)
+    if events is None:
+        # Non-pywebview test doubles and legacy adapters use the explicit ready
+        # gate only. Shipping pywebview windows always expose lifecycle events.
+        return True
+    loaded_event = getattr(events, "loaded", None)
     is_loaded = getattr(loaded_event, "is_set", None)
     if not callable(is_loaded):
         return False
