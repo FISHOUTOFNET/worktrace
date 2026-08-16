@@ -20,6 +20,7 @@ INSTALLER_PATH = REPO_ROOT / "installer" / "WorkTrace.iss"
 SPEC_PATH = REPO_ROOT / "WorkTrace.spec"
 ENTRY_PATH = REPO_ROOT / "scripts" / "pyinstaller_entry.py"
 WEBVIEW_MAIN_PATH = REPO_ROOT / "worktrace" / "webview_main.py"
+WEBVIEW_INDEX_PATH = REPO_ROOT / "worktrace" / "webview_ui" / "index_fd_work_v5.html"
 POLICY_PATH = REPO_ROOT / "worktrace" / "privacy_policy_zh-CN.txt"
 
 
@@ -120,11 +121,21 @@ def test_installer_privacy_acceptance_cli_is_narrow_and_version_checked():
     assert "_run_installer_privacy_acceptance" in source
 
 
-def test_runtime_settings_projection_removes_read_only_privacy_status_noise():
-    source = _read(WEBVIEW_MAIN_PATH)
+def test_privacy_presentation_is_owned_by_shipping_html_not_runtime_projection():
+    runtime_source = _read(WEBVIEW_MAIN_PATH)
+    html = _read(WEBVIEW_INDEX_PATH)
 
-    assert "healthSummary.remove()" in source
-    assert "核心工作轨迹本地保存" in source
-    assert "我已阅读并了解" in source
-    assert "查看《有迹隐私政策》" in source
-    assert "了解有迹处理哪些数据、数据存储在哪里，以及如何管理这些数据。" in source
+    for forbidden in (
+        "healthSummary.remove()",
+        "_navigation_brand_script",
+        "document.getElementById",
+        "document.querySelector",
+        "查看《有迹隐私政策》",
+    ):
+        assert forbidden not in runtime_source
+
+    assert 'id="settings-health-summary"' not in html
+    assert "核心工作轨迹本地保存" in html
+    assert ">我已阅读并了解</button>" in html
+    assert 'id="settings-privacy-notice-btn" type="button">查看政策</button>' in html
+    assert "查看《有迹隐私政策》" not in html
