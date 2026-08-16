@@ -15,10 +15,21 @@ if ($LASTEXITCODE -ne 0 -or $version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|
     throw "Failed to resolve a valid 有迹 application version."
 }
 
-$exePath = Join-Path $repoRoot "dist\Trace.exe"
-$portablePath = Join-Path $repoRoot "dist\Trace-$version.exe"
-$setupPath = Join-Path $repoRoot "dist\Trace-Setup-$version.exe"
-$compatSetupPath = Join-Path $repoRoot "dist\Trace-Setup.exe"
+$distPath = Join-Path $repoRoot "dist"
+$exePath = Join-Path $distPath "Trace.exe"
+$portablePath = Join-Path $distPath "Trace-$version.exe"
+$setupPath = Join-Path $distPath "Trace-Setup-$version.exe"
+
+# A canonical release build owns the known Windows release outputs in dist/.
+# Clear old Trace/WorkTrace binaries first so stale aliases and retired branding
+# cannot be mistaken for artifacts produced by this build.
+if (Test-Path -LiteralPath $distPath) {
+    Get-ChildItem -LiteralPath $distPath -File -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -match '^(?:Trace|WorkTrace)(?:-Setup)?(?:-\d+\.\d+\.\d+)?\.exe$'
+        } |
+        Remove-Item -Force
+}
 
 Push-Location $repoRoot
 try {
@@ -38,9 +49,5 @@ if ($ISCCPath) { $installerArgs.ISCCPath = $ISCCPath }
 
 if (-not (Test-Path -LiteralPath $setupPath)) {
     throw "Installer build completed without generating dist\Trace-Setup-$version.exe"
-}
-Copy-Item -Force -LiteralPath $setupPath -Destination $compatSetupPath
-if (-not (Test-Path -LiteralPath $compatSetupPath)) {
-    throw "Installer build completed without generating dist\Trace-Setup.exe"
 }
 Get-Item -LiteralPath $portablePath, $setupPath
