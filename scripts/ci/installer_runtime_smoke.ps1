@@ -1,9 +1,17 @@
 param(
-    [string]$SetupPath = "dist\Trace-Setup.exe",
+    [string]$SetupPath = "",
     [string]$InstallDir = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($SetupPath)) {
+    [string]$version = (& python -c 'from worktrace.version import __version__; print(__version__)').Trim()
+    if ($LASTEXITCODE -ne 0 -or $version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+        throw "Unable to resolve the versioned installer path."
+    }
+    $SetupPath = "dist\Trace-Setup-$version.exe"
+}
 
 $setup = (Resolve-Path -LiteralPath $SetupPath).Path
 $tempRoot = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
