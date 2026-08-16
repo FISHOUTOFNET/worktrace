@@ -1,7 +1,6 @@
 """WebView UI entry point (default and only shipping UI)."""
 from __future__ import annotations
 
-import json
 import logging
 import sys
 import threading
@@ -150,87 +149,12 @@ def _background_start_allowed(services, startup_result: dict[str, Any]) -> bool:
         return False
 
 
-def _navigation_brand_script() -> str:
-    display_name = json.dumps(PRODUCT_DISPLAY_NAME, ensure_ascii=False)
-    return f"""
-(() => {{
-    const brand = document.querySelector('.app-brand');
-    if (!brand) return;
-    const mark = brand.querySelector('.brand-mark');
-    const label = brand.querySelector('.nav-label');
-    if (label) label.textContent = {display_name};
-    brand.setAttribute('aria-label', {display_name});
-    const compactSidebar = window.matchMedia('(max-width: 959px)');
-    const syncBrandMark = () => {{
-        if (mark) mark.style.display = compactSidebar.matches ? '' : 'none';
-    }};
-    syncBrandMark();
-    if (typeof compactSidebar.addEventListener === 'function') {{
-        compactSidebar.addEventListener('change', syncBrandMark);
-    }} else if (typeof compactSidebar.addListener === 'function') {{
-        compactSidebar.addListener(syncBrandMark);
-    }}
-
-    // Settings shows controls and actionable exceptions, not a healthy-state
-    // dashboard. Abnormal recovery remains in its dedicated recovery card.
-    const healthSummary = document.getElementById('settings-health-summary');
-    if (healthSummary) healthSummary.remove();
-
-    // Avoid an absolute local-only claim: optional integrations can perform
-    // user-initiated network operations while core work-trace data is local-first.
-    const localStatus = document.querySelector('.topbar-local');
-    if (localStatus) localStatus.textContent = '核心工作轨迹本地保存';
-
-    const privacyAccept = document.getElementById('first-run-notice-accept-btn');
-    if (privacyAccept) privacyAccept.textContent = '我已阅读并了解';
-
-    // Privacy is an information/action entry, not an "accepted" status setting.
-    const privacyButton = document.getElementById('settings-privacy-notice-btn');
-    if (privacyButton) {{
-        privacyButton.textContent = '查看《有迹隐私政策》';
-        const row = privacyButton.closest('.setting-row');
-        const copy = row ? row.querySelector('span') : null;
-        if (copy) {{
-            while (copy.firstChild) copy.removeChild(copy.firstChild);
-            const title = document.createElement('strong');
-            title.textContent = '隐私政策';
-            const detail = document.createElement('small');
-            detail.textContent = '了解有迹处理哪些数据、数据存储在哪里，以及如何管理这些数据。';
-            copy.appendChild(title);
-            copy.appendChild(detail);
-        }}
-    }}
-}})();
-""".strip()
-
-
-def _apply_navigation_brand(window) -> None:
-    try:
-        window.evaluate_js(_navigation_brand_script())
-    except Exception:
-        logging.debug("navigation brand projection deferred", exc_info=True)
-
-
 def _bind_shell_events(window, shell: DesktopShellController) -> None:
     events = getattr(window, "events", None)
     if events is None:
         return
-
-    def handle_loaded() -> None:
-        # The shell readiness marker must never wait on renderer-side scripting.
-        # pywebview evaluate_js can synchronously wait on WebView2 when invoked
-        # from the loaded event itself, so brand presentation is projected from
-        # a daemon thread only after the shell has accepted the loaded state.
-        shell.handle_window_loaded()
-        threading.Thread(
-            target=_apply_navigation_brand,
-            args=(window,),
-            name="trace-navigation-brand",
-            daemon=True,
-        ).start()
-
     events.closing += shell.handle_window_closing
-    events.loaded += handle_loaded
+    events.loaded += shell.handle_window_loaded
 
 
 _RENDERER_UNAVAILABLE_MESSAGE = (
