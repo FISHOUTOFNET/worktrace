@@ -28,6 +28,21 @@ def test_shipping_html_contains_final_static_copy() -> None:
     assert 'id="app-tooltip" role="tooltip" hidden' in source
 
 
+def test_shipping_html_owns_brand_privacy_and_local_copy() -> None:
+    source = read_resource("index_fd_work_v5.html")
+
+    assert '<div class="app-brand" aria-label="有迹 · Trace">' in source
+    assert '<span class="nav-label">有迹 · Trace</span>' in source
+    assert "核心工作轨迹本地保存" in source
+    assert "所有数据只存于本机" not in source
+    assert ">我已阅读并了解</button>" in source
+    assert ">我已阅读并同意</button>" not in source
+    assert 'id="settings-health-summary"' not in source
+    assert 'id="settings-privacy-notice-btn" type="button">查看政策</button>' in source
+    assert "查看《有迹隐私政策》" not in source
+    assert "了解有迹处理哪些数据、数据存储在哪里，以及如何管理这些数据。" not in source
+
+
 def test_shared_ui_components_do_not_patch_feature_presentation() -> None:
     source = read_js("ui_components.js")
 
