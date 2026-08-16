@@ -13,6 +13,7 @@ from worktrace.version import __version__ as canonical_version
 pytestmark = [pytest.mark.packaging, pytest.mark.contract]
 
 ROOT = Path(__file__).resolve().parents[1]
+INSTALLER_SOURCE = ROOT / "installer" / "WorkTrace.iss"
 BUILD_INSTALLER = ROOT / "scripts" / "build_windows_installer.ps1"
 BUILD_RELEASE = ROOT / "scripts" / "build_windows_release.ps1"
 PACKAGE_ACTION = ROOT / ".github" / "actions" / "build-windows-package" / "action.yml"
@@ -27,6 +28,7 @@ def test_release_version_starts_at_0_0_1_and_has_one_runtime_source() -> None:
 
 
 def test_windows_builds_stamp_and_name_artifacts_from_canonical_version() -> None:
+    installer_source = INSTALLER_SOURCE.read_text(encoding="utf-8")
     installer = BUILD_INSTALLER.read_text(encoding="utf-8")
     release = BUILD_RELEASE.read_text(encoding="utf-8")
     action = PACKAGE_ACTION.read_text(encoding="utf-8")
@@ -36,8 +38,11 @@ def test_windows_builds_stamp_and_name_artifacts_from_canonical_version() -> Non
     assert version_import in release
     assert version_import in action
     assert 'dist\\Trace-Setup-$version.exe' in installer
-    assert "MyAppVersion" in installer
-    assert "[regex]::Replace" in installer
+    assert "#ifndef MyAppVersion" in installer_source
+    assert '#define MyAppVersion "0.1"' in installer_source
+    assert '"/DMyAppVersion=$version"' in installer
+    assert "[regex]::Replace" not in installer
+    assert "WorkTrace.generated." not in installer
     assert 'dist\\Trace-$version.exe' in release
     assert 'dist\\Trace-Setup-$version.exe' in release
     assert 'Trace-$env:TRACE_VERSION.exe' in action
