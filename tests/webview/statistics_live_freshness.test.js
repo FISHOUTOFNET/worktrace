@@ -14,8 +14,10 @@ function formatDuration(value) {
 
 function harness() {
   const listeners = {};
+  let runtime = null;
   const document = {
     addEventListener(name, handler) { listeners[name] = handler; },
+    getElementById() { return null; },
   };
   const window = {
     document,
@@ -24,8 +26,15 @@ function harness() {
       formatDuration,
       applyLocalTicker() {},
       refreshAll() { return Promise.resolve("base"); },
-      acceptRefreshStateRuntime() { return true; },
-      liveRuntimeStore: { get() { return null; } },
+      acceptRefreshStateRuntime(state) {
+        if (state && state.runtime) runtime = state.runtime;
+        return true;
+      },
+      acceptPagePayloadRuntime(payload) {
+        if (payload && payload.runtime) runtime = payload.runtime;
+        return true;
+      },
+      liveRuntimeStore: { get() { return runtime; } },
     },
   };
   const context = {
@@ -49,7 +58,22 @@ function harness() {
     context,
     { filename: "ui_composition.js" }
   );
-  return { App: window.WorkTraceApp, listeners };
+  return {
+    App: window.WorkTraceApp,
+    listeners,
+    setRuntime(value) { runtime = value; },
+  };
+}
+
+function runtimeState(structureRevision, liveRevision = "live-1") {
+  return {
+    structureRevision,
+    liveRevision,
+    generations: {
+      classification_catalog: 1,
+      settings: 1,
+    },
+  };
 }
 
 test("statistics live math adds only post-sample delta and recomputes every share", () => {
@@ -134,4 +158,68 @@ test("timeline structural refresh is held while editing and drains when clean", 
   assert.equal(await App.drainTimelineStructuralRefresh(), true);
   assert.equal(refreshes, 1);
   assert.equal(App.timelineStructuralRefreshPending, false);
+});
+
+test("page payload structure changes invalidate project last-used presentation", () => {
+  const { App, setRuntime } = harness();
+  setRuntime(runtimeState("structure-1"));
+  App.currentPage = "timeline";
+  App.rulesRefreshPending = false;
+
+  App.acceptPagePayloadRuntime({ runtime: runtimeState("structure-2") });
+
+  assert.equal(App.rulesRefreshPending, true);
+  assert.equal(App.timelineStructuralRefreshPending, undefined);
+});
+
+test("statistics local ticker never marks an unfetched runtime revision as accepted", () => {
+  const { App, setRuntime } = harness();
+  setRuntime(runtimeState("structure-2"));
+  App.currentPage = "statistics";
+  App.statisticsAcceptedRefreshIdentity = "structure-1|live-1";
+  App.statisticsAcceptedPayload = {
+    summary: {
+      snapshot_revision: "snapshot-1",
+      total_duration_seconds: 10,
+      by_project: [],
+      by_app: [],
+      by_status: [],
+    },
+    exportTicket: { revision: "snapshot-1" },
+    filters: { dateFrom: "2026-08-16", dateTo: "2026-08-16", projectId: "" },
+  };
+
+  App.applyStatisticsLocalTicker();
+
+  assert.equal(App.statisticsAcceptedRefreshIdentity, "structure-1|live-1");
+});
+
+test("background statistics refresh records the runtime identity captured at request start", async () => {
+  const { App, setRuntime } = harness();
+  setRuntime(runtimeState("structure-1"));
+  let resolveRequest;
+  const response = new Promise((resolve) => { resolveRequest = resolve; });
+  App.bridge = { getStatisticsExportSummary() { return response; } };
+  App.selectedStatisticsFilters = () => ({
+    dateFrom: "2026-08-16",
+    dateTo: "2026-08-16",
+    projectId: "",
+  });
+  App.requestCoordinator = {
+    beginLatest() { return { id: 1 }; },
+    isCurrent() { return true; },
+  };
+  App.handleResult = (result) => result;
+  App.showStatistics = () => {};
+  App.clearStatisticsError = () => {};
+
+  const pending = App.backgroundStatisticsRefresh();
+  setRuntime(runtimeState("structure-2"));
+  resolveRequest({
+    summary: { total_duration_seconds: 20, by_project: [], by_app: [], by_status: [] },
+    export_ticket: { revision: "snapshot-2" },
+  });
+  await pending;
+
+  assert.equal(App.statisticsAcceptedRefreshIdentity, "structure-1|live-1");
 });
