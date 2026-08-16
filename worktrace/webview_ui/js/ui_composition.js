@@ -503,7 +503,7 @@
             if (navPage && App.currentPage === navPage) {
                 if (navPage === "rules" && App.rulesRefreshPending === true) {
                     refreshComposedPage("rules", "page-entry");
-                } else if (navPage === "settings" && App.settingsRefreshPending === true) {
+                } else if (navPage === "settings") {
                     refreshComposedPage("settings", "page-entry");
                 } else if (navPage === "statistics" && statisticsNeedsEntryRefresh()) {
                     refreshComposedPage("statistics", "page-entry");
