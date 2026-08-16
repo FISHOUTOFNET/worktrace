@@ -70,9 +70,5 @@
     App.syncTimelineActionPresentation = syncEditorActionPresentation;
     App.syncActivityDeleteAffordances = syncActivityDeleteAffordances;
 
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", initTimelineActionPresentation, { once: true });
-    } else {
-        initTimelineActionPresentation();
-    }
+    initTimelineActionPresentation();
 })();
