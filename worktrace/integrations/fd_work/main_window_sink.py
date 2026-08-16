@@ -7,6 +7,17 @@ import threading
 from typing import Any, Mapping
 
 
+def _window_loaded(window: Any) -> bool:
+    loaded_event = getattr(getattr(window, "events", None), "loaded", None)
+    is_loaded = getattr(loaded_event, "is_set", None)
+    if not callable(is_loaded):
+        return False
+    try:
+        return is_loaded() is True
+    except Exception:
+        return False
+
+
 class FDWorkMainWindowSink:
     """Own the two public main-window callbacks used by this integration."""
 
@@ -33,8 +44,7 @@ class FDWorkMainWindowSink:
         self._deliver(
             "window.WorkTraceApp&&window.WorkTraceApp.receiveFDWorkStatus("
             + serialized
-            + ")",
-            require_ready=True,
+            + ")"
         )
 
     def picker_result(self, result: Mapping[str, Any]) -> None:
@@ -42,20 +52,17 @@ class FDWorkMainWindowSink:
         self._deliver(
             "window.WorkTraceApp&&window.WorkTraceApp.receiveFDWorkCasePickerResult("
             + serialized
-            + ")",
-            require_ready=False,
+            + ")"
         )
 
-    def _deliver(
-        self,
-        script: str,
-        *,
-        require_ready: bool,
-    ) -> None:
+    def _deliver(self, script: str) -> None:
         with self._lock:
             window = self._window
             ready = self._ready
-        if window is None or (require_ready and not ready):
+        # pywebview's EdgeChromium evaluate_js waits for the WinForms UI thread.
+        # FD Work can emit navigation status while that thread is still creating
+        # windows, so never enter evaluate_js until the main WebView itself loaded.
+        if window is None or not ready or not _window_loaded(window):
             return
         try:
             window.evaluate_js(script)
