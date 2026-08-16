@@ -185,12 +185,18 @@ def test_ci_layers_contain_required_release_smoke_steps():
     assert "run_python312" not in combined
 
 
-def test_release_build_verifies_pinned_environment_before_packaging():
+def test_local_release_build_uses_minimum_python_while_ci_remains_pinned():
     release = _read_text(RELEASE_BUILD_PATH)
     verifier = _read_text(RELEASE_ENV_VERIFY_PATH)
+    readme = _read_text(README_PATH)
 
     assert "verify_release_environment.py" in release
     assert "--scope release" in release
-    assert 'RELEASE_PYTHON_VERSION = "3.11.9"' in verifier
-    assert 'CONSTRAINTS = ROOT / "constraints-release.txt"' in verifier
-    assert "importlib.metadata" in verifier
+    assert "minimum supported requirements" in release
+    assert "MINIMUM_PYTHON_VERSION = (3, 11)" in verifier
+    assert "sys.version_info" in verifier
+    assert "RELEASE_PYTHON_VERSION" not in verifier
+    assert "constraints-release.txt" not in verifier
+    assert "importlib.metadata" not in verifier
+    assert "Python 3.11+" in readme
+    assert "Inno Setup 6.3.0+" in readme
