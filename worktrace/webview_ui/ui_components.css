@@ -107,6 +107,23 @@ th,
     max-width: 100%;
 }
 
+/* Conditional timeline actions keep a stable visual affordance without
+   leaving empty fixed-width columns behind. Disabled destructive actions are
+   deliberately neutral instead of looking actionable. */
+.danger-icon-button:disabled {
+    color: var(--color-text-tertiary);
+    border-color: transparent;
+    background: transparent;
+    opacity: .58;
+}
+
+.editor-actions.advanced-actions-unavailable {
+    grid-template-columns: minmax(0, 1fr) var(--control-height);
+}
+.editor-actions.advanced-actions-unavailable #timeline-hide-session {
+    grid-column: 2;
+}
+
 /* Keep viewport ownership stable without letting native scrollbars consume layout width.
    Scrolling remains owned by the same containers; only the scrollbar chrome is hidden. */
 .page {
