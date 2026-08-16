@@ -12,6 +12,7 @@ CI_YML = ROOT / ".github" / "workflows" / "ci.yml"
 VALIDATION_YML = ROOT / ".github" / "workflows" / "_validation.yml"
 INSTALLER_YML = ROOT / ".github" / "workflows" / "installer-validation.yml"
 PACKAGE_ACTION_YML = ROOT / ".github" / "actions" / "build-windows-package" / "action.yml"
+RELEASE_BUILD = ROOT / "scripts" / "build_windows_release.ps1"
 INSTALLER_SMOKE = ROOT / "scripts" / "ci" / "installer_runtime_smoke.ps1"
 
 
@@ -52,12 +53,16 @@ class TestSharedPackageBuild:
         assert shared in validation
         assert shared in installer
 
-    def test_shared_action_builds_both_artifacts(self) -> None:
-        source = PACKAGE_ACTION_YML.read_text(encoding="utf-8")
-        assert "python -m PyInstaller --noconfirm --clean WorkTrace.spec" in source
-        assert "dist\\Trace.exe" in source
-        assert r"scripts\build_windows_installer.ps1" in source
-        assert "dist\\Trace-Setup.exe" in source
+    def test_shared_action_delegates_to_one_release_build(self) -> None:
+        action = PACKAGE_ACTION_YML.read_text(encoding="utf-8")
+        release = RELEASE_BUILD.read_text(encoding="utf-8")
+
+        assert r"scripts\build_windows_release.ps1" in action
+        assert "python -m PyInstaller --noconfirm --clean WorkTrace.spec" not in action
+        assert "& python -m PyInstaller --noconfirm --clean WorkTrace.spec" in release
+        assert "build_windows_installer.ps1" in release
+        assert "dist\\Trace.exe" in action
+        assert "dist\\Trace-Setup.exe" in action
 
 
 class TestInstallerValidationLayer:
