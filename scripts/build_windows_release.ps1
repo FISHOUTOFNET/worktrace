@@ -7,7 +7,7 @@ $repoRoot = Resolve-Path (Join-Path $scriptDir "..")
 
 & python (Join-Path $scriptDir "verify_release_environment.py") --scope release
 if ($LASTEXITCODE -ne 0) {
-    throw "Windows release environment does not match the pinned release baseline."
+    throw "Windows release environment does not meet the minimum supported requirements."
 }
 
 [string]$version = (& python -c 'from worktrace.version import __version__; print(__version__)').Trim()
