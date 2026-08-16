@@ -62,19 +62,13 @@ def test_typed_sink_waits_for_main_webview_load_even_after_renderer_ready() -> N
     ]
 
 
-def test_typed_sink_fails_closed_without_main_window_loaded_event() -> None:
+def test_typed_sink_fails_closed_without_usable_loaded_signal() -> None:
     sink = FDWorkMainWindowSink()
-
-    class _BareWindow:
-        def __init__(self) -> None:
-            self.scripts: list[str] = []
-
-        def evaluate_js(self, script: str) -> None:
-            self.scripts.append(script)
-
-    window = _BareWindow()
+    window = _Window()
+    window.events.loaded = object()
     sink.bind_window(window)
     sink.mark_ready()
+
     sink.status_changed({"enabled": True})
     sink.picker_result({"ok": False, "error": "picker_canceled"})
 
