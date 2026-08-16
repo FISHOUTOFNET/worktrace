@@ -177,7 +177,7 @@ def get_statistics_realtime_export_summary(
     from .report_as_of_snapshot_service import build_statistics_as_of_snapshot
     from .statistics_projection import build_statistics_summary_projection
 
-    with page_read_scope():
+    with page_read_scope(allow_unpersisted_runtime=True):
         as_of = build_statistics_as_of_snapshot(date_from, date_to)
         projection = build_statistics_summary_projection(
             as_of.snapshot,
