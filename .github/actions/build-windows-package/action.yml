@@ -7,15 +7,16 @@ runs:
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
-        python-version: "3.11"
+        python-version: "3.11.9"
         cache: pip
         cache-dependency-path: |
           requirements.txt
           requirements-dev.txt
+          constraints-release.txt
 
-    - name: Install dependencies
+    - name: Install pinned release dependencies
       shell: pwsh
-      run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt
+      run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt -c constraints-release.txt
 
     - name: Resolve application version
       shell: pwsh
@@ -28,28 +29,17 @@ runs:
         "trace_version=$version" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
         Write-Host "trace_version=$version"
 
-    - name: Record pywebview runtime
+    - name: Record pinned release runtime
       shell: pwsh
       run: |
+        $pythonVersion = python -c 'import platform; print(platform.python_version())'
         $pywebviewVersion = python -c 'from importlib.metadata import version; print(version("pywebview"))'
+        $pyinstallerVersion = python -c 'from importlib.metadata import version; print(version("pyinstaller"))'
+        $pillowVersion = python -c 'from importlib.metadata import version; print(version("pillow"))'
+        "python_version=$pythonVersion" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
         "pywebview_version=$pywebviewVersion" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
-        Write-Host "pywebview_version=$pywebviewVersion"
-
-    - name: Build single-file exe
-      shell: pwsh
-      run: python -m PyInstaller --noconfirm --clean WorkTrace.spec
-
-    - name: Verify single-file exe
-      shell: pwsh
-      run: |
-        if (-not (Test-Path -LiteralPath "dist\Trace.exe")) {
-          throw "dist\Trace.exe was not generated"
-        }
-        $versionedExe = "dist\Trace-$env:TRACE_VERSION.exe"
-        Copy-Item -Force -LiteralPath "dist\Trace.exe" -Destination $versionedExe
-        if (-not (Test-Path -LiteralPath $versionedExe)) {
-          throw "$versionedExe was not generated"
-        }
+        "pyinstaller_version=$pyinstallerVersion" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+        "pillow_version=$pillowVersion" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
 
     - name: Prepare pinned Inno Setup compiler
       shell: pwsh
@@ -88,17 +78,22 @@ runs:
         }
         "ISCC_PATH=$iscc" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding UTF8
 
-    - name: Build per-user installer
+    - name: Build canonical Windows release package
       shell: pwsh
-      run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1
+      run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_release.ps1 -ISCCPath "$env:ISCC_PATH"
 
-    - name: Verify installer
+    - name: Verify release artifacts
       shell: pwsh
       run: |
+        $versionedExe = "dist\Trace-$env:TRACE_VERSION.exe"
         $versionedSetup = "dist\Trace-Setup-$env:TRACE_VERSION.exe"
-        if (-not (Test-Path -LiteralPath $versionedSetup)) {
-          throw "$versionedSetup was not generated"
-        }
-        if (-not (Test-Path -LiteralPath "dist\Trace-Setup.exe")) {
-          throw "dist\Trace-Setup.exe compatibility alias was not generated"
+        foreach ($artifact in @(
+          "dist\Trace.exe",
+          $versionedExe,
+          $versionedSetup,
+          "dist\Trace-Setup.exe"
+        )) {
+          if (-not (Test-Path -LiteralPath $artifact)) {
+            throw "$artifact was not generated"
+          }
         }
