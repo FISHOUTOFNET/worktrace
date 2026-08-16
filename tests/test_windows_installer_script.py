@@ -147,6 +147,15 @@ def test_build_script_auto_discovers_local_inno_setup_installation() -> None:
     assert source.index("Get-Command ISCC.exe") < source.index("${env:ProgramFiles(x86)}")
 
 
+def test_local_installer_accepts_inno_setup_6_3_and_newer() -> None:
+    source = BUILD_PATH.read_text(encoding="utf-8")
+    assert '$minimumInnoVersion = "6.3.0"' in source
+    assert "$minimumPreprocVersion = 100859904" in source
+    assert "$actualPreprocVersion -lt $minimumPreprocVersion" in source
+    assert '$expectedInnoVersion = "6.7.3"' not in source
+    assert "$expectedPreprocVersion = 101122816" not in source
+
+
 def test_release_build_generates_trace_artifacts() -> None:
     source = RELEASE_BUILD_PATH.read_text(encoding="utf-8")
     assert 'Join-Path $repoRoot "dist\\Trace.exe"' in source
