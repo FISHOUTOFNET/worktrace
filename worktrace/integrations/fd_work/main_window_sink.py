@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import queue
 import threading
 from typing import Any, Mapping
 
@@ -34,7 +35,14 @@ class FDWorkMainWindowSink:
         self._lock = threading.Lock()
         self._window = None
         self._ready = False
-        self._deliver_asynchronously = deliver_asynchronously
+        self._delivery_queue: queue.Queue[tuple[Any, str]] | None = None
+        if deliver_asynchronously:
+            self._delivery_queue = queue.Queue()
+            threading.Thread(
+                target=self._run_delivery_worker,
+                name="fd-work-main-window-sink",
+                daemon=True,
+            ).start()
 
     def bind_window(self, window) -> None:
         with self._lock:
@@ -74,27 +82,40 @@ class FDWorkMainWindowSink:
         # windows, so never enter evaluate_js until the main WebView itself loaded.
         if window is None or not ready or not _window_loaded(window):
             return
-        if self._deliver_asynchronously:
-            # evaluate_js blocks the calling thread until the GUI thread processes
-            # the ExecuteScriptAsync callback. When FD Work emits from inside a
-            # GUI-thread lifecycle callback (e.g. before_load), the GUI thread is
-            # still busy and cannot service that callback -- calling it there
-            # self-deadlocks. Dispatch to a worker thread so the GUI thread returns
-            # to its message loop before the JS runs.
-            threading.Thread(
-                target=self._evaluate_async,
-                args=(window, script),
-                name="fd-work-main-window-sink",
-                daemon=True,
-            ).start()
+        delivery_queue = self._delivery_queue
+        if delivery_queue is not None:
+            # Keep one FIFO worker between FD Work lifecycle callbacks and
+            # evaluate_js. This lets the GUI callback return before JS delivery
+            # starts while preserving arrival order and avoiding one thread per
+            # status update.
+            delivery_queue.put_nowait((window, script))
             return
-        try:
-            window.evaluate_js(script)
-        except Exception:
+        self._evaluate(window, script)
+
+    def _run_delivery_worker(self) -> None:
+        delivery_queue = self._delivery_queue
+        if delivery_queue is None:
             return
+        while True:
+            window, script = delivery_queue.get()
+            try:
+                with self._lock:
+                    current_window = self._window
+                    ready = self._ready
+                # Revalidate at execution time. A queued notification must never
+                # be delivered to a closed or rebound main window.
+                if (
+                    current_window is not window
+                    or not ready
+                    or not _window_loaded(window)
+                ):
+                    continue
+                self._evaluate(window, script)
+            finally:
+                delivery_queue.task_done()
 
     @staticmethod
-    def _evaluate_async(window: Any, script: str) -> None:
+    def _evaluate(window: Any, script: str) -> None:
         try:
             window.evaluate_js(script)
         except Exception:
