@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 UI_ROOT = ROOT / "worktrace" / "webview_ui"
 INDEX = UI_ROOT / "index_fd_work_v5.html"
 SETTINGS_JS = UI_ROOT / "js" / "settings.js"
+STYLES = UI_ROOT / "styles.css"
 
 
 def test_general_settings_show_only_the_real_local_data_location() -> None:
@@ -37,3 +38,23 @@ def test_local_data_location_is_rendered_from_authoritative_status() -> None:
     assert "target.title = path;" in source
     assert "请在高级诊断中查看阻断原因" not in source
     assert "请在高级设置中尝试恢复" in source
+
+
+def test_privacy_action_and_health_status_are_concise() -> None:
+    index = INDEX.read_text(encoding="utf-8")
+    source = SETTINGS_JS.read_text(encoding="utf-8")
+    assert 'id="settings-privacy-notice-btn" type="button">查看政策</button>' in index
+    assert 'strong.textContent = "系统状态";' in source
+    assert 'var badgeText = "正常";' in source
+    assert 'badgeText = "需恢复";' in source
+    assert 'badgeText = "维护中";' in source
+    assert 'badgeText = "异常";' in source
+    assert 'if (statusText === "插件关闭") statusText = "关闭";' in source
+
+
+def test_short_settings_sections_do_not_stretch_or_depend_on_hidden_siblings() -> None:
+    styles = STYLES.read_text(encoding="utf-8")
+    assert ".settings-content { align-self: start;" in styles
+    assert 'label.setting-row:has(+ #settings-fd-work-reconnect:not([hidden]))' not in styles
+    assert '#settings-section-advanced > label.setting-row[for="settings-fd-work-toggle"]' in styles
+    assert "#settings-recovery-card { border-bottom: 0; }" in styles
