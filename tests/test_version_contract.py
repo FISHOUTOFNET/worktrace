@@ -49,7 +49,7 @@ def test_windows_builds_stamp_and_name_artifacts_from_canonical_version() -> Non
     assert 'Trace-Setup-$env:TRACE_VERSION.exe' in action
 
 
-def test_unversioned_setup_alias_is_retired() -> None:
+def test_unversioned_release_aliases_are_retired() -> None:
     installer = BUILD_INSTALLER.read_text(encoding="utf-8")
     release = BUILD_RELEASE.read_text(encoding="utf-8")
     action = PACKAGE_ACTION.read_text(encoding="utf-8")
@@ -59,7 +59,11 @@ def test_unversioned_setup_alias_is_retired() -> None:
     assert '$compatTarget' not in installer
     assert 'Copy-Item -Force -LiteralPath $target -Destination' not in installer
     assert '$compatSetupPath' not in release
+    assert 'Join-Path $distPath "Trace.exe"' not in release
+    assert 'Join-Path $stagingDistPath "Trace.exe"' in release
     assert '"dist\\Trace-Setup.exe"' not in release
-    assert "Retired unversioned installer alias was generated" in action
+    assert "Unexpected release executable artifacts" in action
+    assert r"dist\Trace.exe" not in action
+    assert r"dist\Trace-Setup.exe" not in action
     assert "path: dist/Trace*.exe" in workflow
     assert '"worktrace/version.py"' in workflow
