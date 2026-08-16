@@ -188,8 +188,6 @@
         if (App.currentPage !== "statistics") return;
         var accepted = App.statisticsAcceptedPayload;
         if (!accepted || !accepted.summary || !accepted.filters) return;
-        var identity = runtimeRefreshIdentity();
-        if (identity) App.statisticsAcceptedRefreshIdentity = identity;
         var liveTarget = accepted.exportTicket && accepted.exportTicket.live_target;
         var summary = statisticsLiveSummaryAtNow(accepted.summary, Date.now(), liveTarget);
         var delta = nonNegativeInt(summary && summary._live_delta_seconds);
@@ -242,6 +240,7 @@
         if (App.statisticsLoading) return App.statisticsLoadPromise || Promise.resolve(null);
         var filters = App.selectedStatisticsFilters();
         var key = "background|" + JSON.stringify(filters || {});
+        var requestIdentity = runtimeRefreshIdentity();
         var token = App.requestCoordinator.beginLatest("statistics", key);
         return App.bridge.getStatisticsExportSummary(
             filters.dateFrom, filters.dateTo, filters.projectId
@@ -257,7 +256,7 @@
                 filters: filters
             };
             App.statisticsSnapshotRevision = String(data.export_ticket.revision || "");
-            App.statisticsAcceptedRefreshIdentity = runtimeRefreshIdentity();
+            App.statisticsAcceptedRefreshIdentity = requestIdentity;
             App.statisticsLastLiveRenderKey = "";
             if (typeof App.showStatistics === "function") App.showStatistics(data.summary, filters);
             App.statisticsLoaded = true;
@@ -383,51 +382,67 @@
         };
     }
 
-    var baseAcceptRefreshStateRuntime = App.acceptRefreshStateRuntime;
-    if (typeof baseAcceptRefreshStateRuntime === "function") {
-        App.acceptRefreshStateRuntime = function (state) {
+    function handleAcceptedRuntimeTransition(previous, accepted, source) {
+        var current = App.liveRuntimeStore && App.liveRuntimeStore.get
+            ? App.liveRuntimeStore.get()
+            : null;
+        if (!accepted || !previous || !current) return accepted;
+
+        var structureChanged = String(previous.structureRevision || "")
+            !== String(current.structureRevision || "");
+        var liveChanged = String(previous.liveRevision || "")
+            !== String(current.liveRevision || "");
+        var classificationChanged = runtimeGeneration(previous, "classification_catalog")
+            !== runtimeGeneration(current, "classification_catalog");
+        var settingsChanged = runtimeGeneration(previous, "settings")
+            !== runtimeGeneration(current, "settings");
+        var rulesDataChanged = structureChanged || classificationChanged;
+        var page = String(App.currentPage || "");
+
+        // Project-rule presentation includes activity-backed last_used_at, so it
+        // depends on report structure as well as on the classification catalog.
+        if (rulesDataChanged) App.rulesRefreshPending = true;
+        if (settingsChanged) App.settingsRefreshPending = true;
+
+        // A page payload is itself the authoritative refresh for the active page.
+        // Cross-surface invalidation still applies, but current-page reconcile is
+        // reserved for heartbeat refresh-state transitions to avoid double fetches.
+        if (source !== "refresh-state") return accepted;
+
+        if (page === "timeline") {
+            App.suppressNextTimelineCollectionRefresh = !structureChanged && liveChanged;
+        } else if (page === "overview") {
+            App.suppressNextOverviewCollectionRefresh = !structureChanged && liveChanged;
+        }
+
+        if (page === "timeline" && structureChanged
+            && typeof App._timelineEditingActive === "function"
+            && App._timelineEditingActive()) {
+            App.timelineStructuralRefreshPending = true;
+        } else if (page === "rules" && rulesDataChanged) {
+            refreshComposedPage("rules", "runtime-dependency");
+        } else if (page === "statistics" && (structureChanged || liveChanged)) {
+            refreshComposedPage("statistics", "runtime-revision");
+        } else if (page === "settings" && settingsChanged) {
+            refreshComposedPage("settings", "settings-generation");
+        }
+        return accepted;
+    }
+
+    function wrapRuntimeAcceptance(methodName, source) {
+        var base = App[methodName];
+        if (typeof base !== "function") return;
+        App[methodName] = function () {
             var previous = App.liveRuntimeStore && App.liveRuntimeStore.get
                 ? App.liveRuntimeStore.get()
                 : null;
-            var accepted = baseAcceptRefreshStateRuntime.apply(App, arguments);
-            var current = App.liveRuntimeStore && App.liveRuntimeStore.get
-                ? App.liveRuntimeStore.get()
-                : null;
-            if (!accepted || !previous || !current) return accepted;
-
-            var structureChanged = String(previous.structureRevision || "")
-                !== String(current.structureRevision || "");
-            var liveChanged = String(previous.liveRevision || "")
-                !== String(current.liveRevision || "");
-            var classificationChanged = runtimeGeneration(previous, "classification_catalog")
-                !== runtimeGeneration(current, "classification_catalog");
-            var settingsChanged = runtimeGeneration(previous, "settings")
-                !== runtimeGeneration(current, "settings");
-            var page = String(App.currentPage || "");
-
-            if (classificationChanged) App.rulesRefreshPending = true;
-            if (settingsChanged) App.settingsRefreshPending = true;
-
-            if (page === "timeline") {
-                App.suppressNextTimelineCollectionRefresh = !structureChanged && liveChanged;
-            } else if (page === "overview") {
-                App.suppressNextOverviewCollectionRefresh = !structureChanged && liveChanged;
-            }
-
-            if (page === "timeline" && structureChanged
-                && typeof App._timelineEditingActive === "function"
-                && App._timelineEditingActive()) {
-                App.timelineStructuralRefreshPending = true;
-            } else if (page === "rules" && classificationChanged) {
-                refreshComposedPage("rules", "catalog-generation");
-            } else if (page === "statistics" && (structureChanged || liveChanged)) {
-                refreshComposedPage("statistics", "runtime-revision");
-            } else if (page === "settings" && settingsChanged) {
-                refreshComposedPage("settings", "settings-generation");
-            }
-            return accepted;
+            var accepted = base.apply(App, arguments);
+            return handleAcceptedRuntimeTransition(previous, accepted, source);
         };
     }
+
+    wrapRuntimeAcceptance("acceptRefreshStateRuntime", "refresh-state");
+    wrapRuntimeAcceptance("acceptPagePayloadRuntime", "page-payload");
 
     var baseApplyLocalTicker = App.applyLocalTicker;
     if (typeof baseApplyLocalTicker === "function") {
