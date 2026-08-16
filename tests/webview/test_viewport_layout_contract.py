@@ -111,6 +111,40 @@ def test_timeline_uses_remaining_viewport_without_visible_scrollbars():
     assert index.index("styles.css?") < index.index("ui_components.css?")
 
 
+def test_timeline_conditional_actions_keep_stable_nonempty_operation_slots():
+    final = _resource("ui_components.css")
+    presentation = _resource("js/timeline_action_presentation.js")
+    index = _resource("index_fd_work_v5.html")
+
+    disabled_danger = _rule(final, ".danger-icon-button:disabled")
+    collapsed_actions = _rule(final, ".editor-actions.advanced-actions-unavailable")
+    moved_delete = _rule(
+        final,
+        ".editor-actions.advanced-actions-unavailable #timeline-hide-session",
+    )
+
+    assert "var(--color-text-tertiary)" in disabled_danger
+    assert "background: transparent" in disabled_danger
+    assert "grid-template-columns: minmax(0, 1fr) var(--control-height)" in collapsed_actions
+    assert "grid-column: 2" in moved_delete
+
+    assert 'button.hidden = false' in presentation
+    assert 'button.disabled = true' in presentation
+    assert 'data-activity-delete-placeholder' in presentation
+    assert 'button.innerHTML = App.iconMarkup("trash")' in presentation
+    assert 'advanced.hidden === true' in presentation
+    assert 'attributeFilter: ["hidden", "disabled"]' in presentation
+    assert 'childList: true' in presentation
+
+    assert index.index("js/timeline.js?") < index.index("js/timeline_action_presentation.js?")
+    assert index.index("js/timeline_delete_actions.js?") < index.index(
+        "js/timeline_action_presentation.js?"
+    )
+    assert index.index("js/timeline_action_presentation.js?") < index.index(
+        "js/init_fd_work_v5.js?"
+    )
+
+
 def test_loading_feedback_does_not_resize_rendered_timeline_or_settings():
     final = _resource("ui_components.css")
 
