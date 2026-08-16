@@ -90,10 +90,12 @@ runs:
         foreach ($artifact in @(
           "dist\Trace.exe",
           $versionedExe,
-          $versionedSetup,
-          "dist\Trace-Setup.exe"
+          $versionedSetup
         )) {
           if (-not (Test-Path -LiteralPath $artifact)) {
             throw "$artifact was not generated"
           }
+        }
+        if (Test-Path -LiteralPath "dist\Trace-Setup.exe") {
+          throw "Retired unversioned installer alias was generated"
         }
