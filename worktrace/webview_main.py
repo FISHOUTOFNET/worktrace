@@ -300,7 +300,7 @@ def main(*, background: bool = False) -> int:
                 logging.exception("update shutdown listener startup failed")
                 update_shutdown_prepared = False
 
-        fd_work_main_sink = FDWorkMainWindowSink()
+        fd_work_main_sink = FDWorkMainWindowSink(deliver_asynchronously=True)
         fd_work_page_adapter = FDWorkPageAdapter()
         fd_work_helper_bridge = FDWorkHelperBridge(
             action_result_sink=fd_work_page_adapter

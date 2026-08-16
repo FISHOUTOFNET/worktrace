@@ -26,10 +26,15 @@ def _window_loaded(window: Any) -> bool:
 class FDWorkMainWindowSink:
     """Own the two public main-window callbacks used by this integration."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        deliver_asynchronously: bool = False,
+    ) -> None:
         self._lock = threading.Lock()
         self._window = None
         self._ready = False
+        self._deliver_asynchronously = deliver_asynchronously
 
     def bind_window(self, window) -> None:
         with self._lock:
@@ -69,6 +74,27 @@ class FDWorkMainWindowSink:
         # windows, so never enter evaluate_js until the main WebView itself loaded.
         if window is None or not ready or not _window_loaded(window):
             return
+        if self._deliver_asynchronously:
+            # evaluate_js blocks the calling thread until the GUI thread processes
+            # the ExecuteScriptAsync callback. When FD Work emits from inside a
+            # GUI-thread lifecycle callback (e.g. before_load), the GUI thread is
+            # still busy and cannot service that callback -- calling it there
+            # self-deadlocks. Dispatch to a worker thread so the GUI thread returns
+            # to its message loop before the JS runs.
+            threading.Thread(
+                target=self._evaluate_async,
+                args=(window, script),
+                name="fd-work-main-window-sink",
+                daemon=True,
+            ).start()
+            return
+        try:
+            window.evaluate_js(script)
+        except Exception:
+            return
+
+    @staticmethod
+    def _evaluate_async(window: Any, script: str) -> None:
         try:
             window.evaluate_js(script)
         except Exception:
