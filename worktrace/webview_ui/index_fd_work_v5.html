@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>有迹 · Trace</title>
-    <link rel="stylesheet" href="styles.css?v=4c5f8fb692692aff">
+    <link rel="stylesheet" href="styles.css?v=318288756e2856fc">
     <link rel="stylesheet" href="ui_components.css?v=beecb147e276dfba">
     <link rel="stylesheet" href="project_autocomplete.css?v=1b8aa4d1915ef51b">
 </head>
@@ -36,13 +36,13 @@
                 <div class="dialog-actions">
                     <button id="first-run-notice-retry-btn" type="button" hidden>重新加载</button>
                     <button id="first-run-notice-close-btn" type="button" hidden>关闭</button>
-                    <button id="first-run-notice-accept-btn" type="button" class="button primary" hidden>我已阅读并同意</button>
+                    <button id="first-run-notice-accept-btn" type="button" class="button primary" hidden>我已阅读并了解</button>
                 </div>
             </section>
         </div>
 
         <aside class="app-nav" aria-label="主导航">
-            <div class="app-brand"><span class="brand-mark" aria-hidden="true">迹</span><span class="nav-label">有迹</span></div>
+            <div class="app-brand" aria-label="有迹 · Trace"><span class="brand-mark" aria-hidden="true">迹</span><span class="nav-label">有迹 · Trace</span></div>
             <div class="nav-status">
                 <div id="status-display" class="status-display"><span class="status-dot" aria-hidden="true"></span><span class="status-label">记录未启动</span></div>
             </div>
@@ -59,7 +59,7 @@
         </aside>
 
         <main class="app-main">
-            <header class="app-topbar"><div class="topbar-context">本地工作区</div><div class="topbar-local"><span aria-hidden="true"></span>所有数据只存于本机</div></header>
+            <header class="app-topbar"><div class="topbar-context">本地工作区</div><div class="topbar-local"><span aria-hidden="true"></span>核心工作轨迹本地保存</div></header>
 
             <section id="page-overview" class="page active overview-page">
                 <header class="page-header page-header-compact"><div><h1>今日概览</h1></div><div class="page-total"><span>今日总时长</span><strong id="kpi-total" data-testid="overview-total">00:00:00</strong></div></header>
@@ -161,7 +161,6 @@
                             <h2>常规</h2>
                             <label class="setting-row" for="settings-launch-at-login-toggle"><span><strong>开机自启动</strong></span><span class="toggle-wrap"><span id="settings-launch-at-login-toggle-status" class="toggle-status">未加载</span><input id="settings-launch-at-login-toggle" type="checkbox" disabled></span></label>
                             <label id="settings-privacy-card" class="setting-row" for="settings-clipboard-toggle"><span><strong id="settings-clipboard-toggle-label">记录剪贴板复制的文本</strong></span><span class="toggle-wrap"><span id="settings-clipboard-toggle-status" class="toggle-status">未加载</span><input id="settings-clipboard-toggle" type="checkbox" disabled></span></label>
-                            <div id="settings-health-summary" class="setting-row"><span><strong>系统状态</strong><small>正在检查记录服务</small></span><span class="badge">检查中</span></div>
                             <article id="settings-storage-card" class="setting-row"><span><strong>本地数据</strong></span><span id="settings-local-data-path" class="settings-local-data-path">未加载</span></article>
                         </section>
                         <section id="settings-section-privacy" class="settings-section" hidden><h2>隐私</h2><div class="setting-row"><span><strong id="settings-privacy-notice-status">未加载</strong></span><button id="settings-privacy-notice-btn" type="button">查看政策</button></div></section>
