@@ -29,13 +29,36 @@ class SettingsBridgeMixin:
                 "message": "确认隐私说明失败",
             }
 
+    def _authoritative_settings_status(self) -> dict[str, Any] | None:
+        result = self._services.settings.get_settings_privacy_status()
+        if result.get("ok") is not True:
+            return None
+        status = dict(result.get("status") or {})
+        status["fd_work"] = self._services.fd_work.get_settings_status()
+        return status
+
+    def _with_authoritative_settings_status(
+        self,
+        result: dict[str, Any],
+        *,
+        required_on_success: bool = False,
+        refresh_error: str = "加载设置状态失败",
+    ) -> dict[str, Any]:
+        payload = dict(result or {})
+        payload.pop("status", None)
+        status = self._authoritative_settings_status()
+        if status is not None:
+            payload["status"] = status
+            return payload
+        if required_on_success and payload.get("ok") is True:
+            return {"ok": False, "error": refresh_error}
+        return payload
+
     def get_settings_privacy_status(self) -> dict[str, Any]:
         try:
-            result = self._services.settings.get_settings_privacy_status()
-            if result.get("ok") is not True:
-                return result
-            status = dict(result.get("status") or {})
-            status["fd_work"] = self._services.fd_work.get_settings_status()
+            status = self._authoritative_settings_status()
+            if status is None:
+                return {"ok": False, "error": "加载设置状态失败"}
             return {"ok": True, "status": status}
         except Exception:
             logger.exception("webview bridge get_settings_privacy_status failed")
@@ -43,34 +66,44 @@ class SettingsBridgeMixin:
 
     def recover_database_maintenance(self) -> dict[str, Any]:
         try:
-            return self._services.settings.recover_database_maintenance_for_webview()
+            result = dict(
+                self._services.settings.recover_database_maintenance_for_webview()
+            )
+            if result.get("ok") is not True:
+                result.pop("maintenance", None)
+                return self._with_authoritative_settings_status(result)
+            return self._with_authoritative_settings_status(result)
         except Exception:
             logger.exception("webview bridge recover_database_maintenance failed")
             return {
                 "ok": False,
                 "error_code": "database_maintenance_recovery_required",
                 "message": "数据库维护恢复失败，请稍后重试或联系支持。",
-                "maintenance": None,
             }
 
     def set_clipboard_capture_enabled(self, enabled) -> dict[str, Any]:
         try:
-            return self._app_control.set_clipboard_capture_policy(enabled)
+            result = self._app_control.set_clipboard_capture_policy(enabled)
+            return self._with_authoritative_settings_status(
+                result,
+                required_on_success=True,
+                refresh_error="设置剪贴板记录状态刷新失败",
+            )
         except Exception:
             logger.exception("webview bridge set_clipboard_capture_enabled failed")
             return {"ok": False, "error": "设置剪贴板记录失败"}
 
     def set_launch_at_login(self, enabled) -> dict[str, Any]:
         try:
-            return self._services.settings.set_launch_at_login(enabled)
+            result = self._services.settings.set_launch_at_login(enabled)
+            return self._with_authoritative_settings_status(
+                result,
+                required_on_success=True,
+                refresh_error="设置登录启动状态刷新失败",
+            )
         except Exception:
             logger.exception("webview bridge set_launch_at_login failed")
-            status = self._services.settings.get_settings_privacy_status()
-            return {
-                "ok": False,
-                "error": "设置登录启动失败",
-                "status": status.get("status"),
-            }
+            return {"ok": False, "error": "设置登录启动失败"}
 
     def set_fd_work_enabled(self, enabled) -> dict[str, Any]:
         if enabled is not True and enabled is not False:
@@ -179,9 +212,7 @@ class SettingsBridgeMixin:
                     "message": str(result.get("message") or "本地数据已清空"),
                     "maintenance": dict(result.get("maintenance") or {}),
                 }
-                if "status" in result:
-                    payload["status"] = result["status"]
-                return payload
+                return self._with_authoritative_settings_status(payload)
             return {"ok": False, "error": result.get("error") or "清空本地数据失败"}
         except Exception:
             logger.exception("webview bridge clear_all_local_data failed")
