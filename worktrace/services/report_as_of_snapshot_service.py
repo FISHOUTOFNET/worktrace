@@ -1,9 +1,10 @@
 """Read-only as-of overlay for report projections.
 
 The canonical report projection remains the sole durable business owner. This
-module only replaces the duration/end-time of the single verified open activity
-with the request-scoped runtime sample, producing an immutable snapshot suitable
-for live Statistics and point-in-time export.
+module overlays the verified runtime activity onto a request-scoped immutable
+snapshot for realtime Statistics and point-in-time export. Persisted open rows
+replace their durable duration; a stable unpersisted normal activity is
+represented only in memory and is never written to SQLite.
 """
 from __future__ import annotations
 
@@ -12,9 +13,16 @@ from datetime import datetime, timedelta
 import time
 from typing import Any, Mapping
 
-from ..constants import STATUS_EXCLUDED, STATUS_PAUSED, TIME_FORMAT, UNCATEGORIZED_PROJECT
+from ..constants import (
+    STATUS_EXCLUDED,
+    STATUS_NORMAL,
+    STATUS_PAUSED,
+    TIME_FORMAT,
+    UNCATEGORIZED_PROJECT,
+)
 from .live_time_service import snapshot_seconds_for_date_range, snapshot_start_time
 from .page_read_context import current_page_read_context
+from .project_attribution_policy import is_report_visible_project_source
 from .report_projection_identity import stable_json_hash
 from .report_projection_model import ReportProjectionSnapshot, thaw_value
 from .report_projection_snapshot_service import build_visible_snapshot
@@ -116,20 +124,180 @@ def _live_target(
     }
 
 
+def _runtime_report_project(runtime_snapshot: Mapping[str, Any]) -> tuple[int, str, str]:
+    value = runtime_snapshot.get("display_project")
+    if not isinstance(value, Mapping):
+        return 0, UNCATEGORIZED_PROJECT, ""
+    source = str(value.get("source") or "").strip()
+    name = str(value.get("name") or "").strip()
+    try:
+        project_id = int(value.get("id") or 0)
+    except (TypeError, ValueError):
+        project_id = 0
+    if (
+        project_id <= 0
+        or not name
+        or bool(value.get("is_uncategorized"))
+        or not is_report_visible_project_source(source)
+    ):
+        return 0, UNCATEGORIZED_PROJECT, ""
+    return project_id, name, str(value.get("description") or "")
+
+
+def _transient_identity(runtime_snapshot: Mapping[str, Any]) -> tuple[str, int]:
+    digest = stable_json_hash(
+        {
+            "resource_identity_key": str(runtime_snapshot.get("resource_identity_key") or ""),
+            "resource_display_name": str(runtime_snapshot.get("resource_display_name") or ""),
+            "activity_display_name": str(runtime_snapshot.get("activity_display_name") or ""),
+            "app_name": str(runtime_snapshot.get("app_name") or ""),
+            "process_name": str(runtime_snapshot.get("process_name") or ""),
+            "start_time": str(runtime_snapshot.get("start_time") or ""),
+            "status": str(runtime_snapshot.get("status") or ""),
+        }
+    )
+    # SQLite rowids are signed 64-bit integers. Keeping the transient member
+    # above that range makes it count like an activity without ever colliding
+    # with a durable row or leaking a fake database identity outside this snapshot.
+    transient_activity_id = (1 << 63) + int(digest[:15], 16)
+    return "transient-live:" + digest[:20], transient_activity_id
+
+
+def _build_transient_statistics_overlay(
+    base: ReportProjectionSnapshot,
+    runtime_snapshot: Mapping[str, Any],
+    *,
+    runtime_revision: int,
+    start_date: str,
+    end_date: str,
+) -> ReportAsOfSnapshot | None:
+    if str(runtime_snapshot.get("status") or "") != STATUS_NORMAL:
+        return None
+    if runtime_snapshot.get("is_persisted") is True:
+        return None
+    try:
+        if int(runtime_snapshot.get("persisted_activity_id") or 0) > 0:
+            return None
+    except (TypeError, ValueError):
+        return None
+
+    start = snapshot_start_time(runtime_snapshot)
+    if start is None:
+        return None
+    today = get_default_report_date()
+    range_seconds = max(
+        0,
+        int(snapshot_seconds_for_date_range(runtime_snapshot, start_date, end_date)),
+    )
+    if range_seconds <= 0:
+        return None
+
+    key, activity_id = _transient_identity(runtime_snapshot)
+    project_id, project_name, project_description = _runtime_report_project(runtime_snapshot)
+    start_text = start.strftime(TIME_FORMAT)
+    end_text = _slice_end_text(runtime_snapshot, today)
+    app_name = str(runtime_snapshot.get("app_name") or "未知应用")
+    member = {
+        "report_date": today,
+        "activity_id": activity_id,
+        "slice_start_time": start_text,
+        "start_time": start_text,
+    }
+    entry = {
+        "projection_instance_key": key,
+        "report_date": today,
+        "start_time": start_text,
+        "end_time": end_text,
+        "duration_seconds": range_seconds,
+        "row_kind": "project_session",
+        "privacy_redacted": False,
+        "status": STATUS_NORMAL,
+        "status_code": STATUS_NORMAL,
+        "report_project_id": project_id,
+        "project_id": project_id,
+        "project_name": project_name,
+        "project_description": project_description,
+        "project_is_deleted": False,
+        "is_report_classified": project_id > 0,
+        "is_report_project": project_id > 0,
+        "is_report_uncategorized": project_id <= 0,
+        "member_slices": [member],
+        "activity_ids": [activity_id],
+        "first_activity_id": activity_id,
+        "is_in_progress": False,
+        "exportable": True,
+        "editable": False,
+        "edit_disabled": True,
+        "session_note": "",
+        "has_duration_override": False,
+        "adjusted_duration_seconds": None,
+    }
+    contribution = {
+        "projection_instance_key": key,
+        "report_date": today,
+        "activity_id": activity_id,
+        "slice_start_time": start_text,
+        "duration_seconds": range_seconds,
+        "status": STATUS_NORMAL,
+        "privacy_redacted": False,
+        "app_name": app_name,
+    }
+    revision = stable_json_hash(
+        {
+            "persistent_snapshot_revision": base.snapshot_revision,
+            "runtime_revision": int(runtime_revision),
+            "transient_key": key,
+            "transient_seconds": range_seconds,
+            "end": end_text,
+        }
+    )
+    snapshot = ReportProjectionSnapshot(
+        start_date=base.start_date,
+        end_date=base.end_date,
+        base_sessions=tuple(list(base.base_sessions) + [entry]),
+        final_entries=tuple(list(base.final_entries) + [entry]),
+        final_sessions=tuple(list(base.final_sessions) + [entry]),
+        standalone_status_entries=base.standalone_status_entries,
+        final_contributions=tuple(list(base.final_contributions) + [contribution]),
+        operation_diagnostics=base.operation_diagnostics,
+        snapshot_revision=revision,
+    )
+    return ReportAsOfSnapshot(
+        snapshot,
+        _live_target(
+            entry,
+            contribution,
+            range_seconds=range_seconds,
+            runtime_snapshot=runtime_snapshot,
+        ),
+    )
+
+
 def build_statistics_as_of_snapshot(
     start_date: str,
     end_date: str,
 ) -> ReportAsOfSnapshot:
-    """Return a canonical snapshot overlaid with one verified open activity."""
+    """Return a canonical snapshot overlaid with one verified runtime activity."""
 
     base = build_visible_snapshot(start_date, end_date)
     context = current_page_read_context()
     if context is None or not context.runtime_consistent:
         return ReportAsOfSnapshot(base, None)
     runtime_snapshot = context.runtime_sample.snapshot
-    open_activity_id = context.verified_open_activity_id
-    if not isinstance(runtime_snapshot, Mapping) or not open_activity_id:
+    if not isinstance(runtime_snapshot, Mapping):
         return ReportAsOfSnapshot(base, None)
+
+    open_activity_id = context.verified_open_activity_id
+    if open_activity_id is None:
+        transient = _build_transient_statistics_overlay(
+            base,
+            runtime_snapshot,
+            runtime_revision=int(context.runtime_sample.revision),
+            start_date=start_date,
+            end_date=end_date,
+        )
+        return transient or ReportAsOfSnapshot(base, None)
+
     try:
         runtime_id = int(runtime_snapshot.get("persisted_activity_id") or 0)
     except (TypeError, ValueError):
