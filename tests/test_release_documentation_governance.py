@@ -29,12 +29,20 @@ def test_release_docs_have_one_canonical_checklist() -> None:
     [
         'python -m pytest -m "not benchmark"',
         "python -m worktrace.main",
-        "python -m PyInstaller --noconfirm --clean WorkTrace.spec",
-        r"scripts\build_windows_installer.ps1",
+        r"scripts\build_windows_release.ps1",
     ],
 )
 def test_release_validation_keeps_executable_commands(command: str) -> None:
     assert command in _text(VALIDATION)
+
+
+def test_release_validation_uses_canonical_release_orchestration() -> None:
+    validation = _text(VALIDATION)
+    assert "build_windows_release.ps1" in validation
+    assert "build\\release-staging" in validation
+    assert r"dist\Trace-<version>.exe" in validation
+    assert r"dist\Trace-Setup-<version>.exe" in validation
+    assert "python -m PyInstaller --noconfirm --clean WorkTrace.spec" not in validation
 
 
 @pytest.mark.parametrize("phrase", ["不截屏", "不录屏", "不记录键盘", "不上传数据", "排除规则"])
