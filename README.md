@@ -33,7 +33,7 @@ records.
 - Overview page (KPIs, current activity, recent activities, pause toggle).
 - Timeline / Time Details page with editing: project reclassification,
   session-note editing, single-activity time correction / split / merge /
-  hide / soft delete / restore, batch project and batch note editing, and a
+  hide / soft delete / restore, batch project + batch note editing, and a
   read-only correction shell.
 - Statistics / Export page: read-only summary cards and grouped tables, plus
   CSV export (display-safe, UTF-8 BOM, no raw window title / file path /
@@ -90,37 +90,40 @@ tray menu for a complete graceful shutdown.
 
 ## Windows Packaging
 
-Packaging is optional and relies on extra build dependencies that are not
-part of the runtime requirements. Install the runtime dependencies first,
-then add the build dependencies only when packaging:
+Release packaging uses one pinned Windows baseline so local builds and CI do
+not silently select different Python packages or installer compilers. Use
+Python 3.11.9 and install the release dependency set through the checked-in
+constraints file:
 
 ```powershell
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
+python -m pip install -r requirements-dev.txt -c constraints-release.txt
 ```
 
-Build the single-file executable:
+Install Inno Setup 6.7.3, then run the canonical release build entry point:
 
 ```powershell
-python -m PyInstaller --noconfirm --clean WorkTrace.spec
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_release.ps1
 ```
 
-Install the fixed Inno Setup 6 toolchain, then build the per-user installer
-after the single-file executable. The build script locates `ISCC.exe` and
-fails clearly if it is unavailable:
+The release script verifies the pinned Python/package environment, builds the
+single-file executable with PyInstaller, and then calls the installer build.
+The installer build verifies that the discovered `ISCC.exe` is Inno Setup
+6.7.3 before compiling the original `installer\WorkTrace.iss`; it does not
+rewrite a generated copy of the installer source.
+
+Expected outputs are `dist\Trace.exe`, `dist\Trace-<version>.exe`,
+`dist\Trace-Setup-<version>.exe`, and the compatibility alias
+`dist\Trace-Setup.exe`. Fresh installs go to
+`%LOCALAPPDATA%\Programs\Trace`, create the current-user Start Menu shortcut
+`有迹`, install per-user only, and do not request administrator privileges.
+Build artifacts under `build/` and `dist/` must not be committed to Git.
+
+If `dist\Trace.exe` has already been produced by the canonical PyInstaller
+spec and only the installer must be rebuilt, use:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1
 ```
-
-Build outputs: `dist\WorkTrace.exe` (single-file application) and
-`dist\WorkTrace-Setup.exe` (current-user installer). The installer copies
-WorkTrace to `%LOCALAPPDATA%\Programs\WorkTrace`, creates a current-user
-Start Menu shortcut, installs per-user only, and does not request
-administrator privileges. Its default-selected task registers the current
-user's HKCU Run value; the task can be deselected during install or changed
-later in Settings → General. Build artifacts (`build/`, `dist/`, generated
-`.spec` files other than `WorkTrace.spec`) must not be committed to Git.
 
 ## Release Validation
 
@@ -176,10 +179,10 @@ This project does **not** currently enable parallel pytest. The `parallel_safe` 
 
 ## Local Paths
 
-- Database: `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`
-- Logs: `%LOCALAPPDATA%\WorkTrace\logs\worktrace.log`
-- Optional COM path catalog: `%LOCALAPPDATA%\WorkTrace\com_path_catalog.json`
-- Default exports: `Documents\WorkTrace Exports`
+- Database: `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`.
+- Logs: `%LOCALAPPDATA%\WorkTrace\logs\worktrace.log`.
+- Optional COM path catalog: `%LOCALAPPDATA%\WorkTrace\com_path_catalog.json`.
+- Default exports: `Documents\WorkTrace Exports`.
 
 `schema.sql` is the single source of truth for the local database structure.
 The project is in pre-release development, so old databases are not
