@@ -285,11 +285,11 @@
             || settingsToggleGenericBusy()
             || App.fdWorkSettingsWriteInProgress
             || !App.settingsLoaded;
-        if (target) target.textContent = supported
-            ? (typeof App.fdWorkStatusText === "function"
-                ? App.fdWorkStatusText(fdWork)
-                : (toggle.checked ? "开启" : "关闭"))
-            : "当前不可用";
+        var statusText = typeof App.fdWorkStatusText === "function"
+            ? App.fdWorkStatusText(fdWork)
+            : (toggle.checked ? "开启" : "关闭");
+        if (statusText === "插件关闭") statusText = "关闭";
+        if (target) target.textContent = supported ? statusText : "当前不可用";
         if (reconnect) {
             var recoverable = supported && fdWork.enabled === true
                 && (fdWork.session_state === "probing"
@@ -368,24 +368,24 @@
         renderRecoveryCard(status);
         var health = element("settings-health-summary");
         if (health) {
-            var title = "记录正常";
+            var badgeText = "正常";
             var detail = "采集和本地存储可用";
             if (status.recovery_blocked) {
-                title = "恢复尚未完成";
+                badgeText = "需恢复";
                 detail = "请在高级设置中尝试恢复";
             } else if (status.maintenance_in_progress) {
-                title = "正在维护数据";
+                badgeText = "维护中";
                 detail = "维护期间其他数据操作暂时不可用";
             } else if (!status.collector_running && !status.user_paused) {
-                title = "记录服务未运行";
+                badgeText = "异常";
                 detail = "请重启应用后再次检查";
             }
             var strong = health.querySelector("strong");
             var small = health.querySelector("small");
             var badge = health.querySelector(".badge");
-            if (strong) strong.textContent = title;
+            if (strong) strong.textContent = "系统状态";
             if (small) small.textContent = detail;
-            if (badge) badge.textContent = title;
+            if (badge) badge.textContent = badgeText;
         }
         if (status.storage_model === "local_only") {
             setLineText("storage_model", "本地优先：所有数据仅存储在本机，不上传任何远端服务器。");
