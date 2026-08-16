@@ -18,10 +18,8 @@ BRAND_GRADIENT_END = (30, 101, 155)  # #1E659B
 def _font_candidates() -> list[Path]:
     windows = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
     return [
-        windows / "msyhbd.ttc",  # Microsoft YaHei Bold
-        windows / "msyh.ttc",  # Microsoft YaHei
-        windows / "simhei.ttf",  # SimHei
-        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"),
+        windows / "msyh.ttc",  # Microsoft YaHei Regular
+        windows / "simsun.ttc",  # SimSun regular fallback
         Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
     ]
 
@@ -70,8 +68,8 @@ def render_icon(size: int = CANVAS_SIZE, *, grayscale: bool = False) -> Image.Im
     canvas.paste(background, (0, 0), mask)
 
     draw = ImageDraw.Draw(canvas)
-    font = _load_font(round(size * 0.56))
-    bbox = draw.textbbox((0, 0), GLYPH, font=font, stroke_width=1)
+    font = _load_font(round(size * 0.70))
+    bbox = draw.textbbox((0, 0), GLYPH, font=font)
     width = bbox[2] - bbox[0]
     height = bbox[3] - bbox[1]
     x = (size - width) / 2 - bbox[0]
@@ -82,8 +80,6 @@ def render_icon(size: int = CANVAS_SIZE, *, grayscale: bool = False) -> Image.Im
         GLYPH,
         font=font,
         fill=(255, 255, 255, 255),
-        stroke_width=1,
-        stroke_fill=(255, 255, 255, 255),
     )
     return _grayscale_image(canvas) if grayscale else canvas
 
