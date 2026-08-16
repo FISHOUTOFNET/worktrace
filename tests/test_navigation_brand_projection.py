@@ -1,25 +1,55 @@
 from __future__ import annotations
 
-from worktrace import PRODUCT_DISPLAY_NAME
+import inspect
+
 from worktrace import webview_main
 
 
-def test_navigation_brand_uses_product_display_name_and_hides_wide_mark() -> None:
-    script = webview_main._navigation_brand_script()
+def test_webview_host_does_not_patch_static_dom_presentation() -> None:
+    source = inspect.getsource(webview_main)
 
-    assert PRODUCT_DISPLAY_NAME in script
-    assert "brand-mark" in script
-    assert "max-width: 959px" in script
-    assert "compactSidebar.matches ? '' : 'none'" in script
+    for forbidden in (
+        "_navigation_brand_script",
+        "_apply_navigation_brand",
+        "document.querySelector",
+        "document.getElementById",
+        ".textContent =",
+        ".createElement(",
+        ".remove()",
+        "trace-navigation-brand",
+    ):
+        assert forbidden not in source
 
 
-def test_navigation_brand_projection_is_best_effort() -> None:
-    calls: list[str] = []
+def test_shell_loaded_event_is_bound_directly_to_shell_owner() -> None:
+    closing_handlers = []
+    loaded_handlers = []
+
+    class Event:
+        def __init__(self, handlers):
+            self.handlers = handlers
+
+        def __iadd__(self, handler):
+            self.handlers.append(handler)
+            return self
+
+    class Events:
+        def __init__(self):
+            self.closing = Event(closing_handlers)
+            self.loaded = Event(loaded_handlers)
 
     class Window:
-        def evaluate_js(self, script: str) -> None:
-            calls.append(script)
+        events = Events()
 
-    webview_main._apply_navigation_brand(Window())
+    class Shell:
+        def handle_window_closing(self):
+            return False
 
-    assert calls == [webview_main._navigation_brand_script()]
+        def handle_window_loaded(self):
+            return None
+
+    shell = Shell()
+    webview_main._bind_shell_events(Window(), shell)
+
+    assert closing_handlers == [shell.handle_window_closing]
+    assert loaded_handlers == [shell.handle_window_loaded]
