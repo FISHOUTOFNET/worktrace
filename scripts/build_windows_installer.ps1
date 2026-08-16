@@ -9,6 +9,11 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptDir "..")
 
+& python (Join-Path $repoRoot "scripts\verify_release_environment.py") --scope installer
+if ($LASTEXITCODE -ne 0) {
+    throw "Windows installer build environment does not match the pinned release baseline."
+}
+
 [string]$version = (& python -c 'from worktrace.version import __version__; print(__version__)').Trim()
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {
     throw "Failed to resolve the 有迹 application version."
@@ -66,6 +71,24 @@ if (-not $ISCCPath) {
 if (-not $ISCCPath -or -not (Test-Path -LiteralPath $ISCCPath)) {
     throw "Inno Setup compiler ISCC.exe was not found. Pass -ISCCPath or set ISCC_PATH."
 }
+
+$expectedInnoVersion = "6.7.3"
+$expectedPreprocVersion = 101122816
+$versionMarker = "WORKTRACE_PREPROCVER=$expectedPreprocVersion"
+$probeSource = @'
+#pragma message "WORKTRACE_PREPROCVER=" + Str(PREPROCVER)
+[Setup]
+AppName=WorkTraceCompilerProbe
+AppVersion=1
+DefaultDirName={tmp}\WorkTraceCompilerProbe
+'@
+$probeOutput = @($probeSource | & $ISCCPath "/O-" "-" 2>&1)
+$probeExitCode = $LASTEXITCODE
+$probeText = $probeOutput -join "`n"
+if ($probeExitCode -ne 0 -or -not $probeText.Contains($versionMarker)) {
+    throw "有迹 release builds require Inno Setup $expectedInnoVersion. Detected compiler did not report the required PREPROCVER. ISCC: $ISCCPath"
+}
+Write-Host "Inno Setup compiler verified: $expectedInnoVersion ($ISCCPath)"
 
 $name = [System.IO.Path]::GetFileNameWithoutExtension($target)
 $distPath = Split-Path -Parent $target
