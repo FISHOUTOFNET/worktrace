@@ -63,7 +63,7 @@ def test_launch_write_preserves_other_settings_authority(temp_db) -> None:
     assert result["status"]["fd_work"]["enabled"] is True
 
 
-def test_recovery_failure_never_exposes_maintenance_as_full_settings_state(temp_db) -> None:
+def test_recovery_failure_never_exposes_partial_settings_state(temp_db) -> None:
     settings = FakeSettingsCapability()
     settings.recover_database_maintenance_for_webview_return = {
         "ok": False,
@@ -74,19 +74,14 @@ def test_recovery_failure_never_exposes_maintenance_as_full_settings_state(temp_
             "recovery_blocked": True,
         },
     }
-    settings.get_settings_privacy_status_return = {
-        "ok": True,
-        "status": _authoritative_status(clipboard=True, launch=True),
-    }
     bridge = build_test_bridge(settings=settings, fd_work=_enabled_fd_work())
 
     result = bridge.recover_database_maintenance()
 
-    assert result["ok"] is False
-    assert "maintenance" not in result
-    assert result["status"]["clipboard_capture_enabled"] is True
-    assert result["status"]["launch_at_login"]["enabled"] is True
-    assert result["status"]["fd_work"]["enabled"] is True
+    assert result == {
+        "ok": False,
+        "error": "maintenance_recovery_not_verified",
+    }
 
 
 def test_clear_all_replaces_lower_layer_partial_status_with_authority(temp_db) -> None:
