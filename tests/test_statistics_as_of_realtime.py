@@ -144,6 +144,36 @@ def test_statistics_realtime_summary_projects_transient_runtime_without_database
     assert int(count) == 0
 
 
+def test_prepared_statistics_export_freezes_transient_runtime_without_database_write(temp_db, tmp_path):
+    project_id = project_service.create_project("Transient Frozen")
+    day = _publish_transient_runtime(
+        project_id,
+        "Transient Frozen",
+        elapsed_seconds=12,
+    )
+
+    prepared = export_service.prepare_statistics_csv(day, day)
+    _publish_transient_runtime(
+        project_id,
+        "Transient Frozen",
+        elapsed_seconds=20,
+    )
+
+    output = tmp_path / "transient-frozen.csv"
+    result = export_service.write_prepared_statistics_csv(prepared, output)
+
+    assert result["activity_count"] == 1
+    assert result["duration_seconds"] == 12
+    with open(output, "r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 1
+    assert rows[0]["时长秒数"] == "12"
+    assert rows[0]["项目"] == "Transient Frozen"
+    with get_connection() as conn:
+        count = conn.execute("SELECT COUNT(*) AS count FROM activity_log").fetchone()["count"]
+    assert int(count) == 0
+
+
 def test_statistics_realtime_project_scope_excludes_other_live_project(temp_db):
     selected_project = project_service.create_project("Selected")
     live_project = project_service.create_project("Live Other")
