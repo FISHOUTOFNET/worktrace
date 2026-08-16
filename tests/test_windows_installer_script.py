@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ISS_PATH = ROOT / "installer" / "WorkTrace.iss"
 BUILD_PATH = ROOT / "scripts" / "build_windows_installer.ps1"
 RELEASE_BUILD_PATH = ROOT / "scripts" / "build_windows_release.ps1"
+ICON_VERIFY_PATH = ROOT / "scripts" / "verify_windows_exe_icon.py"
 INSTALLED_LAUNCH_SMOKE_PATH = ROOT / "scripts" / "smoke_installed_launch.ps1"
 PACKAGE_ACTION_PATH = (
     ROOT / ".github" / "actions" / "build-windows-package" / "action.yml"
@@ -112,7 +113,7 @@ def test_installer_and_shortcut_use_canonical_icon() -> None:
     assert r'Name: "{autodesktop}\有迹"' in source
 
 
-def test_build_script_keeps_trace_output_contract() -> None:
+def test_build_script_keeps_versioned_trace_output_contract() -> None:
     source = BUILD_PATH.read_text(encoding="utf-8")
     installer = ISS_PATH.read_text(encoding="utf-8")
     assert "ISCC.exe" in source
@@ -120,7 +121,8 @@ def test_build_script_keeps_trace_output_contract() -> None:
     assert "installer\\WorkTrace.iss" in source
     assert "dist\\Trace.exe" in source
     assert "dist\\Trace-Setup-$version.exe" in source
-    assert '"Trace-Setup.exe"' in source
+    assert '$compatTarget' not in source
+    assert "Copy-Item -Force -LiteralPath $target -Destination" not in source
     assert "#ifndef MyAppVersion" in installer
     assert '#define MyAppVersion "0.1"' in installer
     assert "/DMyAppExe=$exe" in source
@@ -129,9 +131,22 @@ def test_build_script_keeps_trace_output_contract() -> None:
     assert "/F$name" in source
     assert "$installerSource" in source
     assert "$LASTEXITCODE" in source
+    assert "verify_windows_exe_icon.py" in source
+    assert "--exe $target" in source
+    assert "--ico $brandIcon" in source
     assert "[regex]::Replace" not in source
     assert "WorkTrace.generated." not in source
     assert "Set-Content -LiteralPath $generatedInstaller" not in source
+
+
+def test_compiled_installer_icon_is_verified_from_pe_resources() -> None:
+    source = ICON_VERIFY_PATH.read_text(encoding="utf-8")
+    assert "RT_ICON = 3" in source
+    assert "RT_GROUP_ICON = 14" in source
+    assert "LoadLibraryExW" in source
+    assert "EnumResourceNamesW" in source
+    assert "canonical payload embedded" in source
+    assert "shell icon cache" in source
 
 
 def test_build_script_auto_discovers_local_inno_setup_installation() -> None:
@@ -156,18 +171,27 @@ def test_local_installer_accepts_inno_setup_6_3_and_newer() -> None:
     assert "$expectedPreprocVersion = 101122816" not in source
 
 
-def test_release_build_generates_trace_artifacts() -> None:
+def test_release_build_generates_only_current_trace_release_artifacts() -> None:
     source = RELEASE_BUILD_PATH.read_text(encoding="utf-8")
-    assert 'Join-Path $repoRoot "dist\\Trace.exe"' in source
-    assert 'Join-Path $repoRoot "dist\\Trace-$version.exe"' in source
-    assert 'Join-Path $repoRoot "dist\\Trace-Setup-$version.exe"' in source
-    assert 'Join-Path $repoRoot "dist\\Trace-Setup.exe"' in source
+    assert 'Join-Path $distPath "Trace.exe"' in source
+    assert 'Join-Path $distPath "Trace-$version.exe"' in source
+    assert 'Join-Path $distPath "Trace-Setup-$version.exe"' in source
+    assert "$compatSetupPath" not in source
+    assert "WorkTrace" in source
+    assert "Remove-Item -Force" in source
     pyinstaller_call = "& python -m PyInstaller --noconfirm --clean WorkTrace.spec"
     assert pyinstaller_call in source
     assert "build_windows_installer.ps1" in source
     assert "PyInstaller completed without generating dist\\Trace.exe" in source
     assert "Installer build completed without generating dist\\Trace-Setup-$version.exe" in source
-    assert "Installer build completed without generating dist\\Trace-Setup.exe" in source
+    assert "Installer build completed without generating dist\\Trace-Setup.exe" not in source
+
+
+def test_installer_runtime_smoke_resolves_versioned_setup_by_default() -> None:
+    source = INSTALLER_RUNTIME_SMOKE_PATH.read_text(encoding="utf-8")
+    assert '[string]$SetupPath = ""' in source
+    assert "from worktrace.version import __version__" in source
+    assert '"dist\\Trace-Setup-$version.exe"' in source
 
 
 def test_retired_copy_installer_is_removed() -> None:
@@ -180,6 +204,7 @@ def test_ci_prepares_one_pinned_verified_inno_setup_version() -> None:
     assert "is-6_7_3" in action
     assert "9C73C3BAE7ED48D44112A0F48E66742C00090BDB5BEF71D9D3C056C66E97B732" in action
     assert "ISCC_PATH=" in action
+    assert "Retired unversioned installer alias was generated" in action
 
 
 def test_ci_exercises_running_app_upgrade_and_uninstall_paths() -> None:
