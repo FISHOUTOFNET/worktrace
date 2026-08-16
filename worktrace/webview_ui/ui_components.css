@@ -163,7 +163,6 @@ th,
     --overview-time-right-inset: 0px;
 }
 .current-activity { padding-right: 18px; }
-.recent-section { padding-right: 13px; }
 .recent-section h2 { padding-right: 0; }
 
 .overview-page > .page-header,
@@ -206,6 +205,7 @@ th,
     align-self: stretch;
     display: flex;
     flex-direction: column;
+    padding-right: 13px;
     overflow: hidden;
 }
 
