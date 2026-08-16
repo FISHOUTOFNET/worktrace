@@ -6,6 +6,7 @@ import platform
 import sys
 
 MINIMUM_PYTHON_VERSION = (3, 11)
+MINIMUM_PYTHON_VERSION_TEXT = ".".join(str(value) for value in MINIMUM_PYTHON_VERSION)
 
 
 def main() -> int:
@@ -20,17 +21,15 @@ def main() -> int:
 
     actual = (sys.version_info.major, sys.version_info.minor)
     if actual < MINIMUM_PYTHON_VERSION:
-        minimum_text = ".".join(str(value) for value in MINIMUM_PYTHON_VERSION)
         print(
             "Windows builds require Python "
-            f">={minimum_text}; detected {platform.python_version()}."
+            f">={MINIMUM_PYTHON_VERSION_TEXT}; detected {platform.python_version()}."
         )
         return 1
 
-    minimum_text = ".".join(str(value) for value in MINIMUM_PYTHON_VERSION)
     print(
         f"Build environment verified: Python {platform.python_version()} "
-        f"(minimum {minimum_text}), scope={args.scope}"
+        f"(minimum {MINIMUM_PYTHON_VERSION_TEXT}), scope={args.scope}"
     )
     return 0
 
