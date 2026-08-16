@@ -104,31 +104,37 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_releas
 ```
 
 The release script checks only the supported Python minimum, builds the
-single-file executable with PyInstaller, and then calls the installer build.
-The installer build verifies that the discovered `ISCC.exe` is Inno Setup
-6.3.0 or newer before compiling the original `installer\WorkTrace.iss`; it
-does not rewrite a generated copy of the installer source. The compiled
-installer is also checked directly to confirm that it embeds the canonical
-有迹 icon resource.
+single-file executable with PyInstaller in an isolated temporary
+`build\release-staging\...` directory, publishes the versioned portable
+executable to `dist\`, and builds the versioned installer from that staged
+binary. `dist\` is therefore a publication boundary rather than a PyInstaller
+work directory. The installer build verifies that the discovered `ISCC.exe`
+is Inno Setup 6.3.0 or newer before compiling the original
+`installer\WorkTrace.iss`; it does not rewrite a generated copy of the
+installer source. The compiled installer is also checked directly to confirm
+that it embeds the canonical 有迹 icon resource.
 
 CI deliberately remains stricter for reproducibility: its verified baseline
 uses Python 3.11.9, the checked-in `constraints-release.txt`, and Inno Setup
 6.7.3. Those versions define the CI reference environment, not the only
 supported local build environment.
 
-Expected outputs are `dist\Trace.exe`, `dist\Trace-<version>.exe`, and
-`dist\Trace-Setup-<version>.exe`. The former unversioned installer alias
-`dist\Trace-Setup.exe` is retired and is removed by canonical release builds.
+Canonical release outputs are exactly `dist\Trace-<version>.exe` and
+`dist\Trace-Setup-<version>.exe`. Unversioned release aliases such as
+`dist\Trace.exe` and `dist\Trace-Setup.exe`, plus historical `WorkTrace*.exe`
+release artifacts, are retired and removed by canonical release builds. The
+installed application is still named `Trace.exe`; Inno Setup applies that
+installed filename independently of the versioned release package filename.
 Fresh installs go to `%LOCALAPPDATA%\Programs\Trace`, create the current-user
 Start Menu shortcut `有迹`, install per-user only, and do not request
 administrator privileges. Build artifacts under `build/` and `dist/` must not
 be committed to Git.
 
-If `dist\Trace.exe` has already been produced by the canonical PyInstaller
-spec and only the installer must be rebuilt, use:
+If the portable release already exists and only the installer must be rebuilt,
+pass that versioned executable explicitly:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1 -ExePath "dist\Trace-<version>.exe"
 ```
 
 ## Release Validation
