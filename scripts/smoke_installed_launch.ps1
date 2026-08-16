@@ -69,6 +69,9 @@ function Wait-ForTraceWindow {
                 if ($TargetProcess.HasExited) {
                     throw "Installed Trace exited immediately after its WebView window loaded with code $($TargetProcess.ExitCode)."
                 }
+                if (-not $TargetProcess.Responding) {
+                    throw "Installed Trace became unresponsive after its WebView window loaded."
+                }
                 return
             }
         }
