@@ -214,6 +214,7 @@ th,
     min-height: 0;
     display: block;
     overflow: auto;
+    scrollbar-gutter: auto;
 }
 
 .timeline-workspace {
