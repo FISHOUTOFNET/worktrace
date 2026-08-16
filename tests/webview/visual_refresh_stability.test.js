@@ -226,25 +226,26 @@ test("Rules re-entry is a no-op until classification generation changes", async 
   assert.equal(App.rulesRefreshPending, false);
 });
 
-test("Settings re-entry does not show loading or reread status until invalidated", async () => {
+test("Settings re-entry refreshes status in the background without visible loading", async () => {
   const { App, document, listeners, counters } = harness(runtime());
   App.currentPage = "settings";
 
   listeners.click({ type: "click", target: navTarget("settings", document) });
   await flushTimers();
-  assert.equal(counters.settings(), 0);
+  assert.equal(counters.settings(), 1);
   assert.equal(counters.visibleSettings(), 0);
+  assert.equal(App.settingsRefreshPending, false);
 
   App.currentPage = "overview";
   App.acceptRefreshStateRuntime({ nextRuntime: runtime({ settings: 2 }) });
   await flush();
-  assert.equal(counters.settings(), 0);
+  assert.equal(counters.settings(), 1);
   assert.equal(App.settingsRefreshPending, true);
 
   App.currentPage = "settings";
   listeners.click({ type: "click", target: navTarget("settings", document) });
   await flushTimers();
-  assert.equal(counters.settings(), 1);
+  assert.equal(counters.settings(), 2);
   assert.equal(counters.visibleSettings(), 0);
   assert.equal(App.settingsRefreshPending, false);
 });
