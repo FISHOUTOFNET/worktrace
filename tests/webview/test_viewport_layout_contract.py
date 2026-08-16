@@ -85,7 +85,7 @@ def test_overview_keeps_summary_fixed_and_restores_symmetric_spacing():
     assert "min-height: 0" in recent_list
     assert "display: block" in recent_list
     assert "overflow: auto" in recent_list
-    assert "scrollbar-gutter" not in recent_list
+    assert "scrollbar-gutter: auto" in recent_list
 
 
 def test_timeline_uses_remaining_viewport_without_visible_scrollbars():
