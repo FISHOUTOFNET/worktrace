@@ -90,26 +90,29 @@ tray menu for a complete graceful shutdown.
 
 ## Windows Packaging
 
-Release packaging uses one pinned Windows baseline so local builds and CI do
-not silently select different Python packages or installer compilers. Use
-Python 3.11.9 and install the release dependency set through the checked-in
-constraints file:
+Local Windows packaging supports Python 3.11+ and Inno Setup 6.3.0+.
+Install the normal build dependencies without forcing the CI baseline:
 
 ```powershell
-python -m pip install -r requirements-dev.txt -c constraints-release.txt
+python -m pip install -r requirements-dev.txt
 ```
 
-Install Inno Setup 6.7.3, then run the canonical release build entry point:
+Then run the canonical release build entry point:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_release.ps1
 ```
 
-The release script verifies the pinned Python/package environment, builds the
+The release script checks only the supported Python minimum, builds the
 single-file executable with PyInstaller, and then calls the installer build.
 The installer build verifies that the discovered `ISCC.exe` is Inno Setup
-6.7.3 before compiling the original `installer\WorkTrace.iss`; it does not
-rewrite a generated copy of the installer source.
+6.3.0 or newer before compiling the original `installer\WorkTrace.iss`; it
+does not rewrite a generated copy of the installer source.
+
+CI deliberately remains stricter for reproducibility: its verified baseline
+uses Python 3.11.9, the checked-in `constraints-release.txt`, and Inno Setup
+6.7.3. Those versions define the CI reference environment, not the only
+supported local build environment.
 
 Expected outputs are `dist\Trace.exe`, `dist\Trace-<version>.exe`,
 `dist\Trace-Setup-<version>.exe`, and the compatibility alias
