@@ -59,10 +59,18 @@ class TestSharedPackageBuild:
 
         assert r"scripts\build_windows_release.ps1" in action
         assert "python -m PyInstaller --noconfirm --clean WorkTrace.spec" not in action
-        assert "& python -m PyInstaller --noconfirm --clean WorkTrace.spec" in release
+        assert "& python -m PyInstaller" in release
+        assert "--noconfirm" in release
+        assert "--clean" in release
+        assert "--distpath $stagingDistPath" in release
+        assert "--workpath $stagingWorkPath" in release
+        assert "WorkTrace.spec" in release
         assert "build_windows_installer.ps1" in release
-        assert "dist\\Trace.exe" in action
-        assert "dist\\Trace-Setup.exe" in action
+        assert '"Trace-$env:TRACE_VERSION.exe"' in action
+        assert '"Trace-Setup-$env:TRACE_VERSION.exe"' in action
+        assert "Unexpected release executable artifacts" in action
+        assert r"dist\Trace.exe" not in action
+        assert r"dist\Trace-Setup.exe" not in action
 
 
 class TestInstallerValidationLayer:
