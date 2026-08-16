@@ -409,7 +409,7 @@ th.number, td.number { text-align: right; font-variant-numeric: tabular-nums; }
 .settings-categories { align-self: start; padding: 5px; }
 .settings-categories button { width: 100%; min-height: 32px; justify-content: flex-start; padding-inline: 9px; border: 0; background: transparent; text-align: left; }
 .settings-categories button[aria-current="true"] { color: #0d4f92; background: var(--color-surface-selected); font-weight: 650; }
-.settings-content { padding: 13px 15px; }
+.settings-content { align-self: start; padding: 13px 15px; }
 .settings-section h2 { margin: 0 0 6px; font-size: var(--font-size-lg); }
 .setting-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--color-border); }
 .setting-row:last-child { border-bottom: 0; }
@@ -422,7 +422,8 @@ th.number, td.number { text-align: right; font-variant-numeric: tabular-nums; }
 .toggle-wrap input[type="checkbox"]:checked { border-color: var(--color-accent); background: var(--color-accent); }
 .toggle-wrap input[type="checkbox"]:checked::after { transform: translateX(16px); }
 .toggle-wrap input[type="checkbox"]:disabled { cursor: not-allowed; }
-label.setting-row:has(+ #settings-fd-work-reconnect:not([hidden])) { border-bottom: 0; padding-bottom: 4px; }
+#settings-section-advanced > label.setting-row[for="settings-fd-work-toggle"] { border-bottom: 0; padding-bottom: 4px; }
+#settings-recovery-card { border-bottom: 0; }
 #settings-fd-work-reconnect:not([hidden]) {
     display: flex; width: fit-content; min-height: var(--control-height-compact);
     margin: -5px 0 6px auto; padding: 0 6px;
