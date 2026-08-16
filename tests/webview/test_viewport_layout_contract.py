@@ -77,7 +77,7 @@ def test_overview_keeps_summary_fixed_and_restores_symmetric_spacing():
     assert "min-height: 0" in recent_section
     assert "height: auto" in recent_section
     assert "align-self: stretch" in recent_section
-    assert "padding-right: 13px" in recent_section
+    assert "padding-inline: 18px" in recent_section
     assert "overflow: hidden" in recent_section
     assert "padding-right: 0" in recent_heading
 
