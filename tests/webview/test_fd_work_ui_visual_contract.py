@@ -43,7 +43,8 @@ def test_fd_work_disabled_primary_and_settings_reconnect_are_low_emphasis() -> N
     assert "opacity: 1; box-shadow: none;" in styles
     assert "#settings-fd-work-reconnect:not([hidden])" in styles
     assert "border-color: transparent; background: transparent" in styles
-    assert "label.setting-row:has(+ #settings-fd-work-reconnect:not([hidden]))" in styles
+    assert 'label.setting-row:has(+ #settings-fd-work-reconnect:not([hidden]))' not in styles
+    assert '#settings-section-advanced > label.setting-row[for="settings-fd-work-toggle"]' in styles
 
 
 def test_project_editor_keeps_shared_name_field_as_primary_focus() -> None:
