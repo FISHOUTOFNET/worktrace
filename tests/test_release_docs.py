@@ -32,6 +32,9 @@ PACKAGE_ACTION_PATH = (
 INSTALLER_RUNTIME_SMOKE_PATH = (
     REPO_ROOT / "scripts" / "ci" / "installer_runtime_smoke.ps1"
 )
+RELEASE_BUILD_PATH = REPO_ROOT / "scripts" / "build_windows_release.ps1"
+RELEASE_ENV_VERIFY_PATH = REPO_ROOT / "scripts" / "verify_release_environment.py"
+RELEASE_CONSTRAINTS_PATH = REPO_ROOT / "constraints-release.txt"
 ACCEPTANCE_PATH = WORKFLOW_DIR / "acceptance.yml"
 BUILD_DEP_CANDIDATES = [
     REPO_ROOT / "requirements-dev.txt",
@@ -67,6 +70,22 @@ def test_build_dependency_file_includes_pyinstaller():
     assert "pyinstaller" in combined.lower()
 
 
+def test_release_constraints_pin_direct_windows_build_dependencies():
+    constraints = _read_text(RELEASE_CONSTRAINTS_PATH)
+    for pin in (
+        "cryptography==49.0.0",
+        "pywin32==312",
+        "psutil==7.2.2",
+        "openpyxl==3.1.5",
+        "pywebview==6.2.1",
+        "pytest==9.1.1",
+        "pytest-timeout==2.4.0",
+        "pyinstaller==6.21.0",
+        "pillow==12.3.0",
+    ):
+        assert pin in constraints
+
+
 def test_readme_references_build_dependency_file():
     readme = _read_text(README_PATH)
     assert "requirements-dev.txt" in readme or "requirements-build.txt" in readme
@@ -84,6 +103,9 @@ def test_release_validation_doc_and_workflows_exist():
         INSTALLER_VALIDATION_PATH,
         PACKAGE_ACTION_PATH,
         INSTALLER_RUNTIME_SMOKE_PATH,
+        RELEASE_BUILD_PATH,
+        RELEASE_ENV_VERIFY_PATH,
+        RELEASE_CONSTRAINTS_PATH,
     ):
         assert path.is_file()
     assert not ACCEPTANCE_PATH.exists()
@@ -123,8 +145,9 @@ def test_ci_layers_contain_required_release_smoke_steps():
     assert "run_build_smoke: true" in standard
 
     for phrase in (
-        'python-version: "3.11"',
-        "pip install --disable-pip-version-check -q -r requirements-dev.txt",
+        'python-version: "3.11.9"',
+        "pip install --disable-pip-version-check -q -r requirements-dev.txt -c constraints-release.txt",
+        "constraints-release.txt",
         "python scripts/run_pytest_ci.py",
         "node --test tests/webview/*.test.js",
         "uses: ./.github/actions/build-windows-package",
@@ -135,15 +158,17 @@ def test_ci_layers_contain_required_release_smoke_steps():
         assert phrase in reusable, f"reusable validation missing phrase: {phrase}"
 
     for phrase in (
-        'python-version: "3.11"',
-        "pip install --disable-pip-version-check -q -r requirements-dev.txt",
-        "python -m PyInstaller --noconfirm --clean WorkTrace.spec",
-        r"scripts\build_windows_installer.ps1",
+        'python-version: "3.11.9"',
+        "pip install --disable-pip-version-check -q -r requirements-dev.txt -c constraints-release.txt",
+        "constraints-release.txt",
+        r"scripts\build_windows_release.ps1",
+        "inno-setup-6.7.3",
         r"dist\Trace.exe",
         r"dist\Trace-Setup.exe",
     ):
         assert phrase in package_action, f"package action missing phrase: {phrase}"
 
+    assert "python -m PyInstaller --noconfirm --clean WorkTrace.spec" not in package_action
     assert "uses: ./.github/actions/build-windows-package" in installer
     assert r"scripts\ci\installer_runtime_smoke.ps1" in installer
     assert 'tags: ["v*"]' in installer
@@ -156,3 +181,14 @@ def test_ci_layers_contain_required_release_smoke_steps():
     )
     assert "3.12" not in combined
     assert "run_python312" not in combined
+
+
+def test_release_build_verifies_pinned_environment_before_packaging():
+    release = _read_text(RELEASE_BUILD_PATH)
+    verifier = _read_text(RELEASE_ENV_VERIFY_PATH)
+
+    assert "verify_release_environment.py" in release
+    assert "--scope release" in release
+    assert 'RELEASE_PYTHON_VERSION = "3.11.9"' in verifier
+    assert 'CONSTRAINTS = ROOT / "constraints-release.txt"' in verifier
+    assert "importlib.metadata" in verifier
