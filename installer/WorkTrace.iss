@@ -1,5 +1,7 @@
 #define MyAppName "有迹"
-#define MyAppVersion "0.1"
+#ifndef MyAppVersion
+  #define MyAppVersion "0.1"
+#endif
 #define MyAppPublisher "Trace"
 #define MyAppExeName "Trace.exe"
 #define LegacyAppExeName "WorkTrace.exe"

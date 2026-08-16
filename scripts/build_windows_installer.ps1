@@ -67,29 +67,11 @@ if (-not $ISCCPath -or -not (Test-Path -LiteralPath $ISCCPath)) {
     throw "Inno Setup compiler ISCC.exe was not found. Pass -ISCCPath or set ISCC_PATH."
 }
 
-$installerText = Get-Content -Raw -LiteralPath $installerSource
-$versionPattern = '(?m)^#define MyAppVersion\s+"[^"]+"\s*$'
-$versionMatches = [regex]::Matches($installerText, $versionPattern)
-if ($versionMatches.Count -ne 1) {
-    throw "Installer source must contain exactly one MyAppVersion definition."
-}
-$installerText = [regex]::Replace(
-    $installerText,
-    $versionPattern,
-    "#define MyAppVersion `"$version`""
-)
-$generatedInstaller = Join-Path (Split-Path -Parent $installerSource) "WorkTrace.generated.$PID.iss"
-Set-Content -LiteralPath $generatedInstaller -Value $installerText -Encoding UTF8
-
 $name = [System.IO.Path]::GetFileNameWithoutExtension($target)
 $distPath = Split-Path -Parent $target
-try {
-    & $ISCCPath "/Qp" "/DMyAppExe=$exe" "/O$distPath" "/F$name" $generatedInstaller
-    if ($LASTEXITCODE -ne 0) {
-        throw "Inno Setup compiler failed with exit code $LASTEXITCODE"
-    }
-} finally {
-    Remove-Item -Force -LiteralPath $generatedInstaller -ErrorAction SilentlyContinue
+& $ISCCPath "/Qp" "/DMyAppExe=$exe" "/DMyAppVersion=$version" "/O$distPath" "/F$name" $installerSource
+if ($LASTEXITCODE -ne 0) {
+    throw "Inno Setup compiler failed with exit code $LASTEXITCODE"
 }
 
 if (-not (Test-Path -LiteralPath $target)) {

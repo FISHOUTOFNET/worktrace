@@ -114,18 +114,24 @@ def test_installer_and_shortcut_use_canonical_icon() -> None:
 
 def test_build_script_keeps_trace_output_contract() -> None:
     source = BUILD_PATH.read_text(encoding="utf-8")
+    installer = ISS_PATH.read_text(encoding="utf-8")
     assert "ISCC.exe" in source
     assert "ISCC_PATH" in source
     assert "installer\\WorkTrace.iss" in source
     assert "dist\\Trace.exe" in source
     assert "dist\\Trace-Setup-$version.exe" in source
     assert '"Trace-Setup.exe"' in source
-    assert "MyAppVersion" in source
-    assert "[regex]::Replace" in source
-    assert "/DMyAppExe=" in source
+    assert "#ifndef MyAppVersion" in installer
+    assert '#define MyAppVersion "0.1"' in installer
+    assert "/DMyAppExe=$exe" in source
+    assert "/DMyAppVersion=$version" in source
     assert "/O$distPath" in source
     assert "/F$name" in source
+    assert "$installerSource" in source
     assert "$LASTEXITCODE" in source
+    assert "[regex]::Replace" not in source
+    assert "WorkTrace.generated." not in source
+    assert "Set-Content -LiteralPath $generatedInstaller" not in source
 
 
 def test_build_script_auto_discovers_local_inno_setup_installation() -> None:
