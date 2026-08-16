@@ -143,6 +143,36 @@ test("manual refresh is routed to the active composed page", async () => {
   assert.deepEqual([rules, statistics, settings], [1, 1, 1]);
 });
 
+test("loaded settings refresh in the background on every page entry", async () => {
+  const { App, listeners } = harness();
+  let requests = 0;
+  App.currentPage = "settings";
+  App.settingsLoaded = true;
+  App.settingsLoading = false;
+  App.settingsRefreshPending = false;
+  App.settingsRequestToken = 0;
+  App.bridge = {
+    getSettingsPrivacyStatus() {
+      requests += 1;
+      return Promise.resolve({ status: { collector_running: true } });
+    },
+  };
+  App.handleResult = (result) => result;
+  App.renderSettingsStatus = () => {};
+  App.clearSettingsError = () => {};
+  App.loadSettingsPrivacyStatus = () => Promise.resolve();
+
+  const target = {
+    parentNode: null,
+    getAttribute(name) { return name === "data-page" ? "settings" : null; },
+  };
+  listeners.click({ type: "click", target });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(requests, 1);
+  assert.equal(App.settingsRefreshPending, false);
+});
+
 test("timeline structural refresh is held while editing and drains when clean", async () => {
   const { App } = harness();
   let editing = true;
