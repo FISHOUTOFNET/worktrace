@@ -4,6 +4,12 @@ param([string]$ISCCPath)
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptDir "..")
+
+& python (Join-Path $scriptDir "verify_release_environment.py") --scope release
+if ($LASTEXITCODE -ne 0) {
+    throw "Windows release environment does not match the pinned release baseline."
+}
+
 [string]$version = (& python -c 'from worktrace.version import __version__; print(__version__)').Trim()
 if ($LASTEXITCODE -ne 0 -or $version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
     throw "Failed to resolve a valid 有迹 application version."
