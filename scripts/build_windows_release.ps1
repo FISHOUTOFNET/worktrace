@@ -70,6 +70,7 @@ if ($LASTEXITCODE -ne 0 -or $version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|
 $distPath = Join-Path $repoRoot "dist"
 $portablePath = Join-Path $distPath "Trace-$version.exe"
 $setupPath = Join-Path $distPath "Trace-Setup-$version.exe"
+$brandIconPath = Join-Path $repoRoot "build\brand\worktrace.ico"
 $stagingRoot = Join-Path $repoRoot "build\release-staging"
 $stagingPath = Join-Path $stagingRoot ([guid]::NewGuid().ToString("N"))
 $stagingDistPath = Join-Path $stagingPath "dist"
@@ -107,6 +108,20 @@ try {
 
     if (-not (Test-Path -LiteralPath $stagedExePath)) {
         throw "PyInstaller completed without generating the staged Trace.exe"
+    }
+    if (-not (Test-Path -LiteralPath $brandIconPath)) {
+        throw "PyInstaller completed without generating the canonical 有迹 icon."
+    }
+
+    # WorkTrace.spec is the sole producer of the canonical icon assets for a
+    # release build. Verify the executable before any downstream consumer uses
+    # that same ICO so stale or divergent icon resources cannot be published.
+    & python `
+        (Join-Path $repoRoot "scripts\verify_windows_exe_icon.py") `
+        --exe $stagedExePath `
+        --ico $brandIconPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyInstaller generated Trace.exe without the canonical 有迹 icon."
     }
 
     Copy-Item -Force -LiteralPath $stagedExePath -Destination $portablePath

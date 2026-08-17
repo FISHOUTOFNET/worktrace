@@ -45,10 +45,12 @@ if ($useDefaultOutput) {
         -ErrorAction SilentlyContinue
 }
 
+# WorkTrace.spec generates the active and paused brand assets while building
+# Trace.exe. The installer is a consumer only: regenerating here can silently
+# split the EXE, runtime assets, shortcuts, and Setup.exe across different ICOs.
 $brandIcon = Join-Path $repoRoot "build\brand\worktrace.ico"
-& python (Join-Path $repoRoot "scripts\generate_brand_icon.py") $brandIcon
-if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $brandIcon)) {
-    throw "Failed to generate the 有迹 Windows icon."
+if (-not (Test-Path -LiteralPath $brandIcon)) {
+    throw "Missing canonical 有迹 icon '$brandIcon'. Build Trace.exe with WorkTrace.spec before building the installer."
 }
 $brandIcon = (Resolve-Path -LiteralPath $brandIcon).Path
 
@@ -108,7 +110,7 @@ if ($actualPreprocVersion -lt $minimumPreprocVersion) {
 Write-Host "Inno Setup compiler verified: PREPROCVER=$actualPreprocVersion (minimum $minimumInnoVersion, ISCC: $ISCCPath)"
 
 $name = [System.IO.Path]::GetFileNameWithoutExtension($target)
-& $ISCCPath "/Qp" "/DMyAppExe=$exe" "/DMyAppVersion=$version" "/O$distPath" "/F$name" $installerSource
+& $ISCCPath "/Qp" "/DMyAppExe=$exe" "/DMyAppVersion=$version" "/DMyBrandIcon=$brandIcon" "/O$distPath" "/F$name" $installerSource
 if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup compiler failed with exit code $LASTEXITCODE"
 }

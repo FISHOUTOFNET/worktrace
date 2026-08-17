@@ -5,9 +5,13 @@
 #define MyAppPublisher "Trace"
 #define MyAppExeName "Trace.exe"
 #define LegacyAppExeName "WorkTrace.exe"
+#define MyInstalledIconName "Trace-Icon-" + MyAppVersion + ".ico"
 
 #ifndef MyAppExe
   #define MyAppExe "..\dist\Trace.exe"
+#endif
+#ifndef MyBrandIcon
+  #define MyBrandIcon "..\build\brand\worktrace.ico"
 #endif
 
 [Setup]
@@ -22,8 +26,8 @@ PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
 OutputDir=..\dist
 OutputBaseFilename=Trace-Setup
-SetupIconFile=..\build\brand\worktrace.ico
-UninstallDisplayIcon={app}\{#MyAppExeName}
+SetupIconFile={#MyBrandIcon}
+UninstallDisplayIcon={app}\{#MyInstalledIconName}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -43,15 +47,20 @@ Name: fdwork; Description: "启用 FD Work 插件"; GroupDescription: "附加任
 ; to decompress all preceding payload before the pre-install page can open.
 Source: "..\worktrace\privacy_policy_zh-CN.txt"; Flags: dontcopy noencryption
 Source: "{#MyAppExe}"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion
+; Shortcuts reference a versioned ICO path instead of Trace.exe. Windows Shell
+; caches shortcut icons aggressively; changing this source path per release
+; invalidates stale desktop/Start-menu cache entries without changing AppId.
+Source: "{#MyBrandIcon}"; DestDir: "{app}"; DestName: "{#MyInstalledIconName}"; Flags: ignoreversion
 
 [InstallDelete]
 Type: files; Name: "{app}\{#LegacyAppExeName}"
+Type: files; Name: "{app}\Trace-Icon-*.ico"
 Type: files; Name: "{group}\WorkTrace.lnk"
 Type: files; Name: "{autodesktop}\WorkTrace.lnk"
 
 [Icons]
-Name: "{group}\有迹"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\有迹"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\有迹"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyInstalledIconName}"
+Name: "{autodesktop}\有迹"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyInstalledIconName}"; Tasks: desktopicon
 
 [Registry]
 ; Keep the legacy Run value name as a compatibility identifier; its target is Trace.exe.
