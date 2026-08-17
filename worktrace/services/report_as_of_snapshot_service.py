@@ -276,10 +276,16 @@ def _build_transient_statistics_overlay(
 def build_statistics_as_of_snapshot(
     start_date: str,
     end_date: str,
+    *,
+    base_snapshot: ReportProjectionSnapshot | None = None,
 ) -> ReportAsOfSnapshot:
     """Return a canonical snapshot overlaid with one verified runtime activity."""
 
-    base = build_visible_snapshot(start_date, end_date)
+    base = (
+        base_snapshot
+        if base_snapshot is not None
+        else build_visible_snapshot(start_date, end_date)
+    )
     context = current_page_read_context()
     if context is None or not context.runtime_consistent:
         return ReportAsOfSnapshot(base, None)

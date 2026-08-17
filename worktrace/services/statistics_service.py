@@ -176,9 +176,15 @@ def get_statistics_realtime_export_summary(
     from .page_read_context import page_read_scope
     from .report_as_of_snapshot_service import build_statistics_as_of_snapshot
     from .statistics_projection import build_statistics_summary_projection
+    from .statistics_snapshot_provider import get_statistics_base_snapshot
 
     with page_read_scope(allow_unpersisted_runtime=True):
-        as_of = build_statistics_as_of_snapshot(date_from, date_to)
+        base_snapshot = get_statistics_base_snapshot(date_from, date_to)
+        as_of = build_statistics_as_of_snapshot(
+            date_from,
+            date_to,
+            base_snapshot=base_snapshot,
+        )
         projection = build_statistics_summary_projection(
             as_of.snapshot,
             project_id=project_id,

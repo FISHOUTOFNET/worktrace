@@ -10,77 +10,18 @@ back to a full snapshot when called outside a :func:`page_read_scope`.
 
 from __future__ import annotations
 
-import threading
-from collections import OrderedDict
 from typing import Any
 
-from ..data_generation_repository import (
-    DataGenerationNamespace,
-    DataGenerationRepository,
-)
-from ..db import get_connection, get_db_key
+from ..db import get_connection
 from . import project_lifecycle_policy
 from .page_read_context import current_page_read_context
 from .projection_performance import record_cache_hit
 from .report_projection_builder import compute_projection
 from .report_projection_model import ReportProjectionSnapshot, thaw_value
-from .report_revision_service import PROJECTION_SCHEMA_VERSION
 from .report_session_projection_service import (
     _attach_detail_revision,
     public_session_dto,
 )
-
-_FULL_SNAPSHOT_CACHE_MAX_SLOTS = 2
-_FULL_SNAPSHOT_CACHE_LOCK = threading.Lock()
-_FULL_SNAPSHOT_CACHE: OrderedDict[
-    tuple[str, str, str, int, int, int], ReportProjectionSnapshot
-] = OrderedDict()
-
-
-def _snapshot_cache_key(
-    database_key: str,
-    start_date: str,
-    end_date: str,
-    report_generation: int,
-    replacement_epoch: int,
-) -> tuple[str, str, str, int, int, int]:
-    return (
-        str(database_key),
-        str(start_date),
-        str(end_date),
-        int(report_generation),
-        int(replacement_epoch),
-        int(PROJECTION_SCHEMA_VERSION),
-    )
-
-
-def _cross_request_snapshot_get(
-    key: tuple[str, str, str, int, int, int],
-) -> ReportProjectionSnapshot | None:
-    with _FULL_SNAPSHOT_CACHE_LOCK:
-        snapshot = _FULL_SNAPSHOT_CACHE.get(key)
-        if snapshot is None:
-            return None
-        _FULL_SNAPSHOT_CACHE.move_to_end(key)
-        return snapshot
-
-
-def _cross_request_snapshot_put(
-    key: tuple[str, str, str, int, int, int],
-    snapshot: ReportProjectionSnapshot,
-) -> None:
-    with _FULL_SNAPSHOT_CACHE_LOCK:
-        _FULL_SNAPSHOT_CACHE[key] = snapshot
-        _FULL_SNAPSHOT_CACHE.move_to_end(key)
-        while len(_FULL_SNAPSHOT_CACHE) > _FULL_SNAPSHOT_CACHE_MAX_SLOTS:
-            _FULL_SNAPSHOT_CACHE.popitem(last=False)
-
-
-def clear_full_snapshot_cache() -> None:
-    """Test/maintenance hook; generation keys handle ordinary invalidation."""
-
-    with _FULL_SNAPSHOT_CACHE_LOCK:
-        _FULL_SNAPSHOT_CACHE.clear()
 
 
 def build_visible_snapshot(
@@ -89,77 +30,30 @@ def build_visible_snapshot(
     *,
     conn=None,
 ) -> ReportProjectionSnapshot:
-    """Build a deterministic snapshot without modifying persistent state.
-
-    Caller-owned mutation transactions deliberately bypass all caches by
-    passing ``conn=``. Read-only range callers reuse up to two immutable full
-    snapshots while the report/database generation tuple is unchanged.
-    """
+    """Build a deterministic snapshot without modifying persistent state."""
 
     if conn is not None:
         return _build_snapshot(conn, start_date, end_date)
 
     context = current_page_read_context()
-    request_key = (str(start_date), str(end_date))
+    key = (str(start_date), str(end_date))
     if context is not None:
-        cached = context.snapshot_cache.get(request_key)
+        cached = context.snapshot_cache.get(key)
         if cached is not None:
             record_cache_hit(True)
-            return cached
-        cache_key = _snapshot_cache_key(
-            context.database_key,
-            start_date,
-            end_date,
-            int(
-                context.report_generations.get(
-                    DataGenerationNamespace.REPORT_STRUCTURE,
-                    0,
-                )
-            ),
-            int(
-                context.report_generations.get(
-                    DataGenerationNamespace.DATABASE_REPLACEMENT,
-                    0,
-                )
-            ),
-        )
-        cached = _cross_request_snapshot_get(cache_key)
-        if cached is not None:
-            record_cache_hit(True)
-            context.snapshot_cache[request_key] = cached
             return cached
         result = _build_snapshot(context.conn, start_date, end_date)
-        context.snapshot_cache[request_key] = result
-        _cross_request_snapshot_put(cache_key, result)
+        context.snapshot_cache[key] = result
         return result
 
     with get_connection() as read_conn:
         read_conn.execute("BEGIN")
         try:
-            cache_key = _snapshot_cache_key(
-                get_db_key(),
-                start_date,
-                end_date,
-                DataGenerationRepository.get(
-                    read_conn,
-                    DataGenerationNamespace.REPORT_STRUCTURE,
-                ),
-                DataGenerationRepository.get(
-                    read_conn,
-                    DataGenerationNamespace.DATABASE_REPLACEMENT,
-                ),
-            )
-            cached = _cross_request_snapshot_get(cache_key)
-            if cached is not None:
-                record_cache_hit(True)
-                read_conn.commit()
-                return cached
             result = _build_snapshot(read_conn, start_date, end_date)
             read_conn.commit()
         except Exception:
             read_conn.rollback()
             raise
-    _cross_request_snapshot_put(cache_key, result)
     return result
 
 
@@ -241,7 +135,6 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
 __all__ = [
     "ReportProjectionSnapshot",
     "build_visible_snapshot",
-    "clear_full_snapshot_cache",
     "get_projected_activity_contributions_by_range",
     "get_report_sessions_by_date",
     "get_report_sessions_by_range",

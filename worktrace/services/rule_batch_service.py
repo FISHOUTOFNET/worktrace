@@ -107,7 +107,7 @@ def preview_project_rules_batch_impact(rules: Any) -> dict[str, Any]:
 
 
 def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
-    """Submit one durable ordered history job; this facade never writes facts."""
+    """Submit one durable ordered history job with a bounded synchronous fast path."""
 
     normalized = _normalize_rules(rules)
     from . import history_mutation_job_service
@@ -116,7 +116,7 @@ def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
         result = history_mutation_job_service.submit_rule_batch_job(
             normalized,
             max_updates=MAX_BATCH_BACKFILL_ACTIVITIES,
-            synchronous_scan_limit=0,
+            synchronous_scan_limit=MAX_BATCH_BACKFILL_ACTIVITIES + 1,
         )
     except ValueError as exc:
         code = str(exc)

@@ -15,6 +15,7 @@ from worktrace.services import (
     rule_impact_service,
     rule_service,
     statistics_service,
+    statistics_snapshot_provider,
 )
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
@@ -80,7 +81,6 @@ def test_timeline_mutation_reuses_preview_and_matches_canonical_snapshot(
         "compute_projection",
         original_compute,
     )
-    report_projection_snapshot_service.clear_full_snapshot_cache()
     canonical = report_projection_snapshot_service.build_visible_snapshot(DATE, DATE)
     assert result.snapshot_revision == canonical.snapshot_revision
     selected = next(
@@ -94,7 +94,7 @@ def test_timeline_mutation_reuses_preview_and_matches_canonical_snapshot(
     )
 
 
-def test_full_range_snapshot_cache_reuses_same_range_and_invalidates_on_generation(
+def test_statistics_realtime_cache_reuses_range_and_invalidates_on_generation(
     temp_db,
     monkeypatch,
 ):
@@ -107,7 +107,7 @@ def test_full_range_snapshot_cache_reuses_same_range_and_invalidates_on_generati
         window_title="Stats.xlsx",
         project_id=first_project,
     )
-    report_projection_snapshot_service.clear_full_snapshot_cache()
+    statistics_snapshot_provider.clear_statistics_snapshot_cache()
 
     original_compute = report_projection_snapshot_service.compute_projection
     calls = 0
@@ -122,12 +122,24 @@ def test_full_range_snapshot_cache_reuses_same_range_and_invalidates_on_generati
         "compute_projection",
         counted_compute,
     )
-    statistics_service.get_statistics_export_summary(DATE, DATE, first_project)
-    statistics_service.get_statistics_export_summary(DATE, DATE, second_project)
+    statistics_service.get_statistics_realtime_export_summary(
+        DATE,
+        DATE,
+        first_project,
+    )
+    statistics_service.get_statistics_realtime_export_summary(
+        DATE,
+        DATE,
+        second_project,
+    )
     assert calls == 1
 
     project_service.create_project("Stats cache generation bump")
-    statistics_service.get_statistics_export_summary(DATE, DATE, first_project)
+    statistics_service.get_statistics_realtime_export_summary(
+        DATE,
+        DATE,
+        first_project,
+    )
     assert calls == 2
 
 
@@ -176,7 +188,7 @@ def test_rule_previews_share_a_bounded_candidate_scan(temp_db, monkeypatch):
     assert batch["scanned_activity_count"] == RULE_PREVIEW_SCAN_LIMIT
 
 
-def test_interactive_history_submission_never_scans_synchronously(
+def test_history_submission_keeps_bounded_synchronous_fast_path(
     temp_db,
     monkeypatch,
 ):
@@ -213,5 +225,7 @@ def test_interactive_history_submission_never_scans_synchronously(
         [{"rule_type": "keyword", "rule_id": 1}]
     )
 
-    assert single_seen["synchronous_scan_limit"] == 0
-    assert batch_seen["synchronous_scan_limit"] == 0
+    assert single_seen["synchronous_scan_limit"] == 100
+    assert batch_seen["synchronous_scan_limit"] == (
+        rule_batch_service.MAX_BATCH_BACKFILL_ACTIVITIES + 1
+    )
