@@ -28,9 +28,6 @@
     App.refreshCheckInFlight = false;
     App.activePageRefreshInFlight = false;
     App.lastFullRefreshAtEpochMs = 0;
-    App.RECONCILE_INTERVAL_MS = 180000;
-    App.lastReconcileAtEpochMs = 0;
-    App.reconcileInFlight = false;
     App._monotonicRenderState = {};
     App.currentPage = "overview";
     App.timelineDate = null;
@@ -48,8 +45,6 @@
     App.detailsInFlight = {};
     App.overviewRequestToken = 0;
     App.recentRequestToken = 0;
-    App.projectsCache = null;
-    App.projectsLoading = false;
     App.currentSessions = [];
     App.editingSession = null;
     App.editSaving = false;

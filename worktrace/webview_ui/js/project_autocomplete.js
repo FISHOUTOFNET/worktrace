@@ -44,13 +44,13 @@
         if (select.id === "edit-project-select") {
             var editing = catalog && typeof catalog.getEditing === "function"
                 ? catalog.getEditing()
-                : (App.editingProjectsCache || App.projectsCache || []);
+                : [];
             return editing.filter(function (project) {
                 return String((project && project.name) || "") !== "未归类";
             });
         }
         if (catalog && typeof catalog.getFilter === "function") return catalog.getFilter();
-        return App.filterProjectsCache || [];
+        return [];
     }
 
     function sourceOptionLabel(option) {

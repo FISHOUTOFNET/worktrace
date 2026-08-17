@@ -658,29 +658,13 @@
     App.renderSessionActivitySummary = renderSessionDetails;
 
     function loadProjects() {
-        if (typeof App.loadProjects === "function" && App.loadProjects !== loadProjects) {
-            return App.loadProjects();
-        }
-        if (App.projectsCache) {
-            renderTimelineProjectFilter(App.filterProjectsCache || App.projectsCache);
-            return Promise.resolve(App.projectsCache);
-        }
-        App.projectsLoading = true;
-        App.projectsLoadPromise = App.bridge.listProjectsForTimeline().then(function (result) {
-            if (result && result.ok !== false) {
-                App.editingProjectsCache = result.editing_projects || result.projects || [];
-                App.filterProjectsCache = result.filter_projects || result.projects || [];
-                App.projectsCache = App.editingProjectsCache;
-                renderTimelineProjectFilter(App.filterProjectsCache);
-            }
-            return App.projectsCache;
-        }).catch(function () {
-            return null;
-        }).finally(function () {
-            App.projectsLoading = false;
-            App.projectsLoadPromise = null;
+        if (!App.projectCatalog) return Promise.resolve([]);
+        return App.projectCatalog.load().then(function (catalog) {
+            var editing = catalog ? catalog.editingProjects : App.projectCatalog.getEditing();
+            var filter = catalog ? catalog.filterProjects : App.projectCatalog.getFilter();
+            renderTimelineProjectFilter(filter || []);
+            return editing || [];
         });
-        return App.projectsLoadPromise;
     }
 
     function confirmTimelineDeletion(operation, options, trigger) {
@@ -747,7 +731,7 @@
     };
 
     function findCachedProject(projectId) {
-        var projects = App.projectsCache || [];
+        var projects = App.projectCatalog ? App.projectCatalog.getEditing() : [];
         for (var i = 0; i < projects.length; i++) {
             if (String(projects[i].id) === String(projectId)) return projects[i];
         }
@@ -813,7 +797,7 @@
             && session
             && note.value !== String(session.session_note || "")
         );
-        if (select) select.disabled = !projectAllowed || !App.projectsCache;
+        if (select) select.disabled = !projectAllowed || !App.projectCatalog || !App.projectCatalog.getEditing().length;
         if (note) note.disabled = !noteAllowed;
         if (duration) duration.disabled = !durationAllowed;
         if (cancel) cancel.disabled = App.editSaving || !session;
@@ -840,7 +824,7 @@
         var panel = document.getElementById("timeline-edit-panel");
         if (panel) panel.hidden = false;
         var select = document.getElementById("edit-project-select");
-        if (select && !App.projectsCache) {
+        if (select) {
             select.innerHTML = '<option value="">加载中…</option>';
             select.disabled = true;
             loadProjects().then(function (projects) {
@@ -851,8 +835,6 @@
                     renderProjectSelect(projects, session.project_id);
                 }
             });
-        } else if (select) {
-            renderProjectSelect(App.projectsCache, session.project_id);
         }
         var duration = document.getElementById("edit-duration-input");
         if (duration) {

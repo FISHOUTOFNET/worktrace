@@ -15,19 +15,9 @@
 
     function snapshot() {
         return {
-            editingProjects: editingProjects || [],
-            filterProjects: filterProjects || []
+            editingProjects: (editingProjects || []).slice(),
+            filterProjects: (filterProjects || []).slice()
         };
-    }
-
-    function publishLegacyProjection() {
-        // Temporary aliases only for the legacy Timeline renderer. The catalog
-        // remains the sole state owner and no feature module writes these.
-        App.editingProjectsCache = editingProjects;
-        App.filterProjectsCache = filterProjects;
-        App.projectsCache = editingProjects;
-        App.projectsLoading = !!loadPromise;
-        App.projectsLoadPromise = loadPromise;
     }
 
     function invalidate() {
@@ -36,7 +26,6 @@
         editingProjects = null;
         filterProjects = null;
         loadPromise = null;
-        publishLegacyProjection();
     }
 
     function rejectStaleEpoch() {
@@ -63,16 +52,14 @@
         editingProjects = attachLastUsed(result.editing_projects, lastUsed);
         filterProjects = attachLastUsed(result.filter_projects, lastUsed);
         acceptedDataEpoch = requestDataEpoch;
-        publishLegacyProjection();
         return snapshot();
     }
 
     function catalogRequest() {
-        if (!App.bridge) return Promise.reject(new Error("project_catalog_bridge_unavailable"));
-        if (typeof App.bridge.listProjectCatalog === "function") {
-            return App.bridge.listProjectCatalog();
+        if (!App.bridge || typeof App.bridge.listProjectCatalog !== "function") {
+            return Promise.reject(new Error("project_catalog_bridge_unavailable"));
         }
-        return App.bridge.listProjectsForTimeline();
+        return App.bridge.listProjectCatalog();
     }
 
     function load() {
@@ -87,9 +74,7 @@
             return null;
         }).finally(function () {
             if (requestGeneration === generation) loadPromise = null;
-            publishLegacyProjection();
         });
-        publishLegacyProjection();
         return loadPromise;
     }
 
@@ -104,15 +89,4 @@
         getEditing: function () { rejectStaleEpoch(); return (editingProjects || []).slice(); },
         getFilter: function () { rejectStaleEpoch(); return (filterProjects || []).slice(); }
     });
-
-    // Compatibility boundary while the large Timeline renderer is migrated.
-    App.loadProjects = function () {
-        return load().then(function (catalog) {
-            return catalog ? catalog.editingProjects : null;
-        });
-    };
-    App.refreshProjectCatalogs = function () {
-        invalidate();
-        return App.loadProjects();
-    };
 })();

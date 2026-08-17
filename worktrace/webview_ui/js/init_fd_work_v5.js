@@ -51,7 +51,7 @@
         hideTimelineSession: fixedBridgeMethod("hide_timeline_session"),
         hideTimelineSessionActivity: fixedBridgeMethod("hide_timeline_session_activity"),
         importEncryptedBackup: fixedBridgeMethod("import_encrypted_backup"),
-        listProjectsForTimeline: fixedBridgeMethod("list_projects_for_timeline"),
+        listProjectCatalog: fixedBridgeMethod("list_project_catalog"),
         mergeTimelineSession: fixedBridgeMethod("merge_timeline_session"),
         openFDWorkCasePicker: fixedBridgeMethod("open_fd_work_case_picker"),
         openFDWorkEntry: fixedBridgeMethod("open_fd_work_entry"),
@@ -394,11 +394,8 @@
     };
 
     function invalidateProjectCatalog() {
-        App.projectsCache = null;
-        App.projectsLoading = false;
-        App.projectsLoadPromise = null;
-        if (typeof App.loadProjects === "function") {
-            Promise.resolve().then(function () { return App.loadProjects(); });
+        if (App.projectCatalog && typeof App.projectCatalog.invalidate === "function") {
+            App.projectCatalog.invalidate();
         }
     }
     App.invalidateProjectCatalog = invalidateProjectCatalog;
@@ -462,6 +459,49 @@
         return typeof App.refreshTimeline === "function" ? App.refreshTimeline() : Promise.resolve();
     }
 
+    var ACTIVE_PAGE_REFRESHERS = Object.freeze({
+        overview: function () {
+            return refreshOverview();
+        },
+        timeline: function (acceptedState) {
+            if (!App.timelineLoaded && !App.timelineLoading && typeof App.loadTimelineReport === "function") {
+                return App.loadTimelineReport(App.timelineDate, { showLoading: true });
+            }
+            if (!App.timelineLoaded) return Promise.resolve();
+            if (typeof App._timelineEditingActive === "function" && App._timelineEditingActive()) {
+                refreshCurrentActivityFromState(acceptedState || App.lastRefreshState);
+                return Promise.resolve();
+            }
+            return refreshTimeline();
+        },
+        statistics: function () {
+            if (!App.statisticsLoaded && typeof App.initStatisticsDefaults === "function") {
+                App.initStatisticsDefaults();
+            }
+            return typeof App.loadStatisticsExportSummary === "function"
+                ? App.loadStatisticsExportSummary()
+                : Promise.resolve();
+        },
+        rules: function () {
+            return typeof App.loadProjectRules === "function"
+                ? App.loadProjectRules()
+                : Promise.resolve();
+        },
+        settings: function () {
+            return typeof App.loadSettingsPrivacyStatus === "function"
+                ? App.loadSettingsPrivacyStatus()
+                : Promise.resolve();
+        }
+    });
+
+    function refreshActivePage(acceptedState) {
+        var refresher = ACTIVE_PAGE_REFRESHERS[App.currentPage];
+        return typeof refresher === "function"
+            ? Promise.resolve(refresher(acceptedState))
+            : Promise.resolve();
+    }
+    App.refreshActivePage = refreshActivePage;
+
     function _runCurrentPageRefresh(state, options) {
         App.activePageRefreshInFlight = true;
         var statePromise = state && state.ok === true
@@ -476,17 +516,9 @@
             var promises = [
                 acceptedState && acceptedState.ok === true
                     ? refreshStatusFromRefreshState(acceptedState)
-                    : refreshStatus()
+                    : refreshStatus(),
+                refreshActivePage(acceptedState)
             ];
-            if (App.currentPage === "overview") {
-                promises.push(refreshOverview());
-            } else if (App.currentPage === "timeline" && App.timelineLoaded) {
-                if (typeof App._timelineEditingActive !== "function" || !App._timelineEditingActive()) {
-                    promises.push(refreshTimeline());
-                } else {
-                    refreshCurrentActivityFromState(acceptedState || App.lastRefreshState);
-                }
-            }
             return Promise.allSettled(promises);
         }).then(function (results) {
             App.lastFullRefreshAtEpochMs = Date.now();
@@ -560,20 +592,7 @@
         if (pageTarget) pageTarget.classList.add("active");
         App.currentPage = pageId;
         liveRuntimeStore.setScope(pageId, pageId === "timeline" ? App.timelineDate : null);
-        if (pageId === "timeline" && !App.timelineLoaded && !App.timelineLoading) {
-            App.loadTimelineReport(App.timelineDate, { showLoading: true });
-        }
-        if (pageId === "statistics" && !App.statisticsLoaded) {
-            App.initStatisticsDefaults();
-            App.loadStatisticsExportSummary();
-        }
-        if (pageId === "rules" && !App.rulesLoaded) App.loadProjectRules();
-        if (pageId === "settings" && !App.settingsLoaded && !App.settingsLoading) {
-            App.loadSettingsPrivacyStatus();
-        }
-        if (pageId === "overview" || (pageId === "timeline" && App.timelineLoaded)) {
-            refreshCurrentPageData();
-        }
+        refreshCurrentPageData();
     }
     App.switchPage = switchPage;
 
@@ -791,7 +810,7 @@
     };
 
     // Single idempotent post-privacy-gate startup entry: only this function
-    // may run catalog -> refresh state -> page refresh -> heartbeat.
+    // may run refresh state -> active-page refresh -> heartbeat.
     App.startupAfterPrivacyState = "idle";
     App.startupAfterPrivacyPromise = null;
 
@@ -825,11 +844,6 @@
             .catch(function () {});
 
         App.startupAfterPrivacyPromise = Promise.resolve()
-            .then(function () {
-                return typeof App.loadProjects === "function"
-                    ? App.loadProjects()
-                    : Promise.resolve();
-            })
             .then(function () {
                 return App.bridge.getRefreshState(
                     App.currentPage === "timeline" ? App.timelineDate : null

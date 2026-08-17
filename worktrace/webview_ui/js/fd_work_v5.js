@@ -537,7 +537,7 @@
         if (!(projectId > 0)) return null;
         var projects = App.projectCatalog
             ? App.projectCatalog.getEditing()
-            : (App.editingProjectsCache || App.projectsCache || []);
+            : [];
         for (var index = 0; index < projects.length; index++) {
             if (parseInt(projects[index] && projects[index].id, 10) === projectId) {
                 return projects[index];

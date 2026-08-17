@@ -3,13 +3,6 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    function refreshSharedProjectCatalog() {
-        if (!App.projectCatalog) return Promise.resolve(null);
-        App.projectCatalog.invalidate();
-        return App.projectCatalog.load();
-    }
-    App.refreshSharedProjectCatalog = refreshSharedProjectCatalog;
-
     function loadProjectRules(options) {
         options = options || {};
         var forceFresh = options.forceFresh === true;
@@ -27,7 +20,7 @@
             }
             App.showProjectRules(result || { projects: [] });
             App.clearRulesError();
-            return refreshSharedProjectCatalog().then(function () { return result; });
+            return result;
         }).catch(function () {
             if (App.requestCoordinator.isCurrent(token)) App.showRulesError("加载项目规则失败");
             return null;
@@ -40,6 +33,7 @@
     }
     App.loadProjectRules = loadProjectRules;
     App.reloadProjectRules = function () {
+        if (App.projectCatalog) App.projectCatalog.invalidate();
         return loadProjectRules({ forceFresh: true, showLoading: false });
     };
 

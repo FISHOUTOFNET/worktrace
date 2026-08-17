@@ -3,11 +3,6 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // Durable runtime generations/revisions are authoritative. A periodic
-    // reconcile may verify runtime state, but must not force a visible
-    // collection rebuild when no invalidation domain changed.
-    App.RECONCILE_INTERVAL_MS = Number.MAX_SAFE_INTEGER;
-
     function clearSettledFDWorkAuthOverride(status) {
         if (!status || status.operation !== "none") return;
         if (["ready", "idle", "error", "disabled", "shutdown"].indexOf(status.session_state) < 0) {

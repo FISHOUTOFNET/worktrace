@@ -39,6 +39,7 @@
         App.projectIdentity.bindHost({
             onStateChanged: refreshPanelWriteState,
             onBindingChanged: function () {
+                if (App.reloadProjectRules) return App.reloadProjectRules();
                 return App.loadProjectRules ? App.loadProjectRules() : Promise.resolve();
             }
         });
