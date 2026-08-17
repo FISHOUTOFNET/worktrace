@@ -592,7 +592,9 @@
         if (pageTarget) pageTarget.classList.add("active");
         App.currentPage = pageId;
         liveRuntimeStore.setScope(pageId, pageId === "timeline" ? App.timelineDate : null);
-        refreshCurrentPageData();
+        refreshActivePage(App.lastRefreshState).catch(function () {
+            App.showError("刷新失败");
+        });
     }
     App.switchPage = switchPage;
 

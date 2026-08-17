@@ -52,7 +52,8 @@ def test_project_catalog_is_the_canonical_frontend_directory_owner():
 def test_switch_page_delegates_data_refresh_without_page_fetch_knowledge():
     init = INIT.read_text(encoding="utf-8")
     switch = between(init, "    function switchPage(pageId) {", "    App.switchPage = switchPage;")
-    assert "refreshCurrentPageData();" in switch
+    assert "refreshActivePage(App.lastRefreshState)" in switch
+    assert "refreshCurrentPageData(" not in switch
     for direct_fetch in (
         "loadTimelineReport(",
         "loadStatisticsExportSummary(",

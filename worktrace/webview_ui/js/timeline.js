@@ -825,16 +825,21 @@
         if (panel) panel.hidden = false;
         var select = document.getElementById("edit-project-select");
         if (select) {
-            select.innerHTML = '<option value="">加载中…</option>';
-            select.disabled = true;
-            loadProjects().then(function (projects) {
-                if (
-                    App.editingSession
-                    && App.editingSession.projection_instance_key === session.projection_instance_key
-                ) {
-                    renderProjectSelect(projects, session.project_id);
-                }
-            });
+            var cachedProjects = App.projectCatalog ? App.projectCatalog.getEditing() : [];
+            if (cachedProjects.length > 0) {
+                renderProjectSelect(cachedProjects, session.project_id);
+            } else {
+                select.innerHTML = '<option value="">加载中…</option>';
+                select.disabled = true;
+                loadProjects().then(function (projects) {
+                    if (
+                        App.editingSession
+                        && App.editingSession.projection_instance_key === session.projection_instance_key
+                    ) {
+                        renderProjectSelect(projects, session.project_id);
+                    }
+                });
+            }
         }
         var duration = document.getElementById("edit-duration-input");
         if (duration) {
@@ -1189,13 +1194,13 @@
         var originalProjectId = String(session.project_id || "");
         var projectIdText = canProject ? select.value : originalProjectId;
         var projectId = projectIdText ? parseInt(projectIdText, 10) : null;
-        if (canProject && (!projectId || !findCachedProject(projectId))) {
+        var projectChanged = canProject && projectIdText !== originalProjectId;
+        if (projectChanged && (!projectId || !findCachedProject(projectId))) {
             showEditStatus("项目列表已过期，请刷新后重试", true);
             return Promise.resolve(false);
         }
         var originalNote = session.session_note || "";
         var note = canNote ? noteElement.value : originalNote;
-        var projectChanged = canProject && projectIdText !== originalProjectId;
         var noteChanged = canNote && note !== originalNote;
         if (
             noteChanged

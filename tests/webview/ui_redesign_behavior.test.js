@@ -717,7 +717,7 @@ function timelineHarness() {
   App.bridge = {
     getTimeline: bridgeCall("get_timeline"),
     getTimelineSessionActivitySummary: bridgeCall("get_timeline_session_activity_summary"),
-    listProjectsForTimeline: bridgeCall("list_projects_for_timeline"),
+    listProjectCatalog: bridgeCall("list_project_catalog"),
     saveTimelineSessionEdit: bridgeCall("save_timeline_session_edit"),
     hideTimelineSession: bridgeCall("hide_timeline_session"),
     hideTimelineSessionActivity: bridgeCall("hide_timeline_session_activity"),
@@ -731,6 +731,17 @@ function timelineHarness() {
   };
   App.refreshTimelineAfterEdit = () => Promise.resolve();
   App.loadTimelineReport = () => Promise.resolve();
+  const timelineProjects = [{ id: 1, name: "P1" }, { id: 2, name: "P2" }];
+  App.projectCatalog = Object.freeze({
+    load: () => Promise.resolve({
+      editingProjects: timelineProjects.slice(),
+      filterProjects: timelineProjects.slice(),
+    }),
+    invalidate() {},
+    resetGeneration() {},
+    getEditing: () => timelineProjects.slice(),
+    getFilter: () => timelineProjects.slice(),
+  });
   for (const file of ["timeline_request_state.js", "timeline.js"]) loadJs(context, file);
   return { App, element, context };
 }
@@ -762,8 +773,6 @@ function session(key, revision, startTime, opts = {}) {
 
 function prepareTimelineEditor(App, element, source) {
   App.currentSessions = [source];
-  App.projectsCache = [{ id: 1, name: "P1" }, { id: 2, name: "P2" }];
-  App.editingProjectsCache = App.projectsCache;
   App.populateEditPanel(source);
   element("edit-project-select").value = String(source.project_id || "");
 }
@@ -1003,8 +1012,6 @@ test("6. continuous autosave: S1 uses R1, S2 uses R2 after rebase", async () => 
   const sessions = [session("base:a", "rev-1", "2026-07-12T09:00:00")];
   App.currentSessions = sessions;
   App.editingSession = sessions[0];
-  App.projectsCache = [{ id: 1, name: "P" }];
-  App.editingProjectsCache = [{ id: 1, name: "P" }];
   element("edit-note-text").value = "A";
   element("edit-project-select").value = "1";
   element("edit-duration-input").value = "0.2";
@@ -1044,8 +1051,6 @@ test("7. multi-field edits during save are not overwritten by stale response", a
   const sessions = [session("base:a", "rev-1", "2026-07-12T09:00:00")];
   App.currentSessions = sessions;
   App.editingSession = sessions[0];
-  App.projectsCache = [{ id: 1, name: "P1" }, { id: 2, name: "P2" }];
-  App.editingProjectsCache = [{ id: 1, name: "P1" }, { id: 2, name: "P2" }];
   element("edit-project-select").value = "1";
   element("edit-note-text").value = "note-1";
   element("edit-duration-input").value = "0.2";
@@ -1080,7 +1085,6 @@ test("7b. composition input never submits intermediate text and saves only final
   const source = session("base:a", "rev-1", "2026-07-12T09:00:00");
   App.currentSessions = [source];
   App.editingSession = source;
-  App.projectsCache = [{ id: 1, name: "P" }];
   element("edit-project-select").value = "1";
   element("edit-duration-input").value = "0.2";
 
@@ -1131,7 +1135,6 @@ test("7c. editable fields stay enabled and focused while autosave is in flight",
   const source = session("base:a", "rev-1", "2026-07-12T09:00:00");
   App.currentSessions = [source];
   App.editingSession = source;
-  App.projectsCache = [{ id: 1, name: "P" }];
   element("edit-project-select").value = "1";
   element("edit-note-text").value = "first";
   element("edit-duration-input").value = "0.2";
@@ -1162,7 +1165,6 @@ test("7d. 200-character limit applies only when the description changed", async 
   const source = session("base:a", "rev-1", "2026-07-12T09:00:00", { project_id: 1, session_note: historical });
   App.currentSessions = [source];
   App.editingSession = source;
-  App.projectsCache = [{ id: 1, name: "P1" }, { id: 2, name: "P2" }];
   element("edit-project-select").value = "2";
   element("edit-note-text").value = historical;
   element("edit-duration-input").value = "0.2";
@@ -1190,8 +1192,6 @@ test("8. context switch preserves dirty draft (save first, then switch)", async 
   const sessions = [session("base:a", "rev-1", "2026-07-12T09:00:00")];
   App.currentSessions = sessions;
   App.editingSession = sessions[0];
-  App.projectsCache = [{ id: 1, name: "P" }];
-  App.editingProjectsCache = [{ id: 1, name: "P" }];
   element("edit-note-text").value = "dirty";
   element("edit-project-select").value = "1";
 
@@ -1230,8 +1230,6 @@ test("8c. context switch during save in flight queues and executes after success
   App.editingSession = sessions[0];
   element("edit-note-text").value = "dirty";
   element("edit-project-select").value = "1";
-  App.projectsCache = [{ id: 1, name: "P" }];
-  App.editingProjectsCache = [{ id: 1, name: "P" }];
 
   const saveDeferred = deferred();
   let switched = false;
@@ -1317,9 +1315,6 @@ function rulesHarness() {
   const { context, element } = makeBaseContext();
   const App = context.window.WorkTraceApp;
   Object.assign(App, {
-    editingProjectsCache: [],
-    filterProjectsCache: [],
-    projectsCache: null,
     projectsLoading: false,
     lastProjectRulesData: null,
     rulesLoaded: false,
@@ -1364,7 +1359,8 @@ test("10. filter catalog excludes system unclassified project (single 未归类 
     filter_projects: filterProjects,
   });
 
-  await App.refreshSharedProjectCatalog();
+  App.projectCatalog.invalidate();
+  await App.projectCatalog.load();
   await flush();
   App.renderTimelineProjectFilter(App.projectCatalog.getFilter());
 
@@ -1386,15 +1382,16 @@ test("10b. editing catalog includes system unclassified so users can reset a ses
     filter_projects: [{ id: 1, name: "Alpha" }],
   });
 
-  await App.refreshSharedProjectCatalog();
+  App.projectCatalog.invalidate();
+  await App.projectCatalog.load();
   await flush();
 
-  assert.equal(App.editingProjectsCache.length, 2);
-  assert.equal(App.filterProjectsCache.length, 1);
-  assert.equal(App.filterProjectsCache.find((p) => p.name === "未归类"), undefined);
+  assert.equal(App.projectCatalog.getEditing().length, 2);
+  assert.equal(App.projectCatalog.getFilter().length, 1);
+  assert.equal(App.projectCatalog.getFilter().find((p) => p.name === "未归类"), undefined);
 });
 
-test("11. catalog refresh after project CRUD updates all caches (no duplicate binding)", async () => {
+test("11. catalog refresh after project CRUD updates both projections (no duplicate binding)", async () => {
   const { App } = rulesHarness();
   let editingProjects = [{ id: 1, name: "A" }];
   let filterProjects = [{ id: 1, name: "A" }];
@@ -1404,26 +1401,29 @@ test("11. catalog refresh after project CRUD updates all caches (no duplicate bi
     filter_projects: filterProjects,
   });
 
-  await App.refreshSharedProjectCatalog();
+  App.projectCatalog.invalidate();
+  await App.projectCatalog.load();
   await flush();
-  assert.equal(App.editingProjectsCache.length, 1);
-  assert.equal(App.filterProjectsCache.length, 1);
+  assert.equal(App.projectCatalog.getEditing().length, 1);
+  assert.equal(App.projectCatalog.getFilter().length, 1);
 
   editingProjects = [{ id: 1, name: "A" }, { id: 2, name: "B" }];
   filterProjects = [{ id: 1, name: "A" }, { id: 2, name: "B" }];
-  await App.refreshSharedProjectCatalog();
+  App.projectCatalog.invalidate();
+  await App.projectCatalog.load();
   await flush();
-  assert.equal(App.editingProjectsCache.length, 2, "editing catalog must include B");
-  assert.equal(App.filterProjectsCache.length, 2, "filter catalog must include B");
-  assert.ok(App.filterProjectsCache.find((p) => p.id === 2));
+  assert.equal(App.projectCatalog.getEditing().length, 2, "editing catalog must include B");
+  assert.equal(App.projectCatalog.getFilter().length, 2, "filter catalog must include B");
+  assert.ok(App.projectCatalog.getFilter().find((p) => p.id === 2));
 
   editingProjects = [{ id: 1, name: "A" }];
   filterProjects = [{ id: 1, name: "A" }];
-  await App.refreshSharedProjectCatalog();
+  App.projectCatalog.invalidate();
+  await App.projectCatalog.load();
   await flush();
-  assert.equal(App.editingProjectsCache.length, 1);
-  assert.equal(App.filterProjectsCache.length, 1);
-  assert.equal(App.filterProjectsCache.find((p) => p.id === 2), undefined);
+  assert.equal(App.projectCatalog.getEditing().length, 1);
+  assert.equal(App.projectCatalog.getFilter().length, 1);
+  assert.equal(App.projectCatalog.getFilter().find((p) => p.id === 2), undefined);
 });
 
 function rulesPanelHarness() {

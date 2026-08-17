@@ -343,7 +343,9 @@ test("unchanged collector status is render-no-op", () => {
   assert.equal(counters.status(), 1);
 });
 
-test("periodic visible reconcile is disabled by composition policy", () => {
+test("periodic visible reconcile state is retired", () => {
   const { App } = harness(runtime());
-  assert.equal(App.RECONCILE_INTERVAL_MS, Number.MAX_SAFE_INTEGER);
+  assert.equal(App.RECONCILE_INTERVAL_MS, undefined);
+  assert.equal(App.lastReconcileAtEpochMs, undefined);
+  assert.equal(App.reconcileInFlight, undefined);
 });

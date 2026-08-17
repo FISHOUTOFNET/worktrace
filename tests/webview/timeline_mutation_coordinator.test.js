@@ -54,7 +54,7 @@ function harness() {
   context.window.WorkTraceApp.bridge = {
     getTimeline: bridgeCall("get_timeline"),
     getTimelineSessionActivitySummary: bridgeCall("get_timeline_session_activity_summary"),
-    listProjectsForTimeline: bridgeCall("list_projects_for_timeline"),
+    listProjectCatalog: bridgeCall("list_project_catalog"),
     saveTimelineSessionEdit: bridgeCall("save_timeline_session_edit"),
     hideTimelineSession: bridgeCall("hide_timeline_session"),
     hideTimelineSessionActivity: bridgeCall("hide_timeline_session_activity"),
@@ -72,6 +72,17 @@ function harness() {
     );
   }
   const App = context.window.WorkTraceApp;
+  const timelineProjects = [{ id: 17, name: "CASE-001" }];
+  App.projectCatalog = Object.freeze({
+    load: () => Promise.resolve({
+      editingProjects: timelineProjects.slice(),
+      filterProjects: timelineProjects.slice(),
+    }),
+    invalidate() {},
+    resetGeneration() {},
+    getEditing: () => timelineProjects.slice(),
+    getFilter: () => timelineProjects.slice(),
+  });
   App.timelineDate = "2026-07-12";
   App.selectedProjectionInstanceKey = "base:a";
   App.selectedProjectionRevision = "rev-a";
@@ -651,7 +662,6 @@ function configureFDWorkSession(App, element, overrides = {}) {
     supported: true, enabled: true, session_state: "ready", operation: "none",
     ready: true, login_required: false, error_code: null,
   });
-  App.projectsCache = [{ id: 17, name: "CASE-001" }];
   element("edit-project-select").value = "17";
   element("edit-note-text").value = session.session_note;
   element("edit-duration-input").value = "1.4";
