@@ -141,7 +141,7 @@ try {
             "/CURRENTUSER",
             "/SP-",
             "/DIR=`"$InstallDir`"",
-            "/TASKS=`"startup,desktopicon`""
+            "/TASKS=startup,desktopicon"
         )
 
     $firstStartup = Get-ItemPropertyValue `
@@ -181,7 +181,7 @@ try {
             "/CURRENTUSER",
             "/SP-",
             "/DIR=`"$InstallDir`"",
-            "/TASKS=`"startup,desktopicon`""
+            "/TASKS=startup,desktopicon"
         )
 
     if (Get-Process -Id $upgradePid -ErrorAction SilentlyContinue) {
