@@ -245,7 +245,6 @@
         App.activePageRefreshInFlight = false;
         App.activePageRefreshPromise = null;
         App.activePageRefreshPending = null;
-        App.reconcileInFlight = false;
         App.liveClockContractRefreshRequested = false;
         App.liveClockContractViolation = null;
         App.liveClockViolationKeys = {};
@@ -514,17 +513,6 @@
     App.refreshCurrentPageData = refreshCurrentPageData;
     App.refreshAll = function () { return refreshCurrentPageData(); };
 
-    function fullReconcileCollectionViews(reason) {
-        if (App.reconcileInFlight) return App.activePageRefreshPromise || Promise.resolve();
-        App.reconcileInFlight = true;
-        return refreshCurrentPageData(null, { reason: reason || "reconcile" }).then(function () {
-            App.lastReconcileAtEpochMs = Date.now();
-        }).finally(function () {
-            App.reconcileInFlight = false;
-        });
-    }
-    App.fullReconcileCollectionViews = fullReconcileCollectionViews;
-
     function togglePause() {
         App.bridge.togglePause().then(function (result) {
             if (!result || result.ok === false) {
@@ -749,16 +737,9 @@
             if (!App.acceptRefreshStateRuntime(state)) return;
             refreshCurrentActivityFromState(state, { forceRender: renderCurrent });
             refreshStatusFromRuntime(liveRuntimeStore.get());
-            var triggered = false;
             if (pageStructureChanged || App.liveClockContractRefreshRequested) {
-                triggered = true;
                 App.liveClockContractRefreshRequested = false;
                 refreshCurrentPageData(state);
-            }
-            var now = Date.now();
-            if (!triggered && !App.reconcileInFlight
-                && now - App.lastReconcileAtEpochMs >= App.RECONCILE_INTERVAL_MS) {
-                fullReconcileCollectionViews("heartbeat-lowfreq");
             }
         }).finally(function () {
             if (App.requestCoordinator.isCurrent(token)) App.refreshCheckInFlight = false;
@@ -860,7 +841,6 @@
                 return refreshCurrentPageData(state);
             })
             .then(function () {
-                App.lastReconcileAtEpochMs = Date.now();
                 startHeartbeat();
             })
             .then(function () {
