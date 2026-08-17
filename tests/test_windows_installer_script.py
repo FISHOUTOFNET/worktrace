@@ -105,12 +105,30 @@ def test_first_postinstall_launch_is_visible_normal_mode() -> None:
     assert "启动有迹" in run_section
 
 
-def test_installer_and_shortcut_use_canonical_icon() -> None:
+def test_installer_and_shortcuts_use_one_cache_busted_canonical_icon() -> None:
     source = ISS_PATH.read_text(encoding="utf-8")
-    assert r"SetupIconFile=..\build\brand\worktrace.ico" in source
-    assert "UninstallDisplayIcon={app}\\{#MyAppExeName}" in source
-    assert r'Name: "{group}\有迹"' in source
-    assert r'Name: "{autodesktop}\有迹"' in source
+    assert '#define MyInstalledIconName "Trace-Icon-" + MyAppVersion + ".ico"' in source
+    assert "#ifndef MyBrandIcon" in source
+    assert r'#define MyBrandIcon "..\build\brand\worktrace.ico"' in source
+    assert "SetupIconFile={#MyBrandIcon}" in source
+    assert r"UninstallDisplayIcon={app}\{#MyInstalledIconName}" in source
+    assert (
+        r'Source: "{#MyBrandIcon}"; DestDir: "{app}"; '
+        r'DestName: "{#MyInstalledIconName}"; Flags: ignoreversion'
+        in source
+    )
+    assert r'Type: files; Name: "{app}\Trace-Icon-*.ico"' in source
+    assert (
+        r'Name: "{group}\有迹"; Filename: "{app}\{#MyAppExeName}"; '
+        r'WorkingDir: "{app}"; IconFilename: "{app}\{#MyInstalledIconName}"'
+        in source
+    )
+    assert (
+        r'Name: "{autodesktop}\有迹"; Filename: "{app}\{#MyAppExeName}"; '
+        r'WorkingDir: "{app}"; IconFilename: "{app}\{#MyInstalledIconName}"; '
+        r'Tasks: desktopicon'
+        in source
+    )
 
 
 def test_build_script_keeps_versioned_trace_output_contract() -> None:
@@ -127,6 +145,7 @@ def test_build_script_keeps_versioned_trace_output_contract() -> None:
     assert '#define MyAppVersion "0.1"' in installer
     assert "/DMyAppExe=$exe" in source
     assert "/DMyAppVersion=$version" in source
+    assert "/DMyBrandIcon=$brandIcon" in source
     assert "/O$distPath" in source
     assert "/F$name" in source
     assert "$installerSource" in source
@@ -134,6 +153,7 @@ def test_build_script_keeps_versioned_trace_output_contract() -> None:
     assert "verify_windows_exe_icon.py" in source
     assert "--exe $target" in source
     assert "--ico $brandIcon" in source
+    assert "generate_brand_icon.py" not in source
     assert "[regex]::Replace" not in source
     assert "WorkTrace.generated." not in source
     assert "Set-Content -LiteralPath $generatedInstaller" not in source
@@ -177,6 +197,7 @@ def test_release_build_generates_only_current_trace_release_artifacts() -> None:
     assert 'Join-Path $stagingDistPath "Trace.exe"' in source
     assert 'Join-Path $distPath "Trace-$version.exe"' in source
     assert 'Join-Path $distPath "Trace-Setup-$version.exe"' in source
+    assert 'Join-Path $repoRoot "build\\brand\\worktrace.ico"' in source
     assert 'Join-Path $repoRoot "build\\release-staging"' in source
     assert "--distpath $stagingDistPath" in source
     assert "--workpath $stagingWorkPath" in source
@@ -188,6 +209,10 @@ def test_release_build_generates_only_current_trace_release_artifacts() -> None:
     assert "[System.StringComparison]::OrdinalIgnoreCase" in source
     assert "Stop-Process -Id $process.ProcessId -Force" in source
     assert "build_windows_installer.ps1" in source
+    assert "verify_windows_exe_icon.py" in source
+    assert "--exe $stagedExePath" in source
+    assert "--ico $brandIconPath" in source
+    assert "PyInstaller generated Trace.exe without the canonical 有迹 icon." in source
     assert "PyInstaller completed without generating the staged Trace.exe" in source
     assert "Canonical Windows release contains unexpected executable artifacts" in source
     assert "Installer build completed without generating dist\\Trace-Setup-$version.exe" in source
