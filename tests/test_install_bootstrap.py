@@ -181,7 +181,8 @@ def test_installer_exposes_default_tasks_and_red_fd_work_notice() -> None:
 
     assert (
         'Name: "{autodesktop}\\有迹"; Filename: "{app}\\{#MyAppExeName}"; '
-        'WorkingDir: "{app}"; IconFilename: "{app}\\{#MyAppExeName}"; Tasks: desktopicon'
+        'WorkingDir: "{app}"; IconFilename: "{app}\\{#MyInstalledIconName}"; '
+        'Tasks: desktopicon'
         in source
     )
     assert 'Subkey: "Software\\WorkTrace\\InstallBootstrap"' in source
