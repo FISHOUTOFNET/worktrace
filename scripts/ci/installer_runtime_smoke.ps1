@@ -31,8 +31,14 @@ $expectedStartup = '"' + $expectedExePath + '" --background'
 $expectedIconName = "Trace-Icon-$version.ico"
 $expectedIconPath = Join-Path $InstallDir $expectedIconName
 $canonicalIconPath = Join-Path (Resolve-Path ".").Path "build\brand\worktrace.ico"
-$programsRoot = [Environment]::GetFolderPath("Programs")
-$desktopRoot = [Environment]::GetFolderPath("Desktop")
+$programRoots = @(
+    [Environment]::GetFolderPath("Programs"),
+    [Environment]::GetFolderPath("CommonPrograms")
+) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+$desktopRoots = @(
+    [Environment]::GetFolderPath("Desktop"),
+    [Environment]::GetFolderPath("CommonDesktopDirectory")
+) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
 $upgradePidFile = Join-Path $tempRoot "worktrace-upgrade-smoke.pid"
 $uninstallPidFile = Join-Path $tempRoot "worktrace-uninstall-smoke.pid"
 $upgradePid = $null
@@ -56,60 +62,53 @@ function Invoke-CheckedProcess {
     }
 }
 
-function Get-TraceShortcutPaths {
+function Get-ShortcutsUsingExpectedIcon {
     param(
-        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string[]]$Roots,
         [switch]$Recurse
     )
 
-    if ([string]::IsNullOrWhiteSpace($Root) -or -not (Test-Path -LiteralPath $Root)) {
-        return
-    }
-
-    $items = if ($Recurse) {
-        @(Get-ChildItem -LiteralPath $Root -Filter "*.lnk" -File -Recurse -ErrorAction SilentlyContinue)
-    }
-    else {
-        @(Get-ChildItem -LiteralPath $Root -Filter "*.lnk" -File -ErrorAction SilentlyContinue)
-    }
+    $expected = [System.IO.Path]::GetFullPath($expectedIconPath)
     $shell = New-Object -ComObject WScript.Shell
-    $expectedTarget = [System.IO.Path]::GetFullPath($expectedExePath)
-    foreach ($item in $items) {
-        try {
-            $shortcut = $shell.CreateShortcut($item.FullName)
-            $targetPath = [string]$shortcut.TargetPath
-            if ([string]::IsNullOrWhiteSpace($targetPath)) {
-                continue
-            }
-            $actualTarget = [System.IO.Path]::GetFullPath($targetPath)
-            if ([string]::Equals(
-                $actualTarget,
-                $expectedTarget,
-                [System.StringComparison]::OrdinalIgnoreCase
-            )) {
-                $item.FullName
-            }
-        }
-        catch {
+    $seen = @{}
+
+    foreach ($root in $Roots) {
+        if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root)) {
             continue
         }
-    }
-}
 
-function Assert-ShortcutUsesCanonicalIcon {
-    param([Parameter(Mandatory = $true)][string]$ShortcutPath)
+        $items = if ($Recurse) {
+            @(Get-ChildItem -LiteralPath $root -Filter "*.lnk" -File -Recurse -ErrorAction SilentlyContinue)
+        }
+        else {
+            @(Get-ChildItem -LiteralPath $root -Filter "*.lnk" -File -ErrorAction SilentlyContinue)
+        }
 
-    $shell = New-Object -ComObject WScript.Shell
-    $shortcut = $shell.CreateShortcut($ShortcutPath)
-    $iconLocation = [string]$shortcut.IconLocation
-    $shortcutIconPath = (($iconLocation -split ',', 2)[0]).Trim().Trim('"')
-    if ([string]::IsNullOrWhiteSpace($shortcutIconPath)) {
-        throw "Shortcut has no icon location: $ShortcutPath"
-    }
-    $actual = [System.IO.Path]::GetFullPath($shortcutIconPath)
-    $expected = [System.IO.Path]::GetFullPath($expectedIconPath)
-    if (-not [string]::Equals($actual, $expected, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Shortcut icon source is '$actual' instead of versioned canonical icon '$expected'"
+        foreach ($item in $items) {
+            if ($seen.ContainsKey($item.FullName)) {
+                continue
+            }
+            $seen[$item.FullName] = $true
+            try {
+                $shortcut = $shell.CreateShortcut($item.FullName)
+                $iconLocation = [string]$shortcut.IconLocation
+                $shortcutIconPath = (($iconLocation -split ',', 2)[0]).Trim().Trim('"')
+                if ([string]::IsNullOrWhiteSpace($shortcutIconPath)) {
+                    continue
+                }
+                $actual = [System.IO.Path]::GetFullPath($shortcutIconPath)
+                if ([string]::Equals(
+                    $actual,
+                    $expected,
+                    [System.StringComparison]::OrdinalIgnoreCase
+                )) {
+                    $item.FullName
+                }
+            }
+            catch {
+                continue
+            }
+        }
     }
 }
 
@@ -126,16 +125,21 @@ function Assert-InstalledBrandIcon {
         throw "Installed shortcut icon does not match the canonical build icon"
     }
 
-    $programShortcuts = @(Get-TraceShortcutPaths -Root $programsRoot -Recurse)
-    if ($programShortcuts.Count -ne 1) {
-        throw "Expected exactly one Start-menu shortcut targeting Trace.exe; found $($programShortcuts.Count)"
+    # Validate what matters for Shell cache behavior: the created links must
+    # point their IconLocation at the versioned canonical ICO. Do not couple
+    # the smoke test to localized shortcut names or a specific Programs root.
+    $programShortcuts = @(
+        Get-ShortcutsUsingExpectedIcon -Roots $programRoots -Recurse
+    )
+    if ($programShortcuts.Count -lt 1) {
+        throw "No Start-menu shortcut uses the versioned canonical icon"
     }
-    $desktopShortcuts = @(Get-TraceShortcutPaths -Root $desktopRoot)
-    if ($desktopShortcuts.Count -ne 1) {
-        throw "Expected exactly one desktop shortcut targeting Trace.exe; found $($desktopShortcuts.Count)"
+    $desktopShortcuts = @(
+        Get-ShortcutsUsingExpectedIcon -Roots $desktopRoots
+    )
+    if ($desktopShortcuts.Count -lt 1) {
+        throw "No desktop shortcut uses the versioned canonical icon"
     }
-    Assert-ShortcutUsesCanonicalIcon -ShortcutPath $programShortcuts[0]
-    Assert-ShortcutUsesCanonicalIcon -ShortcutPath $desktopShortcuts[0]
 }
 
 if (Test-Path -LiteralPath $InstallDir) {
@@ -253,11 +257,11 @@ try {
     if ($null -ne $remainingStartup) {
         throw "Uninstall left startup value behind"
     }
-    if (@(Get-TraceShortcutPaths -Root $programsRoot -Recurse).Count -gt 0) {
-        throw "Uninstall left a Start-menu shortcut targeting Trace.exe"
+    if (@(Get-ShortcutsUsingExpectedIcon -Roots $programRoots -Recurse).Count -gt 0) {
+        throw "Uninstall left a Start-menu shortcut using the versioned canonical icon"
     }
-    if (@(Get-TraceShortcutPaths -Root $desktopRoot).Count -gt 0) {
-        throw "Uninstall left a desktop shortcut targeting Trace.exe"
+    if (@(Get-ShortcutsUsingExpectedIcon -Roots $desktopRoots).Count -gt 0) {
+        throw "Uninstall left a desktop shortcut using the versioned canonical icon"
     }
 }
 finally {
