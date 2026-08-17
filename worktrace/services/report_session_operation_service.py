@@ -19,14 +19,14 @@ from . import (
     report_operation_repository,
 )
 from . import report_session_operation_engine as engine
-from .report_fact_query_service import get_uncategorized_project_id
+from .report_fact_query_service import get_uncategorized_project_id, session_sort_key
+from .report_projection_builder import compute_projection_snapshot_revision
 from .report_projection_identity import member_identity_key, stable_json_hash
 from .report_projection_model import (
     DatabaseBusyError,
     DayDurationExceedsLimitError,
     InvalidInputError,
     MutationResult,
-    OperationNoEffectError,
     OperationNotAllowedError,
     ProjectNotSelectableError,
     RequestIdConflictError,
@@ -293,10 +293,11 @@ def _run_uow(
                 conn,
                 report_date,
             )
+            project_states = _project_states(conn)
             preview = engine.replay_operations(
                 before.base_sessions,
                 [*existing, candidate],
-                _project_states(conn),
+                project_states,
             )
             diagnostic = next(
                 (
@@ -348,20 +349,49 @@ def _run_uow(
             _insert_operation(conn, candidate)
             _insert_members(conn, operation_id, roles)
 
-            after = build_visible_snapshot(report_date, report_date, conn=conn)
-            applied = next(
+            final_sessions = sorted(
                 (
-                    item
-                    for item in after.operation_diagnostics
-                    if item.operation_id == operation_id
+                    dict(item)
+                    for item in preview.final_entries
+                    if not bool(item.get("project_is_deleted"))
                 ),
-                None,
+                key=session_sort_key,
             )
-            if applied is None or applied.state != APPLIED:
-                reason = (
-                    applied.reason if applied is not None else "missing_diagnostic"
-                )
-                raise OperationNoEffectError(reason)
+            standalone_entries = [
+                dict(item) for item in before.standalone_status_entries
+            ]
+            final_entries = sorted(
+                [*final_sessions, *standalone_entries],
+                key=lambda item: (
+                    str(item.get("start_time") or ""),
+                    str(item.get("projection_instance_key") or ""),
+                ),
+            )
+            standalone_keys = {
+                str(item.get("projection_instance_key") or "")
+                for item in before.standalone_status_entries
+            }
+            final_contributions = [
+                *(
+                    dict(item)
+                    for item in preview.final_contributions
+                    if not bool(item.get("project_is_deleted"))
+                ),
+                *(
+                    dict(item)
+                    for item in before.final_contributions
+                    if str(item.get("projection_instance_key") or "")
+                    in standalone_keys
+                ),
+            ]
+            snapshot_revision = compute_projection_snapshot_revision(
+                report_date,
+                report_date,
+                project_states,
+                final_entries,
+                final_contributions,
+                preview.operation_diagnostics,
+            )
             result = MutationResult(
                 request_id=request_id,
                 outcome_type="operation_committed",
@@ -371,9 +401,9 @@ def _run_uow(
                     operation_type,
                     operation_id,
                     source_instance_key,
-                    after.final_sessions,
+                    final_sessions,
                 ),
-                snapshot_revision=after.snapshot_revision,
+                snapshot_revision=snapshot_revision,
             )
             _insert_receipt(conn, request_id, input_signature, result)
             uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)

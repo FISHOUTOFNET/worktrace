@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..db import get_connection
+from ..domain_limits import RULE_PREVIEW_SCAN_LIMIT
 from . import rule_planning_service as planner
 
 MAX_RULE_BACKFILL_ACTIVITIES = 100
@@ -25,12 +26,26 @@ class RuleImpactError(Exception):
         self.code = code
 
 
+def _scan_metadata(scanned_count: int, scan_complete: bool) -> dict[str, Any]:
+    return {
+        "scan_complete": bool(scan_complete),
+        "truncated": not bool(scan_complete),
+        "scanned_activity_count": int(scanned_count),
+        "scan_limit": RULE_PREVIEW_SCAN_LIMIT,
+    }
+
+
 def preview_rule_impact(
     rule_type: str,
     rule_id: int,
     sample_limit: int = DEFAULT_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
-    """Preview one rule without creating jobs or mutating assignments."""
+    """Preview one rule without creating jobs or mutating assignments.
+
+    Interactive preview is deliberately bounded. Applying a rule to history is
+    owned by the durable history job and remains exhaustive; preview only needs
+    a representative, fast read with explicit truncation metadata.
+    """
 
     if not isinstance(rule_type, str) or rule_type not in {"folder", "keyword"}:
         raise RuleImpactError(ERR_NOT_FOUND)
@@ -52,8 +67,15 @@ def preview_rule_impact(
                 "rule": summary,
                 "counts": planner.zero_counts(),
                 "samples": [],
+                **_scan_metadata(0, True),
             }
-        activities = planner.load_candidate_activities(conn)
+        activities = planner.load_candidate_activities(
+            conn,
+            limit=RULE_PREVIEW_SCAN_LIMIT + 1,
+        )
+        scan_complete = len(activities) <= RULE_PREVIEW_SCAN_LIMIT
+        if not scan_complete:
+            activities = activities[:RULE_PREVIEW_SCAN_LIMIT]
         classified = planner.classify_activities(
             conn,
             activities,
@@ -73,6 +95,7 @@ def preview_rule_impact(
                 rule_type,
                 int(sample_limit),
             ),
+            **_scan_metadata(len(activities), scan_complete),
         }
 
 

@@ -21,6 +21,7 @@ materializers depend on this public builder.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -69,6 +70,60 @@ class ProjectionComputation:
     operation_diagnostics: list[OperationDiagnostic]
     snapshot_revision: str
     activity_count: int
+
+
+def compute_projection_snapshot_revision(
+    start_date: str,
+    end_date: str,
+    project_states: Iterable[ProjectState],
+    final_entries: Iterable[Mapping[str, Any]],
+    final_contributions: Iterable[Mapping[str, Any]],
+    operation_diagnostics: Iterable[OperationDiagnostic],
+) -> str:
+    """Hash a finalized projection without repeating projection computation.
+
+    This pure helper is the single owner of the snapshot content-hash contract.
+    Mutation paths may reuse a verified operation replay result and call this
+    helper instead of rebuilding facts and sessions only to obtain the same
+    revision.
+    """
+
+    return stable_json_hash(
+        {
+            "range": [start_date, end_date],
+            "projects": [
+                state.to_dict()
+                for state in sorted(
+                    project_states,
+                    key=lambda item: item.project_id,
+                )
+            ],
+            "entries": [
+                {
+                    "key": item.get("projection_instance_key"),
+                    "revision": item.get("projection_revision"),
+                    "duration": item.get("duration_seconds"),
+                    "in_progress": item.get("is_in_progress"),
+                }
+                for item in final_entries
+            ],
+            "contributions": [
+                {
+                    "key": item.get("projection_instance_key"),
+                    "member": [
+                        item.get("report_date"),
+                        item.get("activity_id"),
+                        item.get("slice_start_time"),
+                    ],
+                    "duration": item.get("duration_seconds"),
+                    "status": item.get("status"),
+                    "project_id": item.get("project_id"),
+                }
+                for item in final_contributions
+            ],
+            "diagnostics": [item.to_dict() for item in operation_diagnostics],
+        }
+    )
 
 
 def compute_projection(
@@ -272,41 +327,13 @@ def compute_projection(
             ),
         )
     with stage("snapshot_hash"):
-        revision = stable_json_hash(
-            {
-                "range": [start_date, end_date],
-                "projects": [
-                    state.to_dict()
-                    for state in sorted(
-                        project_states,
-                        key=lambda item: item.project_id,
-                    )
-                ],
-                "entries": [
-                    {
-                        "key": item.get("projection_instance_key"),
-                        "revision": item.get("projection_revision"),
-                        "duration": item.get("duration_seconds"),
-                        "in_progress": item.get("is_in_progress"),
-                    }
-                    for item in final_entries
-                ],
-                "contributions": [
-                    {
-                        "key": item.get("projection_instance_key"),
-                        "member": [
-                            item.get("report_date"),
-                            item.get("activity_id"),
-                            item.get("slice_start_time"),
-                        ],
-                        "duration": item.get("duration_seconds"),
-                        "status": item.get("status"),
-                        "project_id": item.get("project_id"),
-                    }
-                    for item in final_contributions
-                ],
-                "diagnostics": [item.to_dict() for item in diagnostics],
-            }
+        revision = compute_projection_snapshot_revision(
+            start_date,
+            end_date,
+            project_states,
+            final_entries,
+            final_contributions,
+            diagnostics,
         )
     record_counts(
         activity_count=len(rows),
@@ -337,4 +364,8 @@ def _load_project_states(conn, uncategorized_id: int) -> list[ProjectState]:
     ]
 
 
-__all__ = ["ProjectionComputation", "compute_projection"]
+__all__ = [
+    "ProjectionComputation",
+    "compute_projection",
+    "compute_projection_snapshot_revision",
+]

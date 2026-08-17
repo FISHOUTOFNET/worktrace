@@ -60,7 +60,7 @@ def _submit(kind: str, rule_type: str, rule_id: int) -> dict:
             rule_type,
             rule_id,
             kind=kind,
-            synchronous_scan_limit=100,
+            synchronous_scan_limit=0,
         )
         if str(result.get("status") or "") == "failed" and not bool(
             result.get("queued")
