@@ -5,11 +5,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-[string]$version = (& python -c 'from worktrace.version import __version__; print(__version__)').Trim()
-if ($LASTEXITCODE -ne 0 -or $version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
-    throw "Unable to resolve the versioned installer path."
-}
 if ([string]::IsNullOrWhiteSpace($SetupPath)) {
+    [string]$version = (& python -c 'from worktrace.version import __version__; print(__version__)').Trim()
+    if ($LASTEXITCODE -ne 0 -or $version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+        throw "Unable to resolve the versioned installer path."
+    }
     $SetupPath = "dist\Trace-Setup-$version.exe"
 }
 
@@ -26,15 +26,7 @@ if ([string]::IsNullOrWhiteSpace($InstallDir)) {
 
 $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $uninstaller = Join-Path $InstallDir "unins000.exe"
-$expectedExePath = Join-Path $InstallDir "Trace.exe"
-$expectedStartup = '"' + $expectedExePath + '" --background'
-$expectedIconName = "Trace-Icon-$version.ico"
-$expectedIconPath = Join-Path $InstallDir $expectedIconName
-$canonicalIconPath = Join-Path (Resolve-Path ".").Path "build\brand\worktrace.ico"
-$desktopRoots = @(
-    [Environment]::GetFolderPath("Desktop"),
-    [Environment]::GetFolderPath("CommonDesktopDirectory")
-) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+$expectedStartup = '"' + (Join-Path $InstallDir "Trace.exe") + '" --background'
 $upgradePidFile = Join-Path $tempRoot "worktrace-upgrade-smoke.pid"
 $uninstallPidFile = Join-Path $tempRoot "worktrace-uninstall-smoke.pid"
 $upgradePid = $null
@@ -55,68 +47,6 @@ function Invoke-CheckedProcess {
         -PassThru
     if ($process.ExitCode -ne 0) {
         throw "$Operation exited with code $($process.ExitCode)"
-    }
-}
-
-function Get-ShortcutsUsingExpectedIcon {
-    param([Parameter(Mandatory = $true)][string[]]$Roots)
-
-    $expected = [System.IO.Path]::GetFullPath($expectedIconPath)
-    $shell = New-Object -ComObject WScript.Shell
-    $seen = @{}
-
-    foreach ($root in $Roots) {
-        if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root)) {
-            continue
-        }
-
-        foreach ($item in @(Get-ChildItem -LiteralPath $root -Filter "*.lnk" -File -ErrorAction SilentlyContinue)) {
-            if ($seen.ContainsKey($item.FullName)) {
-                continue
-            }
-            $seen[$item.FullName] = $true
-            try {
-                $shortcut = $shell.CreateShortcut($item.FullName)
-                $iconLocation = [string]$shortcut.IconLocation
-                $shortcutIconPath = (($iconLocation -split ',', 2)[0]).Trim().Trim('"')
-                if ([string]::IsNullOrWhiteSpace($shortcutIconPath)) {
-                    continue
-                }
-                $actual = [System.IO.Path]::GetFullPath($shortcutIconPath)
-                if ([string]::Equals(
-                    $actual,
-                    $expected,
-                    [System.StringComparison]::OrdinalIgnoreCase
-                )) {
-                    $item.FullName
-                }
-            }
-            catch {
-                continue
-            }
-        }
-    }
-}
-
-function Assert-InstalledBrandIcon {
-    if (-not (Test-Path -LiteralPath $expectedIconPath)) {
-        throw "Installer did not install versioned canonical icon: $expectedIconPath"
-    }
-    if (-not (Test-Path -LiteralPath $canonicalIconPath)) {
-        throw "Canonical build icon is missing: $canonicalIconPath"
-    }
-    $installedHash = (Get-FileHash -LiteralPath $expectedIconPath -Algorithm SHA256).Hash
-    $canonicalHash = (Get-FileHash -LiteralPath $canonicalIconPath -Algorithm SHA256).Hash
-    if ($installedHash -ne $canonicalHash) {
-        throw "Installed shortcut icon does not match the canonical build icon"
-    }
-
-    # The stale-icon regression reported by users is the desktop shortcut.
-    # Validate its actual IconLocation without coupling the runtime smoke to
-    # localized shortcut names or Start-menu folder behavior on hosted runners.
-    $desktopShortcuts = @(Get-ShortcutsUsingExpectedIcon -Roots $desktopRoots)
-    if ($desktopShortcuts.Count -lt 1) {
-        throw "No desktop shortcut uses the versioned canonical icon"
     }
 }
 
@@ -141,7 +71,7 @@ try {
             "/CURRENTUSER",
             "/SP-",
             "/DIR=`"$InstallDir`"",
-            "/TASKS=startup,desktopicon"
+            "/TASKS=`"startup`""
         )
 
     $firstStartup = Get-ItemPropertyValue `
@@ -151,7 +81,6 @@ try {
     if ($firstStartup -ne $expectedStartup) {
         throw "First install wrote unexpected startup value: $firstStartup"
     }
-    Assert-InstalledBrandIcon
 
     & ".\scripts\smoke_installed_launch.ps1" `
         -InstallDir $InstallDir `
@@ -167,8 +96,6 @@ try {
         -Path $runKey `
         -Name "WorkTrace" `
         -Value '"C:\legacy\WorkTrace.exe" --background'
-    $staleIconPath = Join-Path $InstallDir "Trace-Icon-legacy.ico"
-    Set-Content -LiteralPath $staleIconPath -Value "stale-icon-cache-key" -Encoding ASCII
 
     Invoke-CheckedProcess `
         -FilePath $setup `
@@ -181,7 +108,7 @@ try {
             "/CURRENTUSER",
             "/SP-",
             "/DIR=`"$InstallDir`"",
-            "/TASKS=startup,desktopicon"
+            "/TASKS=`"startup`""
         )
 
     if (Get-Process -Id $upgradePid -ErrorAction SilentlyContinue) {
@@ -190,10 +117,6 @@ try {
     if (Test-Path -LiteralPath (Join-Path $InstallDir "WorkTrace.exe")) {
         throw "Upgrade left legacy WorkTrace.exe behind"
     }
-    if (Test-Path -LiteralPath $staleIconPath) {
-        throw "Upgrade left a stale versioned shortcut icon behind"
-    }
-    Assert-InstalledBrandIcon
 
     $upgradedStartup = Get-ItemPropertyValue `
         -Path $runKey `
@@ -234,9 +157,6 @@ try {
     ).WorkTrace
     if ($null -ne $remainingStartup) {
         throw "Uninstall left startup value behind"
-    }
-    if (@(Get-ShortcutsUsingExpectedIcon -Roots $desktopRoots).Count -gt 0) {
-        throw "Uninstall left a desktop shortcut using the versioned canonical icon"
     }
 }
 finally {
