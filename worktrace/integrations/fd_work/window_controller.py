@@ -134,7 +134,7 @@ class FDWorkWindowController:
         self._login_watch_deadline: float | None = None
         self._pending_close_generation: int | None = None
         self._close_callback: Callable[[int], None] = lambda _generation: None
-        self._main_focus_callback: Callable[[], None] = lambda: None
+        self._main_focus_callback: Callable[[], bool] = lambda: True
 
     def bind_status_callback(
         self, callback: Callable[[Mapping[str, Any]], None]
@@ -146,7 +146,7 @@ class FDWorkWindowController:
         with self._lock:
             self._close_callback = callback
 
-    def bind_main_focus_callback(self, callback: Callable[[], None]) -> None:
+    def bind_main_focus_callback(self, callback: Callable[[], bool]) -> None:
         with self._lock:
             self._main_focus_callback = callback
 
@@ -760,6 +760,8 @@ class FDWorkWindowController:
             restore=True,
             external_guard=current,
         ):
+            if current():
+                return {"ok": False, "error": "window_activation_failed"}
             return {"ok": False, "error": "lookup_superseded"}
         guarded_window = self._executor_window(
             window,
@@ -793,6 +795,18 @@ class FDWorkWindowController:
                 and guard()
             )
 
+        if not current():
+            return
+        try:
+            if main_focus() is not True:
+                logger.debug("FD Work main-window restore request was rejected")
+                return
+        except Exception:
+            logger.debug("FD Work main-window restore request failed", exc_info=True)
+            return
+        if not current():
+            return
+
         def hide_helper() -> None:
             callback = getattr(window, "hide", None)
             if callable(callback):
@@ -804,12 +818,6 @@ class FDWorkWindowController:
             if self._window is window:
                 self._window_visible = False
         self._log_event("fd_work_window_hide")
-        if not current():
-            return
-        try:
-            main_focus()
-        except Exception:
-            logger.debug("FD Work main-window restore request failed", exc_info=True)
 
     def _show_window_if_current(
         self,
@@ -832,14 +840,18 @@ class FDWorkWindowController:
             )
 
         if focus:
+            activation_ready = {"ok": False}
+
             def enable_activation() -> None:
-                make_window_activatable(
+                activation_ready["ok"] = make_window_activatable(
                     window,
                     fallback_title="FD Work",
                     logger=logger,
                 )
 
             if not self._dispatch_window_mutation(enable_activation, guard):
+                return False
+            if activation_ready["ok"] is not True:
                 return False
 
         if not already_visible:
@@ -877,8 +889,10 @@ class FDWorkWindowController:
                     return False
 
         if focus:
+            native_foreground = {"ok": False}
+
             def request_native_foreground() -> None:
-                request_window_foreground(
+                native_foreground["ok"] = request_window_foreground(
                     window,
                     fallback_title="FD Work",
                     restore=restore,
@@ -886,6 +900,8 @@ class FDWorkWindowController:
                 )
 
             if not self._dispatch_window_mutation(request_native_foreground, guard):
+                return False
+            if native_foreground["ok"] is not True:
                 return False
         return guard()
 
