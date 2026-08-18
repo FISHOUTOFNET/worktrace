@@ -122,9 +122,12 @@ def make_window_activatable(
         return False
 
 
-def _foreground_matches(win32gui: Any, hwnd: int) -> bool:
+def _foreground_state(win32gui: Any, hwnd: int) -> bool | None:
+    getter = getattr(win32gui, "GetForegroundWindow", None)
+    if not callable(getter):
+        return None
     try:
-        return int(win32gui.GetForegroundWindow() or 0) == int(hwnd)
+        return int(getter() or 0) == int(hwnd)
     except Exception:
         return False
 
@@ -156,14 +159,19 @@ def request_window_foreground(
             except Exception:
                 _debug(logger, "native window restore failed", exc_info=True)
 
-        if _foreground_matches(win32gui, hwnd):
+        state = _foreground_state(win32gui, hwnd)
+        if state is True:
             return True
 
         try:
-            win32gui.SetForegroundWindow(hwnd)
+            result = win32gui.SetForegroundWindow(hwnd)
         except Exception:
+            result = False
             _debug(logger, "native foreground request failed", exc_info=True)
-        if _foreground_matches(win32gui, hwnd):
+        state = _foreground_state(win32gui, hwnd)
+        if state is None:
+            return True if result is None else bool(result)
+        if state is True:
             return True
 
         try:
@@ -189,10 +197,14 @@ def request_window_foreground(
             _debug(logger, "native z-order fallback failed", exc_info=True)
 
         try:
-            win32gui.SetForegroundWindow(hwnd)
+            retry_result = win32gui.SetForegroundWindow(hwnd)
         except Exception:
+            retry_result = False
             _debug(logger, "native foreground retry failed", exc_info=True)
-        return _foreground_matches(win32gui, hwnd)
+        state = _foreground_state(win32gui, hwnd)
+        if state is None:
+            return True if retry_result is None else bool(retry_result)
+        return state is True
     except Exception:
         _debug(logger, "native foreground activation failed", exc_info=True)
         return False
