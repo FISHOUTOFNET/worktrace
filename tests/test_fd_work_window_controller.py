@@ -6,6 +6,7 @@ import threading
 import pytest
 from webview.event import Event as PyWebViewEvent
 
+from worktrace.integrations.fd_work import window_controller as controller_module
 from worktrace.integrations.fd_work.window_controller import FDWorkWindowController
 from worktrace.integrations.fd_work.window_executor import FDWorkWindowExecutor
 
@@ -16,6 +17,22 @@ pytestmark = [
     pytest.mark.contract,
     pytest.mark.serial,
 ]
+
+
+@pytest.fixture(autouse=True)
+def _stub_native_window_activation(monkeypatch):
+    """Keep controller tests platform-neutral; native activation has its own tests."""
+
+    monkeypatch.setattr(
+        controller_module,
+        "make_window_activatable",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        controller_module,
+        "request_window_foreground",
+        lambda *_args, **_kwargs: True,
+    )
 
 
 class _Event:
@@ -370,9 +387,14 @@ def test_explicit_picker_foreground_is_one_show_restore_focus_sequence():
     assert webview.window.focused == 1
 
 
-def test_picker_finish_hides_helper_then_restores_main_in_same_dispatch():
+def test_picker_finish_restores_main_before_hiding_helper_in_same_dispatch():
     actions = []
-    controller, webview, _adapter = _controller(main_focus=lambda: actions.append("main"))
+
+    def restore_main() -> bool:
+        actions.append("main")
+        return True
+
+    controller, webview, _adapter = _controller(main_focus=restore_main)
     controller.prepare_window_before_start(False)
     webview.window.events.loaded.fire()
     context = controller.foreground("user_picker", 1, lambda: True)
@@ -381,7 +403,7 @@ def test_picker_finish_hides_helper_then_restores_main_in_same_dispatch():
 
     controller.hide_and_restore_main(generation, 1, lambda: True)
 
-    assert actions == ["hide", "main"]
+    assert actions == ["main", "hide"]
 
 
 def test_stale_queued_foreground_mutation_cannot_touch_recreated_window():
