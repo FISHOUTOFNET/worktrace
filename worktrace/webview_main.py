@@ -21,6 +21,7 @@ from .integrations.fd_work.interaction_coordinator import FDWorkInteractionCoord
 from .integrations.fd_work.main_window_sink import FDWorkMainWindowSink
 from .integrations.fd_work.page_adapter import FDWorkPageAdapter
 from .integrations.fd_work.window_controller import FDWorkWindowController
+from .platforms.window_activation import grant_foreground_permission
 from .runtime.app_runtime import AppRuntime
 from .runtime.application_services import build_application_services
 from .webview_ui.bridge import WebViewBridge
@@ -113,10 +114,15 @@ def _report_runtime_missing(*, background: bool = False) -> int:
 
 
 def _report_already_running(instance_coordinator) -> int:
+    permission_granted = grant_foreground_permission(
+        fallback_title=PRODUCT_DISPLAY_NAME,
+    )
     activated = instance_coordinator.signal_existing_instance()
     logging.info(
-        "webview startup skipped: existing instance activation=%s",
+        "webview startup skipped: existing instance activation=%s "
+        "foreground_permission=%s",
         activated,
+        permission_granted,
     )
     return 0
 
