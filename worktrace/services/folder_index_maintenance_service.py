@@ -36,14 +36,21 @@ _REFRESH_CACHE_LOCK = threading.Lock()
 _HOT_REFRESH_TIMES: dict[tuple[str, int], float] = {}
 _UNRESOLVED_REFRESH_TIMES: dict[tuple[str, int], float] = {}
 _UNRESOLVED_FILE_MISS_EVENT = threading.Event()
+_UNRESOLVED_FILE_MISS_IDENTITY: tuple[str, int] | None = None
 _UNRESOLVED_FILE_MISS_SINCE: str | None = None
 
 
-def _replacement_cache_identity() -> tuple[str, int]:
+def _replacement_cache_identity(conn=None) -> tuple[str, int]:
     database_key = str(get_db_path().resolve())
-    with get_connection() as conn:
+    if conn is not None:
         replacement_epoch = DataGenerationRepository.get(
             conn,
+            DataGenerationNamespace.DATABASE_REPLACEMENT,
+        )
+        return database_key, replacement_epoch
+    with get_connection() as read_conn:
+        replacement_epoch = DataGenerationRepository.get(
+            read_conn,
             DataGenerationNamespace.DATABASE_REPLACEMENT,
         )
     return database_key, replacement_epoch
@@ -89,13 +96,22 @@ def _queue_rule_ids(rule_ids: list[int]) -> int:
     return queued
 
 
-def note_unresolved_file_miss(unresolved_at: str | None = None) -> None:
+def note_unresolved_file_miss(
+    unresolved_at: str | None = None,
+    *,
+    conn=None,
+) -> None:
     """Record a pathless local-file miss and wake the existing index worker."""
 
     at = str(unresolved_at or now_str())
+    identity = _replacement_cache_identity(conn)
+    global _UNRESOLVED_FILE_MISS_IDENTITY
     global _UNRESOLVED_FILE_MISS_SINCE
     with _REFRESH_CACHE_LOCK:
-        if (
+        if _UNRESOLVED_FILE_MISS_IDENTITY != identity:
+            _UNRESOLVED_FILE_MISS_IDENTITY = identity
+            _UNRESOLVED_FILE_MISS_SINCE = at
+        elif (
             _UNRESOLVED_FILE_MISS_SINCE is None
             or at > _UNRESOLVED_FILE_MISS_SINCE
         ):
@@ -111,18 +127,32 @@ def note_unresolved_file_miss(unresolved_at: str | None = None) -> None:
         logging.exception("unresolved file miss could not wake folder index worker")
 
 
-def _pending_unresolved_file_miss_since() -> str | None:
+def _pending_unresolved_file_miss() -> tuple[tuple[str, int], str] | None:
     if not _UNRESOLVED_FILE_MISS_EVENT.is_set():
         return None
     with _REFRESH_CACHE_LOCK:
-        return _UNRESOLVED_FILE_MISS_SINCE
+        if (
+            _UNRESOLVED_FILE_MISS_IDENTITY is None
+            or _UNRESOLVED_FILE_MISS_SINCE is None
+        ):
+            return None
+        return _UNRESOLVED_FILE_MISS_IDENTITY, _UNRESOLVED_FILE_MISS_SINCE
 
 
-def _clear_unresolved_file_miss_through(resolved_through: str) -> None:
+def _clear_unresolved_file_miss_through(
+    identity: tuple[str, int],
+    resolved_through: str,
+) -> None:
+    global _UNRESOLVED_FILE_MISS_IDENTITY
     global _UNRESOLVED_FILE_MISS_SINCE
     with _REFRESH_CACHE_LOCK:
         current = _UNRESOLVED_FILE_MISS_SINCE
-        if current is not None and current <= resolved_through:
+        if (
+            _UNRESOLVED_FILE_MISS_IDENTITY == identity
+            and current is not None
+            and current <= resolved_through
+        ):
+            _UNRESOLVED_FILE_MISS_IDENTITY = None
             _UNRESOLVED_FILE_MISS_SINCE = None
             _UNRESOLVED_FILE_MISS_EVENT.clear()
 
@@ -175,18 +205,21 @@ def unresolved_file_indexes_refreshed_since(
 def request_refresh_for_unresolved_file_misses() -> int:
     """Queue one coalesced all-project refresh for unresolved pathless files."""
 
-    unresolved_since = _pending_unresolved_file_miss_since()
-    if not unresolved_since:
+    pending = _pending_unresolved_file_miss()
+    if pending is None:
+        return 0
+    pending_identity, unresolved_since = pending
+    current_identity = _replacement_cache_identity()
+    if pending_identity != current_identity:
+        _clear_unresolved_file_miss_through(pending_identity, unresolved_since)
         return 0
     if unresolved_file_indexes_refreshed_since(unresolved_since):
-        _clear_unresolved_file_miss_through(unresolved_since)
+        _clear_unresolved_file_miss_through(current_identity, unresolved_since)
         return 0
 
-    database_key, replacement_epoch = _replacement_cache_identity()
-    cache_key = (database_key, replacement_epoch)
     if not _reserve_refresh(
         _UNRESOLVED_REFRESH_TIMES,
-        cache_key,
+        current_identity,
         cooldown_seconds=UNRESOLVED_FILE_REFRESH_COOLDOWN_SECONDS,
     ):
         return 0
@@ -217,13 +250,13 @@ def request_refresh_for_unresolved_file_misses() -> int:
         ).fetchall()
     queued = _queue_rule_ids([int(row["id"]) for row in rows])
     if queued:
-        _mark_refresh_success(_UNRESOLVED_REFRESH_TIMES, cache_key)
+        _mark_refresh_success(_UNRESOLVED_REFRESH_TIMES, current_identity)
         return queued
 
     # All stale candidates may already be pending/indexing. Keep the signal until
     # a generation that started after the miss is actually published.
     if unresolved_file_indexes_refreshed_since(unresolved_since):
-        _clear_unresolved_file_miss_through(unresolved_since)
+        _clear_unresolved_file_miss_through(current_identity, unresolved_since)
     return 0
 
 
