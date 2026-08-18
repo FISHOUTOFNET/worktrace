@@ -52,7 +52,8 @@ def test_project_catalog_is_the_canonical_frontend_directory_owner():
 def test_switch_page_delegates_data_refresh_without_page_fetch_knowledge():
     init = INIT.read_text(encoding="utf-8")
     switch = between(init, "    function switchPage(pageId) {", "    App.switchPage = switchPage;")
-    assert "refreshActivePage(App.lastRefreshState)" in switch
+    assert "pageNeedsRefresh(pageId)" in switch
+    assert "refreshActivePage(App.lastRefreshState" in switch
     assert "refreshCurrentPageData(" not in switch
     for direct_fetch in (
         "loadTimelineReport(",
@@ -67,8 +68,10 @@ def test_revision_check_owns_periodic_business_refresh():
     init = INIT.read_text(encoding="utf-8")
     revision = between(init, "    function runRevisionCheck() {", "    App.runRevisionCheck = runRevisionCheck;")
     heartbeat = between(init, "    function startHeartbeat() {", "    App.startHeartbeat = startHeartbeat;")
-    assert "pageStructureChanged || App.liveClockContractRefreshRequested" in revision
-    assert "refreshCurrentPageData(state);" in revision
+    assert "changedGenerationKeys(" in revision
+    assert "markPagesDirtyForGenerationChanges(changedGenerations);" in revision
+    assert "dispatchAutomaticRefresh(changedGenerations, settingsRuntimeChanged);" in revision
+    assert "App.liveClockContractRefreshRequested" in revision
     assert "runRevisionCheck();" in heartbeat
     for direct_fetch in (
         "getOverview(",
@@ -85,13 +88,13 @@ def test_active_page_registry_keeps_fetches_at_one_dispatch_boundary():
     registry = between(
         init,
         "    var ACTIVE_PAGE_REFRESHERS = Object.freeze({",
-        "    function refreshActivePage(acceptedState) {",
+        "    function refreshActivePage(acceptedState, options) {",
     )
     for page in ("overview", "timeline", "statistics", "rules", "settings"):
         assert f"{page}: function" in registry
     assert "refreshOverview()" in registry
     assert "App.loadTimelineReport(" in registry
-    assert "App.loadStatisticsExportSummary()" in registry
+    assert "App.loadStatisticsExportSummary(" in registry
     assert "App.loadProjectRules()" in registry
     assert "App.loadSettingsPrivacyStatus()" in registry
 
