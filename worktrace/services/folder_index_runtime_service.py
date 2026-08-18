@@ -168,6 +168,7 @@ def run_folder_index_worker(
 
             ensure_index_states_for_folder_rules()
             _core._retry_pending_gc()
+            folder_index_maintenance_service.request_refresh_for_unresolved_file_misses()
 
             monotonic_now = time.monotonic()
             if monotonic_now >= next_hot_refresh_at:
