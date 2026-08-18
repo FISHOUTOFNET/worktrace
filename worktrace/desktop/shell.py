@@ -89,6 +89,7 @@ class DesktopShellController:
         self._exit_requested = False
         self._window_loaded = False
         self._show_when_loaded = not initial_hidden
+        self._activation_requested = False
         self._hide_scheduled = False
         self._show_scheduled = False
         self._collection_active = False
@@ -149,11 +150,13 @@ class DesktopShellController:
                 return True
             if not self._tray_available:
                 self.state = ShellState.EXITING
+                self._activation_requested = False
                 return True
             if self.state is ShellState.HIDDEN:
                 return False
             self.state = ShellState.HIDDEN
             self._show_when_loaded = False
+            self._activation_requested = False
             self._schedule_hide_locked()
         return False
 
@@ -167,14 +170,18 @@ class DesktopShellController:
                 return False
             self.state = ShellState.HIDDEN
             self._show_when_loaded = False
+            self._activation_requested = False
             self._schedule_hide_locked()
             return True
 
     def show_window(self) -> bool:
+        """Accept an explicit request to reveal and activate the main window."""
+
         with self._lock:
             if self.state is ShellState.EXITING:
                 return False
             self.state = ShellState.VISIBLE
+            self._activation_requested = True
             if not self._window_loaded:
                 self._show_when_loaded = True
                 return True
@@ -189,6 +196,7 @@ class DesktopShellController:
             self._exit_requested = True
             self.state = ShellState.EXITING
             self._show_when_loaded = False
+            self._activation_requested = False
             tray_available = self._tray_available
             self._tray_available = False
         self._stop_icon_monitor()
@@ -210,6 +218,7 @@ class DesktopShellController:
             tray_available = self._tray_available
             self._tray_available = False
             self._show_when_loaded = False
+            self._activation_requested = False
         if tray_available:
             try:
                 self._tray.stop()
@@ -376,6 +385,8 @@ class DesktopShellController:
                     or not self._window_loaded
                 ):
                     return
+                activation_requested = self._activation_requested
+                self._activation_requested = False
             self._make_window_activatable()
             try:
                 self._window.show()
@@ -389,7 +400,8 @@ class DesktopShellController:
                     "desktop shell failed to restore window",
                     exc_info=True,
                 )
-            self._focus_native_window()
+            if activation_requested:
+                self._focus_native_window()
             self._set_webview_visibility(True)
 
     def _sync_hidden_visibility(self) -> None:
@@ -438,7 +450,7 @@ class DesktopShellController:
             restore=True,
             logger=logger,
         ):
-            logger.debug("desktop shell foreground request was not accepted")
+            logger.warning("desktop shell foreground activation was not accepted")
 
 
 __all__ = [
