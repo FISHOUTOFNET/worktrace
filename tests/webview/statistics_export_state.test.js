@@ -230,7 +230,7 @@ test("month quick range queries month start through today", async () => {
   assert.equal(element("statistics-month-btn").getAttribute("aria-pressed"), "true");
 });
 
-test("all quick range sends empty dates and shows all-time label", async () => {
+test("all quick range keeps the shared date editor available for custom ranges", async () => {
   const { App, element, statisticsCalls } = harness();
   App.initStatisticsDefaults();
 
@@ -238,10 +238,25 @@ test("all quick range sends empty dates and shows all-time label", async () => {
 
   assert.deepEqual(statisticsCalls.at(-1), ["", "", ""]);
   assert.equal(statisticsCalls.length, 1);
-  assert.equal(element("statistics-date-inputs").hidden, true);
-  assert.equal(element("statistics-all-time-label").hidden, false);
+  assert.equal(element("statistics-date-inputs").hidden, false);
+  assert.equal(element("statistics-all-time-label").hidden, true);
+  assert.equal(element("statistics-date-from").value, "");
+  assert.equal(element("statistics-date-to").value, "");
   assert.equal(element("statistics-all-btn").getAttribute("aria-pressed"), "true");
   assert.equal(element("stats-scope").textContent, "当前范围：全部时间 · 全部项目");
+
+  element("statistics-date-from").value = "2026-07-01";
+  element("statistics-date-from").dispatch("change");
+  element("statistics-date-to").value = "2026-07-17";
+  element("statistics-date-to").dispatch("change");
+  assert.equal(App.statisticsDraftSelection.allTime, false);
+  assert.equal(element("statistics-date-status").textContent, "日期范围尚未应用");
+
+  await App.applyStatisticsDraftSelection();
+
+  assert.deepEqual(statisticsCalls.at(-1), ["2026-07-01", "2026-07-17", ""]);
+  assert.equal(element("statistics-month-btn").getAttribute("aria-pressed"), "true");
+  assert.equal(element("statistics-all-btn").getAttribute("aria-pressed"), "false");
 });
 
 test("manual start and end date changes only update draft and preserve accepted results", () => {
