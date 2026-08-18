@@ -17,7 +17,7 @@ from .report_projection_model import ReportProjectionSnapshot
 from .report_projection_snapshot_service import build_visible_snapshot
 from .report_revision_service import PROJECTION_SCHEMA_VERSION
 
-_MAX_SLOTS = 2
+_MAX_SLOTS = 4
 _CACHE_LOCK = threading.Lock()
 _CACHE: OrderedDict[
     tuple[str, str, str, int, int, int], ReportProjectionSnapshot

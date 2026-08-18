@@ -242,6 +242,7 @@
     function executeStatisticsQuery(owner) {
         var filters = owner.filters;
         var token = owner.token;
+        var accepted = false;
         var request = App.bridge.getStatisticsExportSummary(
             filters.dateFrom, filters.dateTo, filters.projectId
         );
@@ -261,24 +262,37 @@
             App.statisticsSnapshotRevision = String(data.export_ticket.revision || "");
             showStatistics(data.summary, filters);
             App.statisticsLoaded = true;
+            accepted = true;
+            if (typeof App.markPageFresh === "function") App.markPageFresh("statistics");
             return data;
         }).catch(function () {
             if (App.requestCoordinator.isCurrent(token)) showStatisticsError("加载统计失败");
             return null;
         }).finally(function () {
-            if (App.requestCoordinator.isCurrent(token)) setStatisticsLoading(false);
+            if (!App.requestCoordinator.isCurrent(token)) return;
+            setStatisticsLoading(false);
+            if (!accepted && owner.preservePresentation === true && element("statistics-update-status")) {
+                element("statistics-update-status").textContent = "更新失败，仍显示上次结果";
+            }
         });
         App.statisticsLoadPromise = pending;
         return pending;
     }
 
-    function beginStatisticsQuery(delay) {
+    function beginStatisticsQuery(delay, options) {
+        options = options || {};
+        var preservePresentation = options.preservePresentation === true
+            && App.statisticsLoaded === true
+            && !!App.statisticsAcceptedPayload;
         if (App.statisticsQueryTimer) window.clearTimeout(App.statisticsQueryTimer);
         App.statisticsQueryTimer = null;
+        if (!preservePresentation && typeof App.clearScheduledAutomaticPageRefresh === "function") {
+            App.clearScheduledAutomaticPageRefresh();
+        }
         var filters = selectedFilters();
         var key = JSON.stringify(filters);
         var token = App.requestCoordinator.beginLatest("statistics", key);
-        invalidateStatisticsSelection();
+        if (!preservePresentation) invalidateStatisticsSelection();
         App.clearStatisticsError();
         updateStatisticsScope(filters);
         setStatisticsLoading(true);
@@ -287,10 +301,17 @@
             if (message) {
                 showStatisticsError(message);
                 setStatisticsLoading(false);
+                if (preservePresentation && element("statistics-update-status")) {
+                    element("statistics-update-status").textContent = "更新失败，仍显示上次结果";
+                }
                 return Promise.resolve(null);
             }
         }
-        var owner = { filters: filters, token: token };
+        var owner = {
+            filters: filters,
+            token: token,
+            preservePresentation: preservePresentation
+        };
         if (delay > 0) {
             App.statisticsQueryTimer = window.setTimeout(function () {
                 App.statisticsQueryTimer = null;
@@ -302,8 +323,8 @@
     }
     App.beginStatisticsQuery = beginStatisticsQuery;
 
-    function loadStatisticsExportSummary() {
-        return beginStatisticsQuery(0);
+    function loadStatisticsExportSummary(options) {
+        return beginStatisticsQuery(0, options);
     }
     App.loadStatisticsExportSummary = loadStatisticsExportSummary;
 

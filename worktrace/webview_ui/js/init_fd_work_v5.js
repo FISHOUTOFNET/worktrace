@@ -76,6 +76,50 @@
     });
 
     var runtimeState = null;
+    var AUTOMATIC_PAGE_REFRESH_DELAY_MS = 1500;
+    var automaticPageRefreshTimer = null;
+    var automaticPageRefreshKey = "";
+    var PAGE_REFRESH_POLICIES = Object.freeze({
+        overview: Object.freeze({
+            entryGenerations: Object.freeze(["report_structure"]),
+            automaticGenerations: Object.freeze(["report_structure"]),
+            deferred: true
+        }),
+        timeline: Object.freeze({
+            entryGenerations: Object.freeze(["report_structure"]),
+            automaticGenerations: Object.freeze(["report_structure"]),
+            deferred: true
+        }),
+        statistics: Object.freeze({
+            entryGenerations: Object.freeze(["report_structure"]),
+            automaticGenerations: Object.freeze(["report_structure"]),
+            deferred: true
+        }),
+        rules: Object.freeze({
+            // Activity changes affect last-used ordering, so remember the page is
+            // stale for the next entry. Do not rebuild Rules while the user is
+            // merely switching external apps.
+            entryGenerations: Object.freeze([
+                "classification_catalog", "privacy_catalog", "report_structure"
+            ]),
+            automaticGenerations: Object.freeze([
+                "classification_catalog", "privacy_catalog"
+            ]),
+            deferred: false
+        }),
+        settings: Object.freeze({
+            entryGenerations: Object.freeze(["settings", "privacy_catalog"]),
+            automaticGenerations: Object.freeze(["settings", "privacy_catalog"]),
+            deferred: false
+        })
+    });
+    var pageRefreshDirty = {
+        overview: true,
+        timeline: true,
+        statistics: true,
+        rules: true,
+        settings: true
+    };
 
     function nonNegativeInt(value, fallback) {
         return typeof value === "number" && Number.isInteger(value) && value >= 0
@@ -85,6 +129,136 @@
 
     function objectValue(value) {
         return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    }
+
+    function generationValue(generations, key) {
+        var value = objectValue(generations)[key];
+        return typeof value === "number" && Number.isInteger(value) && value >= 0
+            ? value
+            : 0;
+    }
+
+    function changedGenerationKeys(previous, next) {
+        var keys = [
+            "report_structure",
+            "classification_catalog",
+            "settings",
+            "privacy_catalog"
+        ];
+        if (!previous) return [];
+        return keys.filter(function (key) {
+            return generationValue(previous, key) !== generationValue(next, key);
+        });
+    }
+
+    function intersects(left, right) {
+        return (left || []).some(function (value) {
+            return (right || []).indexOf(value) >= 0;
+        });
+    }
+
+    function markPagesDirtyForGenerationChanges(changedKeys) {
+        Object.keys(PAGE_REFRESH_POLICIES).forEach(function (page) {
+            var policy = PAGE_REFRESH_POLICIES[page];
+            if (intersects(changedKeys, policy.entryGenerations)) {
+                pageRefreshDirty[page] = true;
+            }
+        });
+    }
+
+    function pageHasLoadedData(page) {
+        if (page === "overview") return !!App.lastOverviewSnapshot;
+        if (page === "timeline") return App.timelineLoaded === true;
+        if (page === "statistics") return App.statisticsLoaded === true;
+        if (page === "rules") return App.rulesLoaded === true;
+        if (page === "settings") return App.settingsLoaded === true;
+        return false;
+    }
+
+    function markPageFresh(page) {
+        if (Object.prototype.hasOwnProperty.call(pageRefreshDirty, page)) {
+            pageRefreshDirty[page] = false;
+        }
+    }
+    App.markPageFresh = markPageFresh;
+
+    function pageNeedsRefresh(page) {
+        return !pageHasLoadedData(page) || pageRefreshDirty[page] !== false;
+    }
+    App.pageNeedsRefresh = pageNeedsRefresh;
+
+    function statisticsSelectionIncludesToday() {
+        var selection = App.statisticsSelection;
+        if (!selection || selection.allTime === true) return true;
+        var today = App.localTodayStr();
+        var from = String(selection.dateFrom || "");
+        var to = String(selection.dateTo || "");
+        return !!from && !!to && from <= today && to >= today;
+    }
+
+    function automaticRefreshAllowedForPage(page) {
+        if (page === "timeline") {
+            return String(App.timelineDate || "") === App.localTodayStr();
+        }
+        if (page === "statistics") return statisticsSelectionIncludesToday();
+        return true;
+    }
+
+    function automaticRefreshScopeKey(page) {
+        return page + "|" + (page === "timeline" ? String(App.timelineDate || "") : "");
+    }
+
+    function clearScheduledAutomaticPageRefresh() {
+        if (automaticPageRefreshTimer !== null) {
+            window.clearTimeout(automaticPageRefreshTimer);
+        }
+        automaticPageRefreshTimer = null;
+        automaticPageRefreshKey = "";
+    }
+    App.clearScheduledAutomaticPageRefresh = clearScheduledAutomaticPageRefresh;
+
+    function scheduleAutomaticPageRefresh() {
+        var page = App.currentPage || "overview";
+        var scopeKey = automaticRefreshScopeKey(page);
+        clearScheduledAutomaticPageRefresh();
+        automaticPageRefreshKey = scopeKey;
+        automaticPageRefreshTimer = window.setTimeout(function () {
+            automaticPageRefreshTimer = null;
+            automaticPageRefreshKey = "";
+            if (App.currentPage !== page || automaticRefreshScopeKey(page) !== scopeKey) return;
+            if (!pageNeedsRefresh(page)) return;
+            refreshCurrentPageData(null, {
+                automatic: true,
+                preservePresentation: page === "statistics"
+            });
+        }, AUTOMATIC_PAGE_REFRESH_DELAY_MS);
+    }
+
+    function settingsRuntimeIdentity(runtime) {
+        if (!runtime) return "";
+        var collector = objectValue(runtime.collector);
+        return [
+            String(collector.status || ""),
+            collector.paused === true ? "paused" : "running",
+            String(collector.display || ""),
+            String(runtime.runtimePhase || ""),
+            (Array.isArray(runtime.errorCodes) ? runtime.errorCodes : []).join(",")
+        ].join("|");
+    }
+
+    function dispatchAutomaticRefresh(changedKeys, settingsRuntimeChanged) {
+        var page = App.currentPage || "overview";
+        var policy = PAGE_REFRESH_POLICIES[page];
+        if (!policy) return;
+        var semanticChange = intersects(changedKeys, policy.automaticGenerations);
+        if (page === "settings" && settingsRuntimeChanged) semanticChange = true;
+        if (!semanticChange || !automaticRefreshAllowedForPage(page)) return;
+        if (policy.deferred) {
+            scheduleAutomaticPageRefresh();
+            return;
+        }
+        clearScheduledAutomaticPageRefresh();
+        refreshCurrentPageData(null, { automatic: true });
     }
 
     function frozenRuntime(value) {
@@ -248,6 +422,10 @@
         App.liveClockContractRefreshRequested = false;
         App.liveClockContractViolation = null;
         App.liveClockViolationKeys = {};
+        clearScheduledAutomaticPageRefresh();
+        Object.keys(pageRefreshDirty).forEach(function (page) {
+            pageRefreshDirty[page] = true;
+        });
         liveRuntimeStore.reset();
         App._monotonicRenderState = {};
         App.lastClientGenerationResetReason = String(reason || "data_generation_changed");
@@ -474,12 +652,16 @@
             }
             return refreshTimeline();
         },
-        statistics: function () {
+        statistics: function (_acceptedState, options) {
             if (!App.statisticsLoaded && typeof App.initStatisticsDefaults === "function") {
                 App.initStatisticsDefaults();
             }
             return typeof App.loadStatisticsExportSummary === "function"
-                ? App.loadStatisticsExportSummary()
+                ? App.loadStatisticsExportSummary(
+                    options && options.preservePresentation === true
+                        ? { preservePresentation: true }
+                        : undefined
+                )
                 : Promise.resolve();
         },
         rules: function () {
@@ -494,11 +676,14 @@
         }
     });
 
-    function refreshActivePage(acceptedState) {
-        var refresher = ACTIVE_PAGE_REFRESHERS[App.currentPage];
-        return typeof refresher === "function"
-            ? Promise.resolve(refresher(acceptedState))
-            : Promise.resolve();
+    function refreshActivePage(acceptedState, options) {
+        var page = App.currentPage;
+        var refresher = ACTIVE_PAGE_REFRESHERS[page];
+        if (typeof refresher !== "function") return Promise.resolve();
+        return Promise.resolve(refresher(acceptedState, options)).then(function (result) {
+            if (App.currentPage === page && pageHasLoadedData(page)) markPageFresh(page);
+            return result;
+        });
     }
     App.refreshActivePage = refreshActivePage;
 
@@ -517,7 +702,7 @@
                 acceptedState && acceptedState.ok === true
                     ? refreshStatusFromRefreshState(acceptedState)
                     : refreshStatus(),
-                refreshActivePage(acceptedState)
+                refreshActivePage(acceptedState, options)
             ];
             return Promise.allSettled(promises);
         }).then(function (results) {
@@ -575,6 +760,7 @@
 
     function switchPage(pageId) {
         var previousPage = App.currentPage;
+        clearScheduledAutomaticPageRefresh();
         if (previousPage && previousPage !== pageId) resetPageTransientUi(previousPage);
         var navItems = document.querySelectorAll(".nav-item");
         var pages = document.querySelectorAll(".page");
@@ -592,7 +778,9 @@
         if (pageTarget) pageTarget.classList.add("active");
         App.currentPage = pageId;
         liveRuntimeStore.setScope(pageId, pageId === "timeline" ? App.timelineDate : null);
-        refreshActivePage(App.lastRefreshState).catch(function () {
+        refreshCurrentActivityFromState(App.lastRefreshState, { forceRender: true });
+        if (!pageNeedsRefresh(pageId)) return;
+        refreshActivePage(App.lastRefreshState, { navigation: true }).catch(function () {
             App.showError("刷新失败");
         });
     }
@@ -737,7 +925,6 @@
             var envelope = rawRuntimeEnvelope(state);
             if (!envelope || Number(envelope.schema_version) !== 2) return;
             var snapshot = objectValue(envelope.snapshot);
-            var revisions = objectValue(envelope.revisions);
             var incomingIdentity = runtimeIdentityFromPayload(state) || {};
             var incomingCurrent = objectValue(envelope.current_activity);
             var nextIdentity = [
@@ -747,21 +934,34 @@
                 String(incomingCurrent.persisted_activity_id || incomingCurrent.activity_id || "")
             ].join("|");
             var previousIdentity = currentActivityRenderIdentity(previousRuntime);
-            var isFirstCheck = !previousRuntime;
-            var liveStateChanged = isFirstCheck || previousRuntime.liveRevision !== String(snapshot.revision || "");
-            var pageStructureChanged = isFirstCheck || previousRuntime.pageRevision !== String(revisions.page || "");
+            var liveStateChanged = !previousRuntime
+                || previousRuntime.liveRevision !== String(snapshot.revision || "");
             var currentActivityIdentityChanged = previousIdentity !== nextIdentity;
+            var changedGenerations = changedGenerationKeys(
+                previousRuntime ? previousRuntime.generations : null,
+                objectValue(envelope.generations)
+            );
+            var previousSettingsRuntimeIdentity = settingsRuntimeIdentity(previousRuntime);
             var renderCurrent = liveStateChanged
-                || pageStructureChanged
                 || currentActivityIdentityChanged
                 || App.liveClockContractRefreshRequested;
             if (!App.acceptRefreshStateRuntime(state)) return;
+            var acceptedRuntime = liveRuntimeStore.get();
+            var settingsRuntimeChanged = !!previousRuntime
+                && previousSettingsRuntimeIdentity !== settingsRuntimeIdentity(acceptedRuntime);
+            markPagesDirtyForGenerationChanges(changedGenerations);
             refreshCurrentActivityFromState(state, { forceRender: renderCurrent });
-            refreshStatusFromRuntime(liveRuntimeStore.get());
-            if (pageStructureChanged || App.liveClockContractRefreshRequested) {
+            refreshStatusFromRuntime(acceptedRuntime);
+            if (App.liveClockContractRefreshRequested) {
                 App.liveClockContractRefreshRequested = false;
-                refreshCurrentPageData(state);
+                clearScheduledAutomaticPageRefresh();
+                if (Object.prototype.hasOwnProperty.call(pageRefreshDirty, App.currentPage)) {
+                    pageRefreshDirty[App.currentPage] = true;
+                }
+                refreshCurrentPageData(state, { automatic: true });
+                return;
             }
+            dispatchAutomaticRefresh(changedGenerations, settingsRuntimeChanged);
         }).finally(function () {
             if (App.requestCoordinator.isCurrent(token)) App.refreshCheckInFlight = false;
         });
@@ -784,6 +984,7 @@
     function stopHeartbeat() {
         if (App.heartbeatTimer !== null) clearInterval(App.heartbeatTimer);
         App.heartbeatTimer = null;
+        clearScheduledAutomaticPageRefresh();
     }
     App.stopHeartbeat = stopHeartbeat;
 
