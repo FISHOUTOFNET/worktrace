@@ -81,11 +81,16 @@ def _ready_controller() -> tuple[FDWorkWindowController, _Window]:
 def test_native_activation_clears_noactivate_before_foreground(monkeypatch):
     operations: list[str] = []
     styles = {4242: window_activation.WS_EX_NOACTIVATE | 0x20}
+    foreground = {"hwnd": 0}
 
     class _Handle:
         @staticmethod
         def ToInt32() -> int:
             return 4242
+
+    def set_foreground(hwnd: int):
+        operations.append("foreground")
+        foreground["hwnd"] = hwnd
 
     fake_win32gui = SimpleNamespace(
         GetWindowLong=lambda hwnd, _index: styles[hwnd],
@@ -95,7 +100,8 @@ def test_native_activation_clears_noactivate_before_foreground(monkeypatch):
         )[-1],
         SetWindowPos=lambda *_args: operations.append("refresh_style"),
         ShowWindow=lambda *_args: operations.append("restore_native"),
-        SetForegroundWindow=lambda *_args: operations.append("foreground"),
+        SetForegroundWindow=set_foreground,
+        GetForegroundWindow=lambda: foreground["hwnd"],
         FindWindow=lambda *_args: 0,
     )
     window = SimpleNamespace(
@@ -113,6 +119,104 @@ def test_native_activation_clears_noactivate_before_foreground(monkeypatch):
 
     assert window_activation.request_window_foreground(window) is True
     assert operations[-2:] == ["restore_native", "foreground"]
+
+
+def test_native_activation_uses_one_bounded_fallback_until_verified(monkeypatch):
+    operations: list[str] = []
+    foreground = {"hwnd": 100, "requests": 0}
+
+    class _Handle:
+        @staticmethod
+        def ToInt32() -> int:
+            return 4242
+
+    def set_foreground(hwnd: int):
+        foreground["requests"] += 1
+        operations.append("foreground")
+        if foreground["requests"] == 2:
+            foreground["hwnd"] = hwnd
+
+    fake_win32gui = SimpleNamespace(
+        ShowWindow=lambda *_args: operations.append("restore"),
+        SetForegroundWindow=set_foreground,
+        GetForegroundWindow=lambda: foreground["hwnd"],
+        BringWindowToTop=lambda *_args: operations.append("bring_to_top"),
+        SetWindowPos=lambda *_args: operations.append("set_top"),
+        FindWindow=lambda *_args: 0,
+    )
+    window = SimpleNamespace(native=SimpleNamespace(Handle=_Handle()))
+
+    monkeypatch.setattr(window_activation.sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "win32gui", fake_win32gui)
+
+    assert window_activation.request_window_foreground(window) is True
+    assert operations == [
+        "restore",
+        "foreground",
+        "bring_to_top",
+        "set_top",
+        "foreground",
+    ]
+
+
+def test_native_activation_fails_when_windows_never_accepts_foreground(monkeypatch):
+    operations: list[str] = []
+
+    class _Handle:
+        @staticmethod
+        def ToInt32() -> int:
+            return 4242
+
+    fake_win32gui = SimpleNamespace(
+        ShowWindow=lambda *_args: operations.append("restore"),
+        SetForegroundWindow=lambda *_args: operations.append("foreground"),
+        GetForegroundWindow=lambda: 100,
+        BringWindowToTop=lambda *_args: operations.append("bring_to_top"),
+        SetWindowPos=lambda *_args: operations.append("set_top"),
+        FindWindow=lambda *_args: 0,
+    )
+    window = SimpleNamespace(native=SimpleNamespace(Handle=_Handle()))
+
+    monkeypatch.setattr(window_activation.sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "win32gui", fake_win32gui)
+
+    assert window_activation.request_window_foreground(window) is False
+    assert operations.count("foreground") == 2
+    assert operations.count("bring_to_top") == 1
+    assert operations.count("set_top") == 1
+
+
+def test_relaunch_foreground_permission_targets_existing_window_process(monkeypatch):
+    allowed: list[int] = []
+
+    class _Allow:
+        argtypes = None
+        restype = None
+
+        def __call__(self, process_id: int) -> int:
+            allowed.append(process_id)
+            return 1
+
+    fake_user32 = SimpleNamespace(AllowSetForegroundWindow=_Allow())
+    fake_win32gui = SimpleNamespace(FindWindow=lambda *_args: 4242)
+    fake_win32process = SimpleNamespace(
+        GetWindowThreadProcessId=lambda _hwnd: (12, 9876)
+    )
+
+    monkeypatch.setattr(window_activation.sys, "platform", "win32")
+    monkeypatch.setattr(
+        window_activation.ctypes,
+        "WinDLL",
+        lambda *_args, **_kwargs: fake_user32,
+        raising=False,
+    )
+    monkeypatch.setitem(sys.modules, "win32gui", fake_win32gui)
+    monkeypatch.setitem(sys.modules, "win32process", fake_win32process)
+
+    assert window_activation.grant_foreground_permission(
+        fallback_title="有迹 · Trace"
+    ) is True
+    assert allowed == [9876]
 
 
 def test_visible_fd_work_helper_still_requests_native_foreground(monkeypatch):
