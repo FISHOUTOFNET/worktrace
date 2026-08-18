@@ -85,7 +85,7 @@ def test_custom_dates_validate_without_reviving_legacy_31_day_ui_limit() -> None
     assert "diffDays" not in body and "31" not in body
 
 
-def test_draft_dates_apply_once_while_project_and_quick_ranges_query_immediately() -> None:
+def test_draft_dates_stay_local_while_project_and_quick_ranges_query_immediately() -> None:
     init = func_body(source(), "initStatisticsDefaults")
     quick = func_body(source(), "applyStatisticsQuickRange")
     draft = func_body(source(), "handleStatisticsDraftDateChange")
@@ -99,7 +99,9 @@ def test_draft_dates_apply_once_while_project_and_quick_ranges_query_immediately
     assert "beginStatisticsQuery" not in draft
     assert "setStatisticsSelection" not in draft
     assert "validateStatisticsDateRange" in apply
-    assert apply.count("beginStatisticsQuery(0)") == 1
+    assert "draft.allTime" in apply
+    assert 'setStatisticsSelection(true, "", "")' in apply
+    assert "setStatisticsSelection(false, draft.dateFrom, draft.dateTo)" in apply
     assert "statisticsWeekRange(new Date())" in source()
     assert "start.getDay() + 6" in week
     assert 'type === "all"' in quick
