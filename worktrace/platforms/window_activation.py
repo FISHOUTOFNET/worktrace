@@ -1,6 +1,7 @@
 """Narrow pywebview window activation helpers for native desktop windows."""
 from __future__ import annotations
 
+import ctypes
 import logging
 import sys
 from typing import Any
@@ -8,11 +9,13 @@ from typing import Any
 GWL_EXSTYLE = -20
 WS_EX_NOACTIVATE = 0x08000000
 SW_RESTORE = 9
+HWND_TOP = 0
 SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
 SWP_NOZORDER = 0x0004
 SWP_NOACTIVATE = 0x0010
 SWP_FRAMECHANGED = 0x0020
+SWP_SHOWWINDOW = 0x0040
 
 
 def _debug(
@@ -119,6 +122,13 @@ def make_window_activatable(
         return False
 
 
+def _foreground_matches(win32gui: Any, hwnd: int) -> bool:
+    try:
+        return int(win32gui.GetForegroundWindow() or 0) == int(hwnd)
+    except Exception:
+        return False
+
+
 def request_window_foreground(
     window: Any,
     *,
@@ -126,7 +136,7 @@ def request_window_foreground(
     restore: bool = True,
     logger: logging.Logger | None = None,
 ) -> bool:
-    """Best-effort native foreground request after the window is activatable."""
+    """Bring a native window forward and verify that Windows accepted it."""
 
     if not sys.platform.startswith("win"):
         return False
@@ -141,25 +151,96 @@ def request_window_foreground(
         if hwnd <= 0:
             return False
         if restore:
-            win32gui.ShowWindow(hwnd, SW_RESTORE)
-        result = win32gui.SetForegroundWindow(hwnd)
-        if result is None:
+            try:
+                win32gui.ShowWindow(hwnd, SW_RESTORE)
+            except Exception:
+                _debug(logger, "native window restore failed", exc_info=True)
+
+        if _foreground_matches(win32gui, hwnd):
             return True
-        return bool(result)
+
+        try:
+            win32gui.SetForegroundWindow(hwnd)
+        except Exception:
+            _debug(logger, "native foreground request failed", exc_info=True)
+        if _foreground_matches(win32gui, hwnd):
+            return True
+
+        try:
+            bring_to_top = getattr(win32gui, "BringWindowToTop", None)
+            if callable(bring_to_top):
+                bring_to_top(hwnd)
+        except Exception:
+            _debug(logger, "native bring-to-top fallback failed", exc_info=True)
+
+        try:
+            set_window_pos = getattr(win32gui, "SetWindowPos", None)
+            if callable(set_window_pos):
+                set_window_pos(
+                    hwnd,
+                    HWND_TOP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                )
+        except Exception:
+            _debug(logger, "native z-order fallback failed", exc_info=True)
+
+        try:
+            win32gui.SetForegroundWindow(hwnd)
+        except Exception:
+            _debug(logger, "native foreground retry failed", exc_info=True)
+        return _foreground_matches(win32gui, hwnd)
     except Exception:
-        _debug(logger, "native foreground request failed", exc_info=True)
+        _debug(logger, "native foreground activation failed", exc_info=True)
+        return False
+
+
+def grant_foreground_permission(
+    *,
+    fallback_title: str,
+    logger: logging.Logger | None = None,
+) -> bool:
+    """Transfer this user-initiated launch's foreground right to an existing UI."""
+
+    if not sys.platform.startswith("win") or not fallback_title:
+        return False
+    try:
+        import win32gui
+        import win32process
+
+        hwnd = int(win32gui.FindWindow(None, fallback_title) or 0)
+        if hwnd <= 0:
+            return False
+        _thread_id, process_id = win32process.GetWindowThreadProcessId(hwnd)
+        process_id = int(process_id or 0)
+        if process_id <= 0:
+            return False
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        allow = user32.AllowSetForegroundWindow
+        allow.argtypes = [ctypes.c_uint]
+        allow.restype = ctypes.c_int
+        return bool(allow(process_id))
+    except Exception:
+        _debug(logger, "foreground permission transfer failed", exc_info=True)
         return False
 
 
 __all__ = [
     "GWL_EXSTYLE",
+    "HWND_TOP",
     "SW_RESTORE",
     "SWP_FRAMECHANGED",
     "SWP_NOACTIVATE",
     "SWP_NOMOVE",
     "SWP_NOSIZE",
     "SWP_NOZORDER",
+    "SWP_SHOWWINDOW",
     "WS_EX_NOACTIVATE",
+    "grant_foreground_permission",
     "make_window_activatable",
     "native_window_handle",
     "request_window_foreground",
