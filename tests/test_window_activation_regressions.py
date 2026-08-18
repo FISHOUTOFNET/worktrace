@@ -251,7 +251,7 @@ def test_visible_fd_work_helper_still_requests_native_foreground(monkeypatch):
     controller.shutdown()
 
 
-def test_helper_visibility_commits_before_best_effort_focus(monkeypatch):
+def test_helper_activation_failure_is_not_reported_as_success(monkeypatch):
     controller, window = _ready_controller()
 
     def fail_focus() -> None:
@@ -271,24 +271,44 @@ def test_helper_visibility_commits_before_best_effort_focus(monkeypatch):
 
     result = controller.foreground("user_picker", 1, lambda: True)
 
-    assert result["ok"] is True
+    assert result == {"ok": False, "error": "window_activation_failed"}
     assert window.actions[:2] == ["show", "restore"]
     assert controller._window_visible is True
     controller.shutdown()
 
 
-def test_helper_hide_state_does_not_depend_on_main_restore_success():
+def test_helper_stays_visible_when_main_restore_request_fails():
     controller, window = _ready_controller()
     with controller._lock:
         controller._window_visible = True
         generation = controller._navigation_generation
 
-    def fail_main_restore() -> None:
+    def fail_main_restore() -> bool:
         raise RuntimeError("main restore failed")
 
     controller.bind_main_focus_callback(fail_main_restore)
     controller.hide_and_restore_main(generation, 1, lambda: True)
 
+    assert window.actions == []
+    assert controller._window_visible is True
+    controller.shutdown()
+
+
+def test_helper_hides_after_main_restore_request_is_accepted():
+    controller, window = _ready_controller()
+    calls: list[str] = []
+    with controller._lock:
+        controller._window_visible = True
+        generation = controller._navigation_generation
+
+    def restore_main() -> bool:
+        calls.append("main")
+        return True
+
+    controller.bind_main_focus_callback(restore_main)
+    controller.hide_and_restore_main(generation, 1, lambda: True)
+
+    assert calls == ["main"]
     assert window.actions == ["hide"]
     assert controller._window_visible is False
     controller.shutdown()
