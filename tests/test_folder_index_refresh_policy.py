@@ -145,6 +145,12 @@ def test_pathless_file_index_miss_only_signals_unresolved_maintenance(
     temp_db,
     monkeypatch,
 ):
+    project_id = project_service.create_project("Potential Folder Owner")
+    folder_rule_service.create_or_update_folder_rule(
+        r"D:\PotentialOwner",
+        project_id,
+        True,
+    )
     activity_id = activity_service.create_activity(
         "Word",
         "winword.exe",
@@ -246,10 +252,20 @@ def test_unresolved_refresh_status_requires_generation_started_after_miss(temp_d
         boundary
     )
 
+    # Same-second ordering is ambiguous at the schema's timestamp precision.
     _clear_refresh_marker(
         rule_id,
         last_indexed_at="2026-08-18 20:01:00",
         valid_from="2026-08-18 20:00:00",
+    )
+    assert not folder_index_maintenance_service.unresolved_file_indexes_refreshed_since(
+        boundary
+    )
+
+    _clear_refresh_marker(
+        rule_id,
+        last_indexed_at="2026-08-18 20:01:01",
+        valid_from="2026-08-18 20:00:01",
     )
     assert folder_index_maintenance_service.unresolved_file_indexes_refreshed_since(
         boundary
