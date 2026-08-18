@@ -14,6 +14,10 @@
     var FIRST_RUN_NOTICE_ACCEPT_ERROR = "确认隐私说明失败";
     var IMPORT_CONFIRM_LITERAL = "导入并替换";
     var CLEAR_CONFIRM_LITERAL = "清空本地数据";
+    var settingsPrivacyNoticeViewToken = 0;
+    var settingsPrivacyNoticeReturnFocus = null;
+    var privacyNoticeViewLifecycleBound = false;
+    var settingsBackupManifestViewToken = 0;
 
     function element(id) { return document.getElementById(id); }
 
@@ -151,9 +155,6 @@
     }
     App.setSettingsDangerControlsDisabled = setSettingsDangerControlsDisabled;
 
-    // Recovery button enabled = backend reports recovery_blocked AND no
-    // Settings operation in progress. The frontend never clears
-    // recovery_blocked locally; it reads the latest authoritative status.
     function syncRecoveryButtonState(status) {
         var button = element("settings-recovery-btn");
         if (!button) return;
@@ -202,9 +203,6 @@
         }
         setSettingsBackupControlsDisabled(disabled);
         setSettingsDangerControlsDisabled(disabled);
-        // The recovery button participates in the unified control sync,
-        // but its final state is derived from the authoritative backend
-        // status, not the generic ``disabled`` flag.
         syncRecoveryButtonState();
     }
     App.setSettingsControlsDisabled = setSettingsControlsDisabled;
@@ -420,20 +418,13 @@
             reason.textContent = "阻断原因："
                 + (status.blocked_reason ? String(status.blocked_reason) : (inProgress ? "维护进行中" : "无"));
         }
-        // The button enabled state is derived solely from the authoritative
-        // backend status and the unified busy flag via syncRecoveryButtonState.
-        // The frontend never clears recovery_blocked locally.
         syncRecoveryButtonState(status);
     }
     App.renderRecoveryCard = renderRecoveryCard;
 
     function recoverDatabaseMaintenance() {
-        // Symmetric mutex: any Settings operation in progress blocks
-        // recovery, not only recovery itself. This is the reverse direction
-        // of the guard the other operations already perform.
         if (anySettingsOperationInProgress()) return Promise.resolve(false);
         App.recoveryInProgress = true;
-        // Disable all settings controls via the unified mutex during recovery.
         setSettingsControlsDisabled(anySettingsOperationInProgress());
         var button = element("settings-recovery-btn");
         if (button) button.disabled = true;
@@ -447,9 +438,6 @@
                 );
                 setRecoveryStatus(message);
                 if (App.showGlobalAlert) App.showGlobalAlert(message);
-                // On failure, prefer the maintenance status embedded in the
-                // response to refresh the recovery card; otherwise reload the
-                // full settings status. Never clear recovery_blocked here.
                 var maintenance = result && result.maintenance;
                 if (maintenance) {
                     App.lastSettingsStatus = maintenance;
@@ -461,8 +449,6 @@
                 return false;
             }
             setRecoveryStatus("恢复已提交，正在重新加载状态……");
-            // Refresh settings status and current page so the user sees
-            // authoritative state without manual reload.
             return Promise.all([
                 App.loadSettingsPrivacyStatus(),
                 App.refreshAll ? App.refreshAll() : Promise.resolve()
@@ -472,8 +458,6 @@
                 return true;
             });
         }).catch(function () {
-            // Transport rejection: frontend cannot know if recovery applied.
-            // Re-read authoritative backend status before releasing busy.
             var message = "恢复结果未知，正在重新读取状态……";
             setRecoveryStatus(message);
             if (App.showGlobalAlert) App.showGlobalAlert(message);
@@ -483,14 +467,9 @@
             return App.loadSettingsPrivacyStatus().then(function () {
                 return false;
             }, function () {
-                // Status read itself failed: keep the conservative error,
-                // but still release the busy flag downstream to avoid a
-                // permanent UI deadlock. Do not claim success.
                 return false;
             });
         }).then(function (ok) {
-            // Single release path: clear busy flag and re-render controls
-            // from the latest authoritative backend status.
             App.recoveryInProgress = false;
             setSettingsControlsDisabled(anySettingsOperationInProgress());
             if (App.lastSettingsStatus) renderRecoveryCard(App.lastSettingsStatus);
@@ -499,11 +478,93 @@
     }
     App.recoverDatabaseMaintenance = recoverDatabaseMaintenance;
 
+    function settingsPrivacyNoticeViewOpen() {
+        var overlay = element("first-run-notice-overlay");
+        return !!(
+            App.firstRunNoticeViewingFromSettings === true
+            && overlay
+            && overlay.hidden === false
+        );
+    }
+
+    function restoreSettingsPrivacyNoticeFocus(target) {
+        if (!target || typeof target.focus !== "function") return;
+        var root = document.documentElement;
+        if (!root || typeof root.contains !== "function" || root.contains(target)) target.focus();
+    }
+
+    function focusSettingsPrivacyNoticeClose() {
+        var close = element("first-run-notice-close-btn");
+        if (close && !close.hidden && typeof close.focus === "function") close.focus();
+    }
+
+    function initPrivacyNoticeViewLifecycle() {
+        if (privacyNoticeViewLifecycleBound) return;
+        privacyNoticeViewLifecycleBound = true;
+        var overlay = element("first-run-notice-overlay");
+        if (overlay) {
+            overlay.addEventListener("click", function (event) {
+                if (
+                    settingsPrivacyNoticeViewOpen()
+                    && event.target === overlay
+                ) hideFirstRunNotice();
+            });
+        }
+        document.addEventListener("keydown", function (event) {
+            if (!settingsPrivacyNoticeViewOpen()) return;
+            if (event.key === "Escape") {
+                event.preventDefault();
+                hideFirstRunNotice();
+                return;
+            }
+            var dialog = element("first-run-notice-dialog");
+            if (dialog && App.trapFocus) App.trapFocus(event, dialog);
+        });
+    }
+
+    function resetSettingsSectionTransientUi(section) {
+        section = String(section || "");
+        if (section === "data") {
+            hideAllPasswordFields();
+            settingsBackupManifestViewToken += 1;
+            renderBackupManifest(null, "");
+            if (!App.settingsBackupExportInProgress) setStatusLine("settings-backup-status", "");
+            if (!App.settingsBackupImportInProgress) setStatusLine("settings-backup-import-status", "");
+            if (!App.settingsClearAllInProgress) setStatusLine("settings-clear-status", "");
+            return;
+        }
+        if (section === "advanced") {
+            var diagnostics = document.querySelector("#settings-section-advanced details");
+            if (diagnostics) diagnostics.open = false;
+            if (!App.recoveryInProgress) setStatusLine("settings-recovery-status", "");
+            return;
+        }
+        if (section === "privacy") {
+            settingsPrivacyNoticeViewToken += 1;
+            if (App.firstRunNoticeViewingFromSettings === true) {
+                hideFirstRunNotice({ restoreFocus: false });
+            }
+            settingsPrivacyNoticeReturnFocus = null;
+        }
+    }
+    App.resetSettingsSectionTransientUi = resetSettingsSectionTransientUi;
+
     function initSettingsCategories() {
+        initPrivacyNoticeViewLifecycle();
         var buttons = document.querySelectorAll("[data-settings-section]");
         for (var index = 0; index < buttons.length; index++) {
             buttons[index].addEventListener("click", function () {
                 var section = this.getAttribute("data-settings-section");
+                var previousSection = "";
+                for (var current = 0; current < buttons.length; current++) {
+                    if (buttons[current].getAttribute("aria-current") === "true") {
+                        previousSection = buttons[current].getAttribute("data-settings-section") || "";
+                        break;
+                    }
+                }
+                if (previousSection && previousSection !== section) {
+                    resetSettingsSectionTransientUi(previousSection);
+                }
                 for (var i = 0; i < buttons.length; i++) {
                     buttons[i].removeAttribute("aria-current");
                     var panel = element("settings-section-" + buttons[i].getAttribute("data-settings-section"));
@@ -741,10 +802,12 @@
 
     function previewEncryptedBackupManifest() {
         if (anySettingsOperationInProgress()) return;
+        var viewToken = ++settingsBackupManifestViewToken;
         App.settingsBackupManifestInProgress = true;
         setSettingsControlsDisabled(true);
         setSettingsBackupStatus("正在读取备份清单…");
         App.bridge.previewEncryptedBackupManifest().then(function (result) {
+            if (viewToken !== settingsBackupManifestViewToken) return;
             var data = App.handleResult(result, function (message) {
                 setSettingsBackupStatus(message || BACKUP_MANIFEST_ERROR_MESSAGE);
                 renderBackupManifest(null, "");
@@ -753,6 +816,7 @@
             setSettingsBackupStatus("");
             renderBackupManifest(data.manifest, data.filename);
         }).catch(function () {
+            if (viewToken !== settingsBackupManifestViewToken) return;
             setSettingsBackupStatus(BACKUP_MANIFEST_ERROR_MESSAGE);
             renderBackupManifest(null, "");
         }).then(function () {
@@ -870,8 +934,6 @@
         if (text) text.textContent = String(notice.text || "");
         if (accept) { accept.hidden = mode === "view"; accept.disabled = false; }
         if (close) close.hidden = mode !== "view";
-        // The retry button is only for load-failure recovery; hide it in
-        // normal gate and view modes.
         if (retry) retry.hidden = true;
         setFirstRunNoticeError("");
     }
@@ -882,6 +944,7 @@
         renderFirstRunNotice(notice, mode);
         var overlay = element("first-run-notice-overlay");
         if (overlay) overlay.hidden = false;
+        if (mode === "view") focusSettingsPrivacyNoticeClose();
     }
     App.showFirstRunNotice = showFirstRunNotice;
 
@@ -897,10 +960,6 @@
         if (text) text.textContent = "";
         if (accept) { accept.hidden = true; accept.disabled = true; }
         if (close) close.hidden = true;
-        // On load failure the overlay stays open (fail-closed) and only the
-        // retry button is available — the user cannot close the overlay or
-        // bypass authorization. The retry button re-issues the real
-        // getFirstRunNotice without clearing any persisted authorization.
         if (retry) { retry.hidden = false; retry.disabled = false; }
         setFirstRunNoticeError(message || FIRST_RUN_NOTICE_LOAD_ERROR);
         var overlay = element("first-run-notice-overlay");
@@ -908,16 +967,20 @@
     }
     App.showFirstRunNoticeBlockingError = showFirstRunNoticeBlockingError;
 
-    function hideFirstRunNotice() {
+    function hideFirstRunNotice(options) {
+        options = options || {};
+        var wasSettingsView = App.firstRunNoticeViewingFromSettings === true;
+        var restore = settingsPrivacyNoticeReturnFocus;
         var overlay = element("first-run-notice-overlay");
         if (overlay) overlay.hidden = true;
         App.firstRunNoticeViewingFromSettings = false;
+        if (wasSettingsView) {
+            settingsPrivacyNoticeReturnFocus = null;
+            if (options.restoreFocus !== false) restoreSettingsPrivacyNoticeFocus(restore);
+        }
     }
     App.hideFirstRunNotice = hideFirstRunNotice;
 
-    // Single accepted-UI settlement helper: closes the blocking overlay and
-    // clears residual load-failure UI. Does NOT start heartbeat, load
-    // projects, call the Bridge, or change persisted authorization.
     function settleFirstRunNoticeAcceptedUi() {
         var retry = element("first-run-notice-retry-btn");
         var accept = element("first-run-notice-accept-btn");
@@ -937,7 +1000,7 @@
 
         if (close) close.hidden = true;
 
-        hideFirstRunNotice();
+        hideFirstRunNotice({ restoreFocus: false });
     }
     App.settleFirstRunNoticeAcceptedUi = settleFirstRunNoticeAcceptedUi;
 
@@ -969,9 +1032,6 @@
             var accepted = notice.accepted === true;
             if (accepted) {
                 setPrivacyGateState("accepted_ready");
-                // Close any residual blocking overlay from a prior load
-                // failure and clear retry/error UI. The post-privacy startup
-                // entry (init_fd_work_v5.js) continues startup based on this state.
                 settleFirstRunNoticeAcceptedUi();
                 return true;
             }
@@ -997,10 +1057,6 @@
         App.bridge.acceptFirstRunNotice().then(function (result) {
             var accepted = !!(result && result.accepted === true);
             if (accepted && result.ok === true) {
-                // Full success: authorization persisted and collector started.
-                // Continue through the single idempotent startup entry so that
-                // project catalog, refresh state, page refresh, and heartbeat
-                // are owned by init_fd_work_v5.js — no second startup path here.
                 setPrivacyGateState("accepted_ready");
                 App.firstRunNoticeRequired = false;
                 settleFirstRunNoticeAcceptedUi();
@@ -1011,7 +1067,6 @@
                 return;
             }
             if (accepted && result.ok === false) {
-                // Authorization persisted but collector failed; close gate, enter app.
                 setPrivacyGateState("accepted_start_failed");
                 App.firstRunNoticeRequired = false;
                 settleFirstRunNoticeAcceptedUi();
@@ -1026,8 +1081,6 @@
                 loadSettingsPrivacyStatus();
                 return;
             }
-            // Authorization persistence failed: keep the gate open and let the
-            // user retry. Do not continue startup or start heartbeat.
             setPrivacyGateState("acceptance_required");
             setFirstRunNoticeError(
                 App.extractBridgeError(result, FIRST_RUN_NOTICE_ACCEPT_ERROR)
@@ -1042,7 +1095,10 @@
     }
     App.acceptFirstRunNotice = acceptFirstRunNotice;
 
-    function resetSettingsTransientUi() {
+    function resetSettingsTransientUi(options) {
+        options = options || {};
+        settingsPrivacyNoticeViewToken += 1;
+        settingsBackupManifestViewToken += 1;
         [
             "settings-backup-passphrase",
             "settings-backup-passphrase-confirm",
@@ -1059,32 +1115,48 @@
         renderBackupManifest(null, "");
         var diagnostics = document.querySelector("#settings-section-advanced details");
         if (diagnostics) diagnostics.open = false;
-        if (App.firstRunNoticeViewingFromSettings === true) hideFirstRunNotice();
+        if (App.firstRunNoticeViewingFromSettings === true) {
+            hideFirstRunNotice({ restoreFocus: options.restoreFocus !== false });
+        }
+        settingsPrivacyNoticeReturnFocus = null;
         if (!App.recoveryInProgress) setStatusLine("settings-recovery-status", "");
     }
     App.resetSettingsTransientUi = resetSettingsTransientUi;
 
+    function privacyNoticeViewRequestCurrent(token) {
+        return token === settingsPrivacyNoticeViewToken
+            && (!App.currentPage || App.currentPage === "settings");
+    }
+
+    function showSettingsPrivacyNoticeError(message) {
+        showFirstRunNoticeBlockingError(message || FIRST_RUN_NOTICE_LOAD_ERROR);
+        var accept = element("first-run-notice-accept-btn");
+        var close = element("first-run-notice-close-btn");
+        if (accept) accept.hidden = true;
+        if (close) close.hidden = false;
+        App.firstRunNoticeViewingFromSettings = true;
+        focusSettingsPrivacyNoticeClose();
+    }
+
     function openPrivacyNoticeFromSettings() {
-        App.bridge.getFirstRunNotice().then(function (result) {
+        initPrivacyNoticeViewLifecycle();
+        var token = ++settingsPrivacyNoticeViewToken;
+        settingsPrivacyNoticeReturnFocus = element("settings-privacy-notice-btn")
+            || document.activeElement;
+        return App.bridge.getFirstRunNotice().then(function (result) {
+            if (!privacyNoticeViewRequestCurrent(token)) return false;
             if (!result || result.ok === false) {
-                showFirstRunNoticeBlockingError(
+                showSettingsPrivacyNoticeError(
                     (result && result.error) || FIRST_RUN_NOTICE_LOAD_ERROR
                 );
-                var accept = element("first-run-notice-accept-btn");
-                var close = element("first-run-notice-close-btn");
-                if (accept) accept.hidden = true;
-                if (close) close.hidden = false;
-                App.firstRunNoticeViewingFromSettings = true;
-                return;
+                return false;
             }
             showFirstRunNotice(result.notice || {}, "view");
+            return true;
         }).catch(function () {
-            showFirstRunNoticeBlockingError(FIRST_RUN_NOTICE_LOAD_ERROR);
-            var accept = element("first-run-notice-accept-btn");
-            var close = element("first-run-notice-close-btn");
-            if (accept) accept.hidden = true;
-            if (close) close.hidden = false;
-            App.firstRunNoticeViewingFromSettings = true;
+            if (!privacyNoticeViewRequestCurrent(token)) return false;
+            showSettingsPrivacyNoticeError(FIRST_RUN_NOTICE_LOAD_ERROR);
+            return false;
         });
     }
     App.openPrivacyNoticeFromSettings = openPrivacyNoticeFromSettings;
@@ -1094,7 +1166,7 @@
         App.firstRunNoticeLoaded = false;
         App.firstRunNoticeLoading = false;
         App.settingsRequestToken = (App.settingsRequestToken || 0) + 1;
-        resetSettingsTransientUi();
+        resetSettingsTransientUi({ restoreFocus: false });
     }
     App.settings = Object.freeze({ resetGeneration: resetSettingsGeneration });
 })();
