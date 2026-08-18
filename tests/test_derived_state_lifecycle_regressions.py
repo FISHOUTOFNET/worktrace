@@ -72,19 +72,32 @@ def test_folder_index_lifecycle_follows_project_enablement(temp_db):
     assert int(state["refresh_requested"] or 0) == 1
 
 
-def test_failed_project_refresh_does_not_consume_cooldown(
+def test_failed_unresolved_refresh_does_not_consume_cooldown(
     temp_db,
     monkeypatch,
 ):
     project_id = project_service.create_project("Retryable Refresh")
-    folder_rule_service.create_or_update_folder_rule(
+    rule_id = folder_rule_service.create_or_update_folder_rule(
         r"D:\RetryableRefresh",
         project_id,
         True,
     )
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE folder_rule_index_state
+            SET refresh_requested = 0, build_status = 'ready', status = 'ready',
+                valid_from = '2000-01-01 00:00:00'
+            WHERE folder_rule_id = ?
+            """,
+            (rule_id,),
+        )
     with folder_index_maintenance_service._REFRESH_CACHE_LOCK:
-        folder_index_maintenance_service._PROJECT_REFRESH_TIMES.clear()
+        folder_index_maintenance_service._UNRESOLVED_REFRESH_TIMES.clear()
 
+    folder_index_maintenance_service.note_unresolved_file_miss(
+        "2026-08-18 20:00:00"
+    )
     calls: list[tuple[int, ...]] = []
 
     def fail_queue(rule_ids):
@@ -97,15 +110,18 @@ def test_failed_project_refresh_does_not_consume_cooldown(
         fail_queue,
     )
     with pytest.raises(RuntimeError, match="transient enqueue failure"):
-        folder_index_maintenance_service.request_refresh_for_project(project_id)
+        folder_index_maintenance_service.request_refresh_for_unresolved_file_misses()
 
     monkeypatch.setattr(
         folder_index_maintenance_service,
         "_queue_rule_ids",
         lambda rule_ids: calls.append(tuple(rule_ids)) or len(rule_ids),
     )
-    assert folder_index_maintenance_service.request_refresh_for_project(project_id) == 1
-    assert len(calls) == 2
+    assert (
+        folder_index_maintenance_service.request_refresh_for_unresolved_file_misses()
+        == 1
+    )
+    assert calls == [(rule_id,), (rule_id,)]
 
 
 def _binding_service(repository, epoch: int):
