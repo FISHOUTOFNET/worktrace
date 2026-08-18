@@ -72,7 +72,7 @@ function createHarness() {
         },
         dispatch(name, event = {}) {
           for (const handler of listeners.get(name) || []) {
-            handler({
+            handler.call(node, {
               target: node,
               currentTarget: node,
               preventDefault() {},
@@ -319,6 +319,7 @@ function prepareSettings() {
     currentPage: "settings",
     settingsLoaded: true,
     recoveryInProgress: false,
+    firstRunNoticeViewingFromSettings: false,
     handleResult: (result) => result,
     extractBridgeError: (result, fallback) => result && result.error || fallback,
     clearGlobalAlert() {},
