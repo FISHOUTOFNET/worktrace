@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import pytest
 
 from tests.support import activity_factory as activity_service
 from worktrace.api import timeline_api
+from worktrace.constants import TIME_FORMAT
 from worktrace.db import get_connection, now_str
 from worktrace.services import (
     activity_inference_job_repository,
@@ -31,6 +34,12 @@ def _assignment(activity_id: int) -> dict:
             (int(activity_id),),
         ).fetchone()
         return dict(row) if row else {}
+
+
+def _one_second_after(value: str) -> str:
+    return (datetime.strptime(value, TIME_FORMAT) + timedelta(seconds=1)).strftime(
+        TIME_FORMAT
+    )
 
 
 def test_normal_inference_does_not_rewrite_resolved_rule_assignment(temp_db):
@@ -215,6 +224,17 @@ def test_closed_pathless_file_waits_for_new_index_then_converges(
     )
     assert folder_index_service.rebuild_folder_index(rule_id)
     with get_connection() as conn:
+        # The schema records timestamps at second precision. Make this test's
+        # causal ordering explicit instead of depending on runner wall-clock speed.
+        conn.execute(
+            """
+            UPDATE folder_rule_index_state
+            SET valid_from = ?, refresh_requested = 0,
+                build_status = 'ready', status = 'ready'
+            WHERE folder_rule_id = ?
+            """,
+            (_one_second_after(str(first["updated_at"])), rule_id),
+        )
         conn.execute(
             "UPDATE activity_inference_job SET next_attempt_at = NULL WHERE activity_id = ?",
             (activity_id,),
