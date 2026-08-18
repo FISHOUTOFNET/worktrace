@@ -190,10 +190,10 @@
         if (from) from.value = selection.dateFrom;
         if (to) to.value = selection.dateTo;
         if (element("statistics-date-inputs")) {
-            element("statistics-date-inputs").hidden = selection.allTime;
+            element("statistics-date-inputs").hidden = false;
         }
         if (element("statistics-all-time-label")) {
-            element("statistics-all-time-label").hidden = !selection.allTime;
+            element("statistics-all-time-label").hidden = true;
         }
         setStatisticsDraftStatus(
             App.statisticsDraftDirty ? "日期范围尚未应用" : "",
@@ -365,6 +365,10 @@
 
     function applyStatisticsDraftSelection() {
         var draft = currentDraftSelection();
+        if (draft.allTime) {
+            setStatisticsSelection(true, "", "");
+            return beginStatisticsQuery(0);
+        }
         var message = validateStatisticsDateRange(draft.dateFrom, draft.dateTo);
         if (message) {
             setStatisticsDraftStatus(message, true);
