@@ -436,7 +436,9 @@
     App.acceptTimelineDetailsPayload = acceptTimelineDetailsPayload;
 
     function selectTimelineSession(projectionInstanceKey, sessions) {
-        if (projectionInstanceKey !== App.selectedProjectionInstanceKey
+        var selectionChanged = projectionInstanceKey !== App.selectedProjectionInstanceKey;
+        if (selectionChanged) dismissTimelineContextTransientUi();
+        if (selectionChanged
                 && (App.editSaving || isEditDirty() || App.mutationState === "unknown")) {
             requestTimelineContextChange(function () {
                 App.selectedProjectionInstanceKey = projectionInstanceKey;
@@ -668,6 +670,7 @@
     }
 
     function confirmTimelineDeletion(operation, options, trigger) {
+        dismissTimelineContextTransientUi();
         if (!App.openDeleteDialog) return runTimelineSessionOperation(operation, options);
         var activity = operation === "hideActivity";
         return App.openDeleteDialog({
@@ -695,6 +698,11 @@
     }
     App.closeTimelineAdvancedMenu = closeTimelineAdvancedMenu;
 
+    function dismissTimelineContextTransientUi() {
+        closeTimelineAdvancedMenu({ restoreFocus: false });
+    }
+    App.dismissTimelineContextTransientUi = dismissTimelineContextTransientUi;
+
     App.toggleTimelineAdvancedMenu = function () {
         var menu = document.getElementById("timeline-session-actions");
         var button = document.getElementById("timeline-advanced-toggle");
@@ -712,6 +720,20 @@
     App.initTimelineAccessibility = function () {
         if (document.documentElement.getAttribute("data-timeline-a11y-bound") === "1") return;
         document.documentElement.setAttribute("data-timeline-a11y-bound", "1");
+        function dismissAdvancedMenuOutsideTarget(target) {
+            var menu = document.getElementById("timeline-session-actions");
+            if (!menu || menu.hidden) return;
+            var button = document.getElementById("timeline-advanced-toggle");
+            if (target && menu.contains && menu.contains(target)) return;
+            if (target && button && button.contains && button.contains(target)) return;
+            dismissTimelineContextTransientUi();
+        }
+        document.addEventListener("pointerdown", function (event) {
+            dismissAdvancedMenuOutsideTarget(event.target);
+        });
+        document.addEventListener("focusin", function (event) {
+            dismissAdvancedMenuOutsideTarget(event.target);
+        });
         document.addEventListener("keydown", function (event) {
             var pane = document.getElementById("timeline-details-pane");
             var menu = document.getElementById("timeline-session-actions");
@@ -1795,6 +1817,7 @@
         options = options || {};
         var operation = TIMELINE_OPERATIONS[operationKey];
         if (!operation) return Promise.reject(new Error("unsupported_timeline_operation"));
+        dismissTimelineContextTransientUi();
         var key = App.selectedProjectionInstanceKey;
         var date = currentTimelineReportDate();
         var revision = App.selectedProjectionRevision || "";
@@ -1987,6 +2010,7 @@
 
     function requestTimelineContextChange(actionFn, label) {
         var reason = label || "切换";
+        dismissTimelineContextTransientUi();
         if (App.mutationState === "unknown") {
             showEditStatus("操作结果尚未确认，请先重试或刷新核对后再" + reason + "。", true);
             return Promise.resolve(false);
