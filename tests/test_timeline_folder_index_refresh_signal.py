@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from tests.support import activity_factory as activity_service
@@ -24,22 +26,34 @@ def _session(project_id: int):
     return timeline_api.get_project_sessions_by_date(DATE)[0]
 
 
-def test_manual_timeline_project_change_requests_target_refresh(temp_db, monkeypatch):
+def test_manual_timeline_project_change_has_no_folder_index_side_effect(
+    temp_db,
+    monkeypatch,
+):
     source_project = project_service.create_project("Source")
     target_project = project_service.create_project("Target")
     source = _session(source_project)
-    requested: list[int] = []
+
     monkeypatch.setattr(
         folder_index_maintenance_service,
-        "request_refresh_for_project",
-        lambda project_id: requested.append(int(project_id)) or 0,
+        "note_unresolved_file_miss",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Timeline project edits must not signal folder-index maintenance"
+        ),
+    )
+    monkeypatch.setattr(
+        folder_index_maintenance_service,
+        "request_refresh_for_unresolved_file_misses",
+        lambda: pytest.fail(
+            "Timeline project edits must not run folder-index maintenance"
+        ),
     )
 
     result = timeline_api.save_timeline_session_edit(
         DATE,
         source["projection_instance_key"],
         source["projection_revision"],
-        "manual-project-refresh",
+        "manual-project-no-index-refresh",
         target_project,
         False,
         None,
@@ -48,58 +62,9 @@ def test_manual_timeline_project_change_requests_target_refresh(temp_db, monkeyp
 
     assert result["ok"] is True
     assert result["outcome_type"] == "operation_committed"
-    assert requested == [target_project]
 
 
-def test_note_only_edit_does_not_request_project_refresh(temp_db, monkeypatch):
-    source_project = project_service.create_project("Source")
-    source = _session(source_project)
-    requested: list[int] = []
-    monkeypatch.setattr(
-        folder_index_maintenance_service,
-        "request_refresh_for_project",
-        lambda project_id: requested.append(int(project_id)) or 0,
-    )
-
-    result = timeline_api.save_timeline_session_edit(
-        DATE,
-        source["projection_instance_key"],
-        source["projection_revision"],
-        "note-only-no-refresh",
-        None,
-        False,
-        None,
-        "note",
-    )
-
-    assert result["ok"] is True
-    assert requested == []
-
-
-def test_refresh_failure_does_not_fail_committed_timeline_edit(temp_db, monkeypatch):
-    source_project = project_service.create_project("Source")
-    target_project = project_service.create_project("Target")
-    source = _session(source_project)
-
-    def fail_refresh(_project_id: int) -> int:
-        raise RuntimeError("index worker unavailable")
-
-    monkeypatch.setattr(
-        folder_index_maintenance_service,
-        "request_refresh_for_project",
-        fail_refresh,
-    )
-
-    result = timeline_api.save_timeline_session_edit(
-        DATE,
-        source["projection_instance_key"],
-        source["projection_revision"],
-        "manual-refresh-best-effort",
-        target_project,
-        False,
-        None,
-        "",
-    )
-
-    assert result["ok"] is True
-    assert result["outcome_type"] == "operation_committed"
+def test_timeline_api_has_no_folder_index_dependency() -> None:
+    text = Path(timeline_api.__file__).read_text(encoding="utf-8")
+    assert "folder_index_maintenance_service" not in text
+    assert "_manual_project_refresh_target" not in text
