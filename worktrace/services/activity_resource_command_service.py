@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import ntpath
 
 from ..constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_PAUSED
@@ -13,10 +12,8 @@ from ..path_utils import looks_like_local_file_path, normalize_path_key
 from ..platforms.base import ActiveWindow
 from ..resources.resource_builders import make_system_resource
 from ..resources.types import DetectedResource
-from . import activity_inference_job_repository, privacy_service
+from . import privacy_service
 from .resource_service import create_or_update_activity_resource
-
-logger = logging.getLogger(__name__)
 
 
 def _detect_resource(activity: dict, file_path_hint: str) -> DetectedResource:
@@ -93,15 +90,6 @@ def _upgrade_path_identity(
     )
 
 
-def _sync_open_activity_project_safely(activity_id: int) -> None:
-    try:
-        from .project_inference_service import sync_persisted_open_activity_project
-
-        sync_persisted_open_activity_project(int(activity_id))
-    except Exception:
-        logger.exception("path open-row project sync failed activity_id=%s", activity_id)
-
-
 def _persist_activity_path(
     activity_id: int,
     file_path_hint: str,
@@ -112,7 +100,6 @@ def _persist_activity_path(
     if not cleaned:
         return False, False
 
-    activity_closed = False
     with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
         conn = uow.connection
         current_row = conn.execute(
@@ -132,6 +119,14 @@ def _persist_activity_path(
             (int(activity_id),),
         ).fetchone()
         existing = dict(current_resource_row) if current_resource_row else None
+        existing_path = str((existing or {}).get("path_hint") or "").strip()
+        path_fact_changed = (
+            looks_like_local_file_path(cleaned)
+            and (
+                not existing_path
+                or normalize_path_key(existing_path) != normalize_path_key(cleaned)
+            )
+        )
         decision = privacy_service.evaluate_exclusion(
             ActiveWindow(
                 app_name=str(activity.get("app_name") or ""),
@@ -157,7 +152,6 @@ def _persist_activity_path(
             return False, False
         activity["status"] = latest_row["status"]
         activity["end_time"] = latest_row["end_time"]
-        activity_closed = latest_row["end_time"] is not None
         status = str(latest_row["status"] or "")
         excluded = excluded or status == STATUS_EXCLUDED
         if excluded:
@@ -206,20 +200,19 @@ def _persist_activity_path(
         )
         create_or_update_activity_resource(int(activity_id), resource, conn=conn)
 
-        if not excluded and activity_closed:
-            activity_inference_job_repository.enqueue_closed_activity_ids(
-                conn,
-                [int(activity_id)],
+        if not excluded and path_fact_changed:
+            from .project_inference_service import (
+                reinfer_after_resource_upgrade_in_transaction,
             )
+
+            reinfer_after_resource_upgrade_in_transaction(conn, int(activity_id))
         uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
 
-    if not excluded and not activity_closed:
-        _sync_open_activity_project_safely(int(activity_id))
     return True, excluded
 
 
 def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> bool:
-    """Atomically update path/resource facts and schedule derived state."""
+    """Atomically update path/resource facts and derived automatic attribution."""
 
     updated, _excluded = _persist_activity_path(activity_id, file_path_hint)
     return updated
