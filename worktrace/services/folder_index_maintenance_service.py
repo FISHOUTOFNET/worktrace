@@ -162,7 +162,12 @@ def unresolved_file_indexes_refreshed_since(
     *,
     conn=None,
 ) -> bool:
-    """Return whether every eligible folder index started after the miss fact."""
+    """Return whether every eligible index began strictly after the miss fact.
+
+    Timestamps are stored at second precision. Equality is intentionally treated
+    as inconclusive: an index build and a miss in the same second have no reliable
+    causal ordering, so one later rebuild is safer than accepting a stale snapshot.
+    """
 
     boundary = str(unresolved_at or "").strip()
     if not boundary:
@@ -175,7 +180,7 @@ def unresolved_file_indexes_refreshed_since(
                    SUM(
                        CASE
                            WHEN state.valid_from IS NOT NULL
-                            AND state.valid_from >= ?
+                            AND state.valid_from > ?
                             AND COALESCE(state.refresh_requested, 0) = 0
                             AND COALESCE(state.build_status, '') = 'ready'
                            THEN 1 ELSE 0
@@ -241,7 +246,7 @@ def request_refresh_for_unresolved_file_misses() -> int:
               AND COALESCE(state.build_status, '') <> 'indexing'
               AND (
                     state.valid_from IS NULL
-                    OR state.valid_from < ?
+                    OR state.valid_from <= ?
                     OR COALESCE(state.build_status, '') <> 'ready'
               )
             ORDER BY fpr.id
@@ -254,7 +259,7 @@ def request_refresh_for_unresolved_file_misses() -> int:
         return queued
 
     # All stale candidates may already be pending/indexing. Keep the signal until
-    # a generation that started after the miss is actually published.
+    # a generation that began strictly after the miss is actually published.
     if unresolved_file_indexes_refreshed_since(unresolved_since):
         _clear_unresolved_file_miss_through(current_identity, unresolved_since)
     return 0
