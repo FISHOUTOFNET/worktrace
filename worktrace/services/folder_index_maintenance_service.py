@@ -2,7 +2,8 @@
 
 This module owns refresh *selection* only. The folder-index service remains the
 single scanner/index writer; callers enqueue rule rebuilds through its public
-command boundary. Ordinary filename-index misses never call this module.
+command boundary. Pathless filename misses only signal this policy and never
+scan the filesystem synchronously.
 """
 
 from __future__ import annotations
@@ -28,12 +29,14 @@ HOT_PROJECT_ACTIVITY_DAYS = 7
 HOT_PROJECT_LIMIT = 10
 HOT_INDEX_FRESHNESS_MINUTES = 15
 HOT_REFRESH_QUERY_COOLDOWN_SECONDS = 300.0
-PROJECT_REFRESH_COOLDOWN_SECONDS = 60.0
+UNRESOLVED_FILE_REFRESH_COOLDOWN_SECONDS = 60.0
 _MAX_REFRESH_CACHE_ENTRIES = 256
 
 _REFRESH_CACHE_LOCK = threading.Lock()
-_PROJECT_REFRESH_TIMES: dict[tuple[str, int, int], float] = {}
 _HOT_REFRESH_TIMES: dict[tuple[str, int], float] = {}
+_UNRESOLVED_REFRESH_TIMES: dict[tuple[str, int], float] = {}
+_UNRESOLVED_FILE_MISS_EVENT = threading.Event()
+_UNRESOLVED_FILE_MISS_SINCE: str | None = None
 
 
 def _replacement_cache_identity() -> tuple[str, int]:
@@ -86,24 +89,105 @@ def _queue_rule_ids(rule_ids: list[int]) -> int:
     return queued
 
 
-def request_refresh_for_project(project_id: int) -> int:
-    """Queue enabled folder rules for one concrete project.
+def note_unresolved_file_miss(unresolved_at: str | None = None) -> None:
+    """Record a pathless local-file miss and wake the existing index worker."""
 
-    This is the strong user-signal path (for example a manual Timeline project
-    correction). It deliberately bypasses the normal 15-minute freshness gate,
-    but repeated successful requests for the same project are coalesced for 60
-    seconds. Failed attempts do not consume the cooldown.
-    """
+    at = str(unresolved_at or now_str())
+    global _UNRESOLVED_FILE_MISS_SINCE
+    with _REFRESH_CACHE_LOCK:
+        if (
+            _UNRESOLVED_FILE_MISS_SINCE is None
+            or at > _UNRESOLVED_FILE_MISS_SINCE
+        ):
+            _UNRESOLVED_FILE_MISS_SINCE = at
+        _UNRESOLVED_FILE_MISS_EVENT.set()
+    try:
+        from . import folder_index_service
 
-    value = int(project_id)
-    if value <= 0:
+        folder_index_service.wake_folder_index_worker()
+    except Exception:
+        # The worker also wakes on its normal cadence. The pending signal remains
+        # set, so a transient wake failure cannot lose the requested maintenance.
+        logging.exception("unresolved file miss could not wake folder index worker")
+
+
+def _pending_unresolved_file_miss_since() -> str | None:
+    if not _UNRESOLVED_FILE_MISS_EVENT.is_set():
+        return None
+    with _REFRESH_CACHE_LOCK:
+        return _UNRESOLVED_FILE_MISS_SINCE
+
+
+def _clear_unresolved_file_miss_through(resolved_through: str) -> None:
+    global _UNRESOLVED_FILE_MISS_SINCE
+    with _REFRESH_CACHE_LOCK:
+        current = _UNRESOLVED_FILE_MISS_SINCE
+        if current is not None and current <= resolved_through:
+            _UNRESOLVED_FILE_MISS_SINCE = None
+            _UNRESOLVED_FILE_MISS_EVENT.clear()
+
+
+def unresolved_file_indexes_refreshed_since(
+    unresolved_at: str | None,
+    *,
+    conn=None,
+) -> bool:
+    """Return whether every eligible folder index started after the miss fact."""
+
+    boundary = str(unresolved_at or "").strip()
+    if not boundary:
+        return False
+
+    def _check(read_conn) -> bool:
+        row = read_conn.execute(
+            """
+            SELECT COUNT(*) AS total,
+                   SUM(
+                       CASE
+                           WHEN state.valid_from IS NOT NULL
+                            AND state.valid_from >= ?
+                            AND COALESCE(state.refresh_requested, 0) = 0
+                            AND COALESCE(state.build_status, '') = 'ready'
+                           THEN 1 ELSE 0
+                       END
+                   ) AS refreshed
+            FROM folder_project_rule fpr
+            JOIN project p ON p.id = fpr.project_id
+            LEFT JOIN folder_rule_index_state state
+              ON state.folder_rule_id = fpr.id
+            WHERE fpr.enabled = 1
+              AND p.enabled = 1
+              AND COALESCE(p.is_archived, 0) = 0
+              AND COALESCE(p.is_deleted, 0) = 0
+              AND p.name NOT IN (?, ?)
+            """,
+            (boundary, UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT),
+        ).fetchone()
+        total = int(row["total"] or 0)
+        return int(row["refreshed"] or 0) == total
+
+    if conn is not None:
+        return _check(conn)
+    with get_connection() as read_conn:
+        return _check(read_conn)
+
+
+def request_refresh_for_unresolved_file_misses() -> int:
+    """Queue one coalesced all-project refresh for unresolved pathless files."""
+
+    unresolved_since = _pending_unresolved_file_miss_since()
+    if not unresolved_since:
         return 0
+    if unresolved_file_indexes_refreshed_since(unresolved_since):
+        _clear_unresolved_file_miss_through(unresolved_since)
+        return 0
+
     database_key, replacement_epoch = _replacement_cache_identity()
-    cache_key = (database_key, replacement_epoch, value)
+    cache_key = (database_key, replacement_epoch)
     if not _reserve_refresh(
-        _PROJECT_REFRESH_TIMES,
+        _UNRESOLVED_REFRESH_TIMES,
         cache_key,
-        cooldown_seconds=PROJECT_REFRESH_COOLDOWN_SECONDS,
+        cooldown_seconds=UNRESOLVED_FILE_REFRESH_COOLDOWN_SECONDS,
     ):
         return 0
 
@@ -113,19 +197,34 @@ def request_refresh_for_project(project_id: int) -> int:
             SELECT fpr.id
             FROM folder_project_rule fpr
             JOIN project p ON p.id = fpr.project_id
-            WHERE fpr.project_id = ?
-              AND fpr.enabled = 1
+            LEFT JOIN folder_rule_index_state state
+              ON state.folder_rule_id = fpr.id
+            WHERE fpr.enabled = 1
               AND p.enabled = 1
               AND COALESCE(p.is_archived, 0) = 0
               AND COALESCE(p.is_deleted, 0) = 0
               AND p.name NOT IN (?, ?)
+              AND COALESCE(state.refresh_requested, 0) = 0
+              AND COALESCE(state.build_status, '') <> 'indexing'
+              AND (
+                    state.valid_from IS NULL
+                    OR state.valid_from < ?
+                    OR COALESCE(state.build_status, '') <> 'ready'
+              )
             ORDER BY fpr.id
             """,
-            (value, UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT),
+            (UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT, unresolved_since),
         ).fetchall()
     queued = _queue_rule_ids([int(row["id"]) for row in rows])
-    _mark_refresh_success(_PROJECT_REFRESH_TIMES, cache_key)
-    return queued
+    if queued:
+        _mark_refresh_success(_UNRESOLVED_REFRESH_TIMES, cache_key)
+        return queued
+
+    # All stale candidates may already be pending/indexing. Keep the signal until
+    # a generation that started after the miss is actually published.
+    if unresolved_file_indexes_refreshed_since(unresolved_since):
+        _clear_unresolved_file_miss_through(unresolved_since)
+    return 0
 
 
 def request_refresh_for_hot_projects() -> int:
@@ -268,8 +367,10 @@ __all__ = [
     "HOT_PROJECT_ACTIVITY_DAYS",
     "HOT_PROJECT_LIMIT",
     "HOT_REFRESH_QUERY_COOLDOWN_SECONDS",
-    "PROJECT_REFRESH_COOLDOWN_SECONDS",
+    "UNRESOLVED_FILE_REFRESH_COOLDOWN_SECONDS",
+    "note_unresolved_file_miss",
     "reconcile_open_unclassified_activities",
     "request_refresh_for_hot_projects",
-    "request_refresh_for_project",
+    "request_refresh_for_unresolved_file_misses",
+    "unresolved_file_indexes_refreshed_since",
 ]
