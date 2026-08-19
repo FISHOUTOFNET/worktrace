@@ -16,6 +16,8 @@ BROWSER_PROCESS_NAMES = frozenset({
     "vivaldi.exe", "vivaldi",
 })
 
+_EDGE_PROCESS_NAMES = frozenset({"msedge.exe", "msedge"})
+
 _BROWSER_TITLE_SUFFIXES = [
     "- Google Chrome",
     "- Microsoft Edge",
@@ -28,12 +30,9 @@ _BROWSER_TITLE_SUFFIXES = [
     "— Mozilla Firefox",
 ]
 
-# Edge may append page-count/profile window state after the active page title.
-# Strip only confirmed forms that terminate in an Edge product brand.
-_EDGE_DYNAMIC_WINDOW_SUFFIX = re.compile(
-    r"(?:\s*和另外\s*\d+\s*个页面|\s+and\s+\d+\s+more\s+pages?)"
-    r"(?:\s*[-–—]\s*.+?)?"
-    r"\s*[-–—]\s*Microsoft Edge(?:\s+(?:Beta|Dev|Canary))?\s*$",
+# Edge page-count text is browser-window state, not page identity.
+_EDGE_DYNAMIC_PAGE_COUNT_SUFFIX = re.compile(
+    r"(?:\s*和另外\s*\d+\s*个页面|\s+and\s+\d+\s+more\s+pages?).*$",
     re.IGNORECASE,
 )
 
@@ -56,7 +55,7 @@ class BrowserDetector:
             return None
 
         title = (active_window.window_title or "").strip()
-        cleaned_title = self._clean_title(title)
+        cleaned_title = self._clean_title(title, process_lower)
         uri_host = self._extract_uri_host(title)
         is_blank = self._is_blank_page(cleaned_title)
 
@@ -94,10 +93,12 @@ class BrowserDetector:
             uri_host=uri_host,
         )
 
-    def _clean_title(self, title: str) -> str:
-        cleaned = _EDGE_DYNAMIC_WINDOW_SUFFIX.sub("", title).strip()
-        if cleaned != title.strip():
-            return cleaned
+    def _clean_title(self, title: str, process_lower: str) -> str:
+        cleaned = title.strip()
+        if process_lower in _EDGE_PROCESS_NAMES:
+            edge_cleaned = _EDGE_DYNAMIC_PAGE_COUNT_SUFFIX.sub("", cleaned).strip()
+            if edge_cleaned != cleaned:
+                return edge_cleaned
 
         for suffix in _BROWSER_TITLE_SUFFIXES:
             if cleaned.endswith(suffix):
