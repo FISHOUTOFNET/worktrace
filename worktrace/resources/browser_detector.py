@@ -28,6 +28,18 @@ _BROWSER_TITLE_SUFFIXES = [
     "— Mozilla Firefox",
 ]
 
+# Edge can append browser-window state after the active page title, for example:
+# "ChatGPT 和另外 2 个页面 - 个人 - Microsoft Edge".  The page count and
+# optional profile describe the browser window, not the page resource itself.
+# Keep this deliberately narrow: only strip the confirmed Edge forms when the
+# complete suffix terminates in an Edge product brand.
+_EDGE_DYNAMIC_WINDOW_SUFFIX = re.compile(
+    r"(?:\s*和另外\s*\d+\s*个页面|\s+and\s+\d+\s+more\s+pages?)"
+    r"(?:\s*[-–—]\s*.+?)?"
+    r"\s*[-–—]\s*Microsoft Edge(?:\s+(?:Beta|Dev|Canary))?\s*$",
+    re.IGNORECASE,
+)
+
 # Patterns for new tab / blank pages
 _BLANK_PAGE_PATTERNS = re.compile(
     r"^(新标签页|新标签|New Tab|NewTabPage|about:blank|about:home|about:newtab|空白页)$",
@@ -86,14 +98,17 @@ class BrowserDetector:
         )
 
     def _clean_title(self, title: str) -> str:
-        cleaned = title
+        cleaned = _EDGE_DYNAMIC_WINDOW_SUFFIX.sub("", title).strip()
+        if cleaned != title.strip():
+            return cleaned
+
         for suffix in _BROWSER_TITLE_SUFFIXES:
             if cleaned.endswith(suffix):
                 cleaned = cleaned[: -len(suffix)].strip()
                 break
-        # Also try regex-based cleanup for variations
+        # Also try regex-based cleanup for variations and Edge release channels.
         cleaned = re.sub(
-            r"\s*[-–—]\s*(Google Chrome|Microsoft Edge|Mozilla Firefox|Brave|Opera|Vivaldi)\s*$",
+            r"\s*[-–—]\s*(Google Chrome|Microsoft Edge(?: Beta| Dev| Canary)?|Mozilla Firefox|Brave|Opera|Vivaldi)\s*$",
             "",
             cleaned,
             flags=re.IGNORECASE,
