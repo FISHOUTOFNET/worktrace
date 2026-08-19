@@ -19,7 +19,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.parallel_safe]
         "ChatGPT - Valuation and 12 more pages - Profile 1 - Microsoft Edge Dev",
     ],
 )
-def test_edge_dynamic_window_suffix_does_not_change_page_identity(window_title: str):
+def test_dynamic_window_suffix_does_not_change_page_identity(window_title: str):
     detector = BrowserDetector()
     baseline = detector.detect(
         ActiveWindow(
@@ -54,7 +54,7 @@ def test_observed_edge_title_is_normalized():
     assert result.window_title == title
 
 
-def test_edge_dynamic_window_suffix_is_cleaned_before_blank_page_detection():
+def test_dynamic_window_suffix_is_cleaned_before_blank_page_detection():
     result = BrowserDetector().detect(
         ActiveWindow(
             app_name="Edge",
@@ -69,17 +69,32 @@ def test_edge_dynamic_window_suffix_is_cleaned_before_blank_page_detection():
     assert result.is_anchor is False
 
 
-def test_page_count_cleanup_is_scoped_to_edge_process():
+@pytest.mark.parametrize(
+    ("app_name", "process_name", "brand"),
+    [
+        ("Chrome", "chrome.exe", "Google Chrome"),
+        ("Edge", "msedge.exe", "Microsoft Edge"),
+        ("Firefox", "firefox.exe", "Mozilla Firefox"),
+        ("Brave", "brave.exe", "Brave"),
+        ("Opera", "opera.exe", "Opera"),
+        ("Vivaldi", "vivaldi.exe", "Vivaldi"),
+    ],
+)
+def test_page_count_cleanup_applies_to_supported_browsers(
+    app_name: str,
+    process_name: str,
+    brand: str,
+):
     result = BrowserDetector().detect(
         ActiveWindow(
-            app_name="Chrome",
-            process_name="chrome.exe",
-            window_title="Guide 和另外 2 个页面 - Google Chrome",
+            app_name=app_name,
+            process_name=process_name,
+            window_title=f"Guide 和另外 2 个页面 - {brand}",
         )
     )
 
     assert result is not None
-    assert result.display_name == "Guide 和另外 2 个页面"
+    assert result.display_name == "Guide"
 
 
 def test_unconfirmed_other_tabs_wording_is_not_collapsed():
