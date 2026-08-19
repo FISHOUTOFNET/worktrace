@@ -32,12 +32,6 @@ _GENERIC_FILE_PROJECT_NAMES = {
     "桌面",
     "文档",
 }
-_PATHLESS_FILE_IDENTITY_PREFIXES = (
-    "office_file_name:",
-    "ide_file_name:",
-    "email_file_name:",
-    "file_name:",
-)
 _DEFER_REASON_FIELD = "_defer_reason"
 _FOLDER_INDEX_DEFER_REASON = "folder_index_refresh"
 _KEYWORD_RULE_CACHE_LOCK = threading.RLock()
@@ -210,26 +204,54 @@ def _is_pathless_file_index_candidate(resource: dict) -> bool:
         return False
     if not str(resource.get("display_name") or "").strip():
         return False
-    identity = str(resource.get("identity_key") or "").strip().casefold()
-    return identity.startswith(_PATHLESS_FILE_IDENTITY_PREFIXES)
+    resource_kind = str(resource.get("resource_kind") or "").strip()
+    resource_subtype = str(resource.get("resource_subtype") or "").strip()
+    if resource_kind in {"office_document", "local_file"}:
+        return True
+    if resource_kind == "ide_file":
+        return resource_subtype == "code_file"
+    if resource_kind == "email":
+        return resource_subtype == "email_file"
+    return False
+
+
+def _pathless_file_index_refresh_boundary(
+    activity: dict,
+    resource: dict,
+    assignment,
+) -> str | None:
+    if assignment is None or not is_assignment_unresolved(assignment):
+        return None
+    if not _is_pathless_file_index_candidate(resource):
+        return None
+    assignment_at = str(
+        assignment["updated_at"] or assignment["created_at"] or ""
+    ).strip()
+    if not assignment_at:
+        return None
+    end_time = str(activity.get("end_time") or "").strip()
+    if end_time and end_time > assignment_at:
+        return end_time
+    return assignment_at
 
 
 def _current_index_is_newer_than_unresolved_assignment(
     conn,
+    activity: dict,
     resource: dict,
     existing,
 ) -> bool:
-    if existing is None or not is_assignment_unresolved(existing):
-        return False
-    if not _is_pathless_file_index_candidate(resource):
-        return False
-    unresolved_at = str(existing["updated_at"] or existing["created_at"] or "").strip()
-    if not unresolved_at:
+    boundary = _pathless_file_index_refresh_boundary(
+        activity,
+        resource,
+        existing,
+    )
+    if not boundary:
         return False
     from . import folder_index_maintenance_service
 
     return folder_index_maintenance_service.unresolved_file_indexes_refreshed_since(
-        unresolved_at,
+        boundary,
         conn=conn,
     )
 
@@ -277,6 +299,7 @@ def _assign_project_for_activity_in_transaction(
         and not allow_resource_upgrade
         and _current_index_is_newer_than_unresolved_assignment(
             conn,
+            activity_dict,
             resource,
             existing,
         )
@@ -309,8 +332,13 @@ def _assign_project_for_activity_in_transaction(
     if unresolved_pathless_miss:
         from . import folder_index_maintenance_service
 
+        refresh_boundary = _pathless_file_index_refresh_boundary(
+            activity_dict,
+            resource,
+            result,
+        )
         folder_index_maintenance_service.note_unresolved_file_miss(
-            str(result.get("updated_at") or "") or None
+            refresh_boundary
         )
         result[_DEFER_REASON_FIELD] = _FOLDER_INDEX_DEFER_REASON
     return result, changed

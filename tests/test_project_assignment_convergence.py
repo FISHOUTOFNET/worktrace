@@ -163,6 +163,74 @@ def test_concrete_path_upgrade_may_correct_automatic_assignment(
     assert after["source_rule_id"] == rule_b
 
 
+@pytest.mark.parametrize(
+    ("app_name", "process_name", "window_title"),
+    [
+        pytest.param(
+            "PowerPoint",
+            "POWERPNT.EXE",
+            "Deck.pptx - PowerPoint",
+            id="powerpoint",
+        ),
+        pytest.param(
+            "Visual Studio Code",
+            "Code.exe",
+            "main.py - Visual Studio Code",
+            id="ide-code-file",
+        ),
+        pytest.param(
+            "Outlook",
+            "OUTLOOK.EXE",
+            "Notice.msg - Outlook",
+            id="email-file",
+        ),
+        pytest.param(
+            "Editor",
+            "editor.exe",
+            "notes.txt - Editor",
+            id="local-file",
+        ),
+        pytest.param(
+            "Custom Viewer",
+            "viewer.exe",
+            "FallbackDeck.pptx - Custom Viewer",
+            id="fallback-office-file",
+        ),
+    ],
+)
+def test_pathless_file_resource_families_defer_for_index_refresh(
+    temp_db,
+    monkeypatch,
+    app_name,
+    process_name,
+    window_title,
+):
+    project_id = project_service.create_project("Potential Owner")
+    folder_rule_service.create_or_update_folder_rule(
+        r"D:\PotentialOwner",
+        project_id,
+        True,
+    )
+    activity_id = activity_service.create_activity(
+        app_name,
+        process_name,
+        window_title,
+        start_time=now_str(),
+    )
+    signals: list[str | None] = []
+    monkeypatch.setattr(
+        folder_index_maintenance_service,
+        "note_unresolved_file_miss",
+        lambda boundary=None, **_kwargs: signals.append(boundary),
+    )
+
+    result = project_inference_service.assign_project_for_activity(activity_id)
+
+    assert result["source"] in {"uncategorized", "suggested_project_name"}
+    assert result["_defer_reason"] == "folder_index_refresh"
+    assert signals == [str(result["updated_at"])]
+
+
 def test_closed_pathless_file_waits_for_new_index_then_converges(
     temp_db,
     tmp_path,
@@ -191,7 +259,8 @@ def test_closed_pathless_file_waits_for_new_index_then_converges(
     assert first["source"] == "uncategorized"
     assert first["_defer_reason"] == "folder_index_refresh"
 
-    activity_service.close_activity_row(activity_id, now_str())
+    closed_at = now_str()
+    activity_service.close_activity_row(activity_id, closed_at)
     with get_connection() as conn:
         assert activity_inference_job_repository.enqueue_closed_activity_ids(
             conn,
@@ -233,7 +302,7 @@ def test_closed_pathless_file_waits_for_new_index_then_converges(
                 build_status = 'ready', status = 'ready'
             WHERE folder_rule_id = ?
             """,
-            (_one_second_after(str(first["updated_at"])), rule_id),
+            (_one_second_after(closed_at), rule_id),
         )
         conn.execute(
             "UPDATE activity_inference_job SET next_attempt_at = NULL WHERE activity_id = ?",
@@ -255,6 +324,86 @@ def test_closed_pathless_file_waits_for_new_index_then_converges(
             "SELECT 1 FROM activity_inference_job WHERE activity_id = ?",
             (activity_id,),
         ).fetchone() is None
+
+
+def test_closed_pathless_file_refreshes_after_file_appears_during_activity(
+    temp_db,
+    tmp_path,
+    allow_sensitive_runtime,
+    monkeypatch,
+):
+    project_id = project_service.create_project("Late File")
+    root = tmp_path / "LateFile"
+    root.mkdir()
+    (root / "existing.pptx").write_text("existing", encoding="utf-8")
+    rule_id = folder_rule_service.create_or_update_folder_rule(
+        str(root),
+        project_id,
+        True,
+    )
+    assert folder_index_service.rebuild_folder_index(rule_id)
+
+    activity_id = activity_service.create_activity(
+        "PowerPoint",
+        "POWERPNT.EXE",
+        "LaterDeck.pptx - PowerPoint",
+        start_time=now_str(),
+    )
+    first = project_inference_service.assign_project_for_activity(activity_id)
+    assert first["source"] == "uncategorized"
+    assert first["_defer_reason"] == "folder_index_refresh"
+
+    # Simulate the first miss-triggered refresh finishing before the file becomes
+    # visible in the ruled folder (for example during Save As or cloud sync).
+    assert folder_index_service.rebuild_folder_index(rule_id)
+    first_refresh_at = _one_second_after(str(first["updated_at"]))
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE folder_rule_index_state
+            SET valid_from = ?, refresh_requested = 0,
+                build_status = 'ready', status = 'ready'
+            WHERE folder_rule_id = ?
+            """,
+            (first_refresh_at, rule_id),
+        )
+    assert (
+        folder_index_maintenance_service.request_refresh_for_unresolved_file_misses()
+        == 0
+    )
+
+    (root / "LaterDeck.pptx").write_text("new", encoding="utf-8")
+    closed_at = _one_second_after(first_refresh_at)
+    activity_service.close_activity_row(activity_id, closed_at)
+
+    signals: list[str | None] = []
+    monkeypatch.setattr(
+        folder_index_maintenance_service,
+        "note_unresolved_file_miss",
+        lambda boundary=None, **_kwargs: signals.append(boundary),
+    )
+    second = project_inference_service.assign_project_for_activity(activity_id)
+
+    assert second["source"] == "uncategorized"
+    assert second["_defer_reason"] == "folder_index_refresh"
+    assert signals == [closed_at]
+
+    assert folder_index_service.rebuild_folder_index(rule_id)
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE folder_rule_index_state
+            SET valid_from = ?, refresh_requested = 0,
+                build_status = 'ready', status = 'ready'
+            WHERE folder_rule_id = ?
+            """,
+            (_one_second_after(closed_at), rule_id),
+        )
+
+    third = project_inference_service.assign_project_for_activity(activity_id)
+    assert third["project_id"] == project_id
+    assert third["source"] == "folder_rule"
+    assert third["source_rule_id"] == rule_id
 
 
 def test_timeline_project_override_does_not_mutate_activity_assignment(temp_db):
