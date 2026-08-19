@@ -28,11 +28,8 @@ _BROWSER_TITLE_SUFFIXES = [
     "— Mozilla Firefox",
 ]
 
-# Edge can append browser-window state after the active page title, for example:
-# "ChatGPT 和另外 2 个页面 - 个人 - Microsoft Edge".  The page count and
-# optional profile describe the browser window, not the page resource itself.
-# Keep this deliberately narrow: only strip the confirmed Edge forms when the
-# complete suffix terminates in an Edge product brand.
+# Edge may append page-count/profile window state after the active page title.
+# Strip only confirmed forms that terminate in an Edge product brand.
 _EDGE_DYNAMIC_WINDOW_SUFFIX = re.compile(
     r"(?:\s*和另外\s*\d+\s*个页面|\s+and\s+\d+\s+more\s+pages?)"
     r"(?:\s*[-–—]\s*.+?)?"
