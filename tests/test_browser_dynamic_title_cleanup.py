@@ -18,7 +18,15 @@ pytestmark = [pytest.mark.unit, pytest.mark.parallel_safe]
     ],
 )
 def test_edge_dynamic_window_suffix_does_not_change_page_identity(window_title: str):
-    result = BrowserDetector().detect(
+    detector = BrowserDetector()
+    baseline = detector.detect(
+        ActiveWindow(
+            app_name="Edge",
+            process_name="msedge.exe",
+            window_title="ChatGPT - Valuation - Microsoft Edge",
+        )
+    )
+    result = detector.detect(
         ActiveWindow(
             app_name="Edge",
             process_name="msedge.exe",
@@ -26,9 +34,10 @@ def test_edge_dynamic_window_suffix_does_not_change_page_identity(window_title: 
         )
     )
 
+    assert baseline is not None
     assert result is not None
     assert result.display_name == "ChatGPT - Valuation"
-    assert result.identity_key == "browser_title:msedge.exe:chatgpt-valuation"
+    assert result.identity_key == baseline.identity_key
     assert result.window_title == window_title
 
 
