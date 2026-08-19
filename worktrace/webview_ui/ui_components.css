@@ -124,18 +124,18 @@ th,
     grid-column: 2;
 }
 
-/* Keep viewport ownership stable without letting native scrollbars consume layout width.
-   Scrolling remains owned by the same containers; only the scrollbar chrome is hidden. */
+/* Active pages keep controls fixed; only the explicit content regions below own scrolling. */
 .page {
     min-height: 0;
 }
 
 :where(
-    .page,
     #recent-list,
     .timeline-list,
-    .timeline-inspector,
+    .activity-list,
     .table-scroll,
+    .rules-scroll-region,
+    .settings-content,
     .drawer,
     .dialog,
     .first-run-notice-text,
@@ -149,11 +149,12 @@ th,
 }
 
 :where(
-    .page,
     #recent-list,
     .timeline-list,
-    .timeline-inspector,
+    .activity-list,
     .table-scroll,
+    .rules-scroll-region,
+    .settings-content,
     .drawer,
     .dialog,
     .first-run-notice-text,
@@ -167,7 +168,10 @@ th,
 }
 
 .overview-page.active,
-.timeline-page.active {
+.timeline-page.active,
+.statistics-page.active,
+.rules-page.active,
+.settings-page.active {
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -189,7 +193,20 @@ th,
 .timeline-page > .page-header,
 .timeline-page > .timeline-toolbar,
 .timeline-page > .inline-alert,
-.timeline-page > .loading-state {
+.timeline-page > .loading-state,
+.statistics-page > .page-header,
+.statistics-page > .statistics-toolbar,
+.statistics-page > .stats-scope-row,
+.statistics-page > .inline-alert,
+.statistics-page > #statistics-loading,
+.statistics-page > #stats-export-status,
+.rules-page > .page-header,
+.rules-page > .rules-toolbar,
+.rules-page > .inline-alert,
+.rules-page > .loading-state,
+.settings-page > .page-header,
+.settings-page > .inline-alert,
+.settings-page > #settings-loading {
     flex: 0 0 auto;
 }
 
@@ -240,9 +257,82 @@ th,
     height: auto;
 }
 
-.timeline-list,
-.timeline-inspector {
+.timeline-list {
     overflow: auto;
+}
+
+.timeline-inspector {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.timeline-inspector > .timeline-readonly-notice,
+.timeline-inspector > .timeline-edit-panel {
+    flex: 0 0 auto;
+}
+.activity-details {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.activity-details h2 { flex: 0 0 auto; }
+.activity-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+
+#statistics-results:not([hidden]) {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+#statistics-results > .metric-strip { flex: 0 0 auto; }
+.stats-result {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+.stats-result > .tabs { flex: 0 0 auto; }
+#stats-project-panel:not([hidden]),
+#stats-app-panel:not([hidden]) {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+.stats-result .table-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+
+.rules-scroll-region {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+
+#settings-status:not([hidden]) {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: grid;
+}
+.settings-content {
+    min-height: 0;
+    align-self: stretch;
+    overflow: auto;
+}
+
+@media (max-width: 959px) {
+    .timeline-inspector { display: none; }
+    .timeline-inspector.drawer-open { display: flex; }
+    #settings-status:not([hidden]) { grid-template-rows: auto minmax(0, 1fr); }
+    .settings-categories { overflow-y: hidden; }
 }
 
 @media (min-width: 960px) {
