@@ -27,6 +27,10 @@ class TestStandardCiLayer:
         assert '-m "not benchmark"' in source
         assert "scripts/run_pytest_ci.py" in source
 
+    def test_standard_package_smoke_runs_on_pull_requests_only(self) -> None:
+        source = CI_YML.read_text(encoding="utf-8")
+        assert "run_build_smoke: ${{ github.event_name == 'pull_request' }}" in source
+
     def test_standard_package_smoke_is_build_only(self) -> None:
         source = VALIDATION_YML.read_text(encoding="utf-8")
         assert "Build Windows executable and installer" in source
@@ -77,7 +81,7 @@ class TestInstallerValidationLayer:
     def test_installer_workflow_exists(self) -> None:
         assert INSTALLER_YML.is_file()
 
-    def test_installer_pr_trigger_is_path_scoped(self) -> None:
+    def test_installer_pr_trigger_requires_explicit_label(self) -> None:
         source = INSTALLER_YML.read_text(encoding="utf-8")
         pull_request = re.search(
             r"^  pull_request:\s*\n(?P<body>(?:    .*\n)+)",
@@ -85,7 +89,9 @@ class TestInstallerValidationLayer:
             re.MULTILINE,
         )
         assert pull_request is not None
-        assert "paths:" in pull_request.group("body")
+        assert "types: [labeled]" in pull_request.group("body")
+        assert "paths:" not in pull_request.group("body")
+        assert "github.event.label.name == 'run-installer-validation'" in source
 
     def test_installer_runs_on_main_tags_and_manual_dispatch(self) -> None:
         source = INSTALLER_YML.read_text(encoding="utf-8")

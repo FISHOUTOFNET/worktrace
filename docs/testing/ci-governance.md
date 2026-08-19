@@ -4,11 +4,15 @@ WorkTrace CI is intentionally split by validation cost and responsibility.
 
 ## Standard CI
 
-`CI` runs for every pull request and every push to `main`. It is the merge-time correctness gate and keeps three parallel Windows jobs:
+`CI` runs for every pull request and every push to `main`. It is the merge-time correctness gate.
+
+For pull requests it keeps three parallel Windows jobs:
 
 - the full Python 3.11 non-benchmark suite plus Python compilation;
 - WebView Node behavior, the FD Work Edge DOM fixture, and typography acceptance on the same UI runner;
-- a build-only Windows package smoke that verifies `Trace.exe` and `Trace-Setup.exe` can be produced.
+- a build-only Windows package smoke that verifies the canonical versioned executable and installer can be produced.
+
+For pushes to `main`, Standard CI keeps the Python and WebView/UI correctness jobs but skips its package-build job because `Installer validation` already builds the same canonical package before exercising the packaged runtime lifecycle. This avoids building the Windows release twice for the same `main` revision.
 
 Pytest owns collection and marker validation. `pytest.ini` enables strict markers, and Standard CI runs the full non-benchmark suite rather than relying on a custom test inventory or affected-test scheduler.
 
@@ -29,17 +33,13 @@ The Python diagnostic artifact contract in `_validation.yml` remains the canonic
 - uninstall while Trace is running;
 - cleanup of the startup value.
 
-It runs automatically on every push to `main`, on release tags matching `v*`, and on pull requests that touch installer/package/runtime-sensitive paths. It can also be dispatched manually against an exact commit SHA.
+It runs automatically on every push to `main` and on release tags matching `v*`. Pull-request lifecycle validation is explicit rather than path-inferred: add the `run-installer-validation` label when a PR needs packaged install/upgrade/uninstall acceptance. The workflow can also be dispatched manually against an exact commit SHA.
 
-Both Standard CI package smoke and Installer validation use `.github/actions/build-windows-package` so package construction has one implementation.
+Both Standard CI package smoke and Installer validation use `.github/actions/build-windows-package` so package construction has one implementation. Pull requests still get one package-build smoke per Head; installer lifecycle runs only when explicitly requested. On `main`, Installer validation owns the single package build used by lifecycle acceptance.
 
 ## Performance validation
 
 `Performance validation` remains an opt-in or scheduled product-performance gate. It is not part of ordinary Standard CI.
-
-## Standard timing validation
-
-`Standard timing validation` remains an opt-in baseline-vs-HEAD test-suite timing gate. It is separate from product performance because the two workflows answer different regression questions.
 
 ## Policy
 

@@ -11,27 +11,7 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
-    paths:
-      - ".github/actions/build-windows-package/**"
-      - ".github/workflows/installer-validation.yml"
-      - "WorkTrace.spec"
-      - "constraints-release.txt"
-      - "installer/**"
-      - "requirements.txt"
-      - "requirements-dev.txt"
-      - "scripts/build_windows_installer.ps1"
-      - "scripts/build_windows_release.ps1"
-      - "scripts/verify_release_environment.py"
-      - "scripts/ci/installer_runtime_smoke.ps1"
-      - "scripts/pyinstaller_entry.py"
-      - "scripts/smoke_installed_launch.ps1"
-      - "worktrace/__init__.py"
-      - "worktrace/constants.py"
-      - "worktrace/version.py"
-      - "worktrace/assets/**"
-      - "worktrace/desktop/**"
-      - "worktrace/main.py"
-      - "worktrace/runtime/**"
+    types: [labeled]
 
 permissions:
   contents: read
@@ -48,6 +28,9 @@ env:
 jobs:
   lifecycle:
     name: Install, upgrade, and uninstall
+    if: |
+      github.event_name != 'pull_request'
+      || github.event.label.name == 'run-installer-validation'
     runs-on: windows-latest
     timeout-minutes: 30
     env:
