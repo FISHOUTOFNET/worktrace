@@ -16,7 +16,10 @@ def _resource(name: str) -> str:
 
 
 def _rule(source: str, selector: str) -> str:
-    match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", source)
+    match = re.search(
+        r"(?m)^[ \t]*" + re.escape(selector) + r"\s*\{([^}]*)\}",
+        source,
+    )
     assert match is not None, f"missing CSS rule: {selector}"
     return match.group(1)
 
