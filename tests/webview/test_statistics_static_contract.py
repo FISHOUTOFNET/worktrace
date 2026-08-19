@@ -31,7 +31,11 @@ def test_statistics_surface_matches_current_information_architecture() -> None:
         "statistics-all-btn", "statistics-results", "statistics-update-status",
         "statistics-apply-range-btn", "statistics-date-status",
         "stats-total", "stats-activity-count", "stats-project-count", "stats-app-count",
-        "stats-by-project", "stats-by-app", "stats-export-action-btn",
+        "stats-project-tab", "stats-file-tab", "stats-app-tab",
+        "stats-project-panel", "stats-file-panel", "stats-app-panel",
+        "stats-by-project", "stats-by-file", "stats-by-app",
+        "stats-empty-project", "stats-empty-file", "stats-empty-app",
+        "stats-export-action-btn",
     ):
         assert f'id="{dom_id}"' in html
     for forbidden in (
@@ -43,6 +47,10 @@ def test_statistics_surface_matches_current_information_architecture() -> None:
     assert [html.index(f'id="statistics-{name}-btn"') for name in ("today", "week", "month", "all")] == sorted(
         html.index(f'id="statistics-{name}-btn"') for name in ("today", "week", "month", "all")
     )
+    assert [html.index(f'id="stats-{name}-tab"') for name in ("project", "file", "app")] == sorted(
+        html.index(f'id="stats-{name}-tab"') for name in ("project", "file", "app")
+    )
+    assert "按项目" in html and "按文件" in html and "按应用" in html
     assert html.count('aria-pressed="false"') >= 4
 
 
@@ -109,6 +117,16 @@ def test_draft_dates_stay_local_while_project_and_quick_ranges_query_immediately
     buttons = func_body(read_js("init_fd_work_v5.js"), "initButtons")
     for name in ("today", "week", "month", "all"):
         assert f'App.applyStatisticsQuickRange("{name}")' in buttons
+
+
+def test_statistics_tabs_share_one_activation_path() -> None:
+    init = func_body(source(), "initStatisticsDefaults")
+    activate = func_body(source(), "activateStatisticsTab")
+    assert "Object.keys(statisticsTabs)" in init
+    assert "activateStatisticsTab(view)" in init
+    assert "Object.keys(statisticsTabs)" in activate
+    assert 'setAttribute("aria-selected"' in activate
+    assert "panel).hidden" in activate
 
 
 def test_dynamic_table_values_are_escaped_without_export_preview_ui() -> None:

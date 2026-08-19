@@ -103,6 +103,7 @@
 
         var summary = Object.assign({}, baseSummary);
         summary.by_project = cloneGroups(baseSummary.by_project);
+        summary.by_file = cloneGroups(baseSummary.by_file);
         summary.by_app = cloneGroups(baseSummary.by_app);
         summary.by_status = cloneGroups(baseSummary.by_status);
         summary.total_duration_seconds = nonNegativeInt(baseSummary.total_duration_seconds) + delta;
@@ -114,6 +115,7 @@
         }
 
         updateLiveGroup(summary.by_project, target.project_key, delta, summary.total_duration_seconds);
+        updateLiveGroup(summary.by_file, target.file_key, delta, summary.total_duration_seconds);
         updateLiveGroup(summary.by_app, target.app_key, delta, summary.total_duration_seconds);
         updateLiveGroup(summary.by_status, target.status_key, delta, summary.total_duration_seconds);
 
@@ -174,8 +176,9 @@
         var total = document.getElementById("stats-total");
         if (total) total.textContent = summary.total_duration || "00:00:00";
         var projectPatched = patchStatisticsGroupTable("stats-by-project", summary.by_project || []);
+        var filePatched = patchStatisticsGroupTable("stats-by-file", summary.by_file || []);
         var appPatched = patchStatisticsGroupTable("stats-by-app", summary.by_app || []);
-        return projectPatched && appPatched;
+        return projectPatched && filePatched && appPatched;
     }
     App.patchStatisticsLiveSummary = patchStatisticsLiveSummary;
 

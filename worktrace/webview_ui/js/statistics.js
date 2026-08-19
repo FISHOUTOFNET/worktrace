@@ -220,10 +220,10 @@
             .forEach(function (id) {
                 if (element(id)) element(id).textContent = "";
             });
-        ["stats-by-project", "stats-by-app"].forEach(function (id) {
+        ["stats-by-project", "stats-by-file", "stats-by-app"].forEach(function (id) {
             if (element(id)) element(id).innerHTML = "";
         });
-        ["stats-empty-project", "stats-empty-app"].forEach(function (id) {
+        ["stats-empty-project", "stats-empty-file", "stats-empty-app"].forEach(function (id) {
             if (element(id)) element(id).hidden = true;
         });
     }
@@ -334,6 +334,7 @@
         element("stats-project-count").textContent = String(summary.project_count || 0);
         element("stats-app-count").textContent = String(summary.app_count || 0);
         renderStatsTable("stats-by-project", "stats-empty-project", summary.by_project || []);
+        renderStatsTable("stats-by-file", "stats-empty-file", summary.by_file || []);
         renderStatsTable("stats-by-app", "stats-empty-app", summary.by_app || []);
         updateStatisticsScope(filters);
         if (element("statistics-results")) element("statistics-results").hidden = false;
@@ -358,6 +359,22 @@
         }).join("");
     }
     App.renderStatsTable = renderStatsTable;
+
+    var statisticsTabs = {
+        project: { tab: "stats-project-tab", panel: "stats-project-panel" },
+        file: { tab: "stats-file-tab", panel: "stats-file-panel" },
+        app: { tab: "stats-app-tab", panel: "stats-app-panel" }
+    };
+
+    function activateStatisticsTab(view) {
+        Object.keys(statisticsTabs).forEach(function (name) {
+            var descriptor = statisticsTabs[name];
+            var selected = name === view;
+            element(descriptor.tab).setAttribute("aria-selected", selected ? "true" : "false");
+            element(descriptor.panel).hidden = !selected;
+        });
+    }
+    App.activateStatisticsTab = activateStatisticsTab;
 
     function applyStatisticsQuickRange(type) {
         var today = new Date();
@@ -442,14 +459,11 @@
                 syncStatisticsSelection();
                 scheduleStatisticsQuery(0);
             });
-            [["stats-project-tab", "stats-project-panel", "stats-app-tab", "stats-app-panel"],
-             ["stats-app-tab", "stats-app-panel", "stats-project-tab", "stats-project-panel"]]
-                .forEach(function (ids) {
-                    element(ids[0]).addEventListener("click", function () {
-                        element(ids[0]).setAttribute("aria-selected", "true"); element(ids[1]).hidden = false;
-                        element(ids[2]).setAttribute("aria-selected", "false"); element(ids[3]).hidden = true;
-                    });
+            Object.keys(statisticsTabs).forEach(function (view) {
+                element(statisticsTabs[view].tab).addEventListener("click", function () {
+                    activateStatisticsTab(view);
                 });
+            });
             loadStatisticsProjectCatalog();
         }
     }

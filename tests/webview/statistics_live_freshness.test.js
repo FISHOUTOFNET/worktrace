@@ -90,6 +90,10 @@ test("statistics live math adds only post-sample delta and recomputes every shar
       { key: "A", display_name: "A", duration_seconds: 80, duration: "00:01:20", percentage: 80 },
       { key: "未归类", display_name: "未归类", duration_seconds: 20, duration: "00:00:20", percentage: 20 },
     ],
+    by_file: [
+      { key: "file:brief.docx", display_name: "brief.docx", duration_seconds: 80, duration: "00:01:20", percentage: 80 },
+      { key: "file:notes.md", display_name: "notes.md", duration_seconds: 20, duration: "00:00:20", percentage: 20 },
+    ],
     by_app: [
       { key: "Word", display_name: "Word", duration_seconds: 80, duration: "00:01:20", percentage: 80 },
       { key: "Edge", display_name: "Edge", duration_seconds: 20, duration: "00:00:20", percentage: 20 },
@@ -102,6 +106,7 @@ test("statistics live math adds only post-sample delta and recomputes every shar
       sampled_at_epoch_ms: 100000,
       elapsed_seconds_at_sample: 30,
       project_key: "A",
+      file_key: "file:brief.docx",
       app_key: "Word",
       status_key: "normal",
       contributes_project_duration: true,
@@ -115,13 +120,17 @@ test("statistics live math adds only post-sample delta and recomputes every shar
   assert.equal(live.project_duration_seconds, 90);
   assert.equal(live.by_project.find((row) => row.key === "A").duration_seconds, 90);
   assert.equal(live.by_project.find((row) => row.key === "未归类").duration_seconds, 20);
+  assert.equal(live.by_file.find((row) => row.key === "file:brief.docx").duration_seconds, 90);
+  assert.equal(live.by_file.find((row) => row.key === "file:notes.md").duration_seconds, 20);
   assert.equal(live.by_app.find((row) => row.key === "Word").duration_seconds, 90);
   assert.equal(live.by_status[0].duration_seconds, 110);
   assert.equal(live.by_project.find((row) => row.key === "A").percentage, 81.8);
+  assert.equal(live.by_file.find((row) => row.key === "file:brief.docx").percentage, 81.8);
   assert.equal(live.by_project.find((row) => row.key === "未归类").percentage, 18.2);
   assert.equal(live.export_preview.included_duration_seconds, 110);
   assert.equal(base.total_duration_seconds, 100);
   assert.equal(base.by_project[0].duration_seconds, 80);
+  assert.equal(base.by_file[0].duration_seconds, 80);
 });
 
 test("manual refresh is routed to the active composed page", async () => {
@@ -212,6 +221,7 @@ test("statistics local ticker never marks an unfetched runtime revision as accep
       snapshot_revision: "snapshot-1",
       total_duration_seconds: 10,
       by_project: [],
+      by_file: [],
       by_app: [],
       by_status: [],
     },
@@ -246,7 +256,7 @@ test("background statistics refresh records the runtime identity captured at req
   const pending = App.backgroundStatisticsRefresh();
   setRuntime(runtimeState("structure-2"));
   resolveRequest({
-    summary: { total_duration_seconds: 20, by_project: [], by_app: [], by_status: [] },
+    summary: { total_duration_seconds: 20, by_project: [], by_file: [], by_app: [], by_status: [] },
     export_ticket: { revision: "snapshot-2" },
   });
   await pending;

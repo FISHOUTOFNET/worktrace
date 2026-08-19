@@ -122,6 +122,7 @@ def _live_target_payload(value: Any) -> dict[str, Any] | None:
         "sampled_at_epoch_ms": int(value.get("sampled_at_epoch_ms") or 0),
         "elapsed_seconds_at_sample": int(value.get("elapsed_seconds_at_sample") or 0),
         "project_key": str(value.get("project_key") or ""),
+        "file_key": str(value.get("file_key") or ""),
         "app_key": str(value.get("app_key") or ""),
         "status_key": str(value.get("status_key") or ""),
         "is_concrete_project": value.get("is_concrete_project") is True,
@@ -135,6 +136,7 @@ def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
     by_project = [
         _group_payload(group) for group in (summary.get("by_project") or [])
     ]
+    by_file = [_group_payload(group) for group in (summary.get("by_file") or [])]
     by_app = [_group_payload(group) for group in (summary.get("by_app") or [])]
     by_status = [
         _group_payload(group) for group in (summary.get("by_status") or [])
@@ -156,6 +158,7 @@ def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
         "project_count": int(summary.get("project_count") or 0),
         "app_count": int(summary.get("app_count") or 0),
         "by_project": by_project,
+        "by_file": by_file,
         "by_app": by_app,
         "by_status": by_status,
         "export_preview": {

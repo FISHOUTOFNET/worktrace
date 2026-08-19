@@ -3,10 +3,9 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
+from ..constants import UNCATEGORIZED_PROJECT
 from ..contracts.live_display_contracts import ActivitySnapshotContract, DisplaySpanContract
 from ..formatters import format_duration, format_status_label
-from ..resources.title_parsing import extract_anchor_file_name
 from . import (
     page_revision_service,
     project_activity_summary_service,
@@ -240,43 +239,22 @@ def _base_session_row(
     return row
 
 
-def _contribution_label(contribution: Mapping[str, Any]) -> str:
-    """Extract the display label from a single contribution row."""
-    activity_name = str(contribution.get("activity_display_name") or "").strip()
-    if contribution.get("resource_is_anchor") and activity_name:
-        return activity_name
-    return extract_anchor_file_name(contribution.get("window_title")) or str(
-        contribution.get("app_name") or contribution.get("process_name") or ""
-    ).strip()
-
-
-def _top3_distinct_labels(contributions: list[dict[str, Any]]) -> list[str]:
-    """Return up to 3 distinct labels by the original sort rule.
-
-    Original semantic: sort contributions by duration descending (stable),
-    iterate, extract label, skip duplicates, break at 3 distinct labels.
-    Equivalent O(n) implementation: keep the best (duration, position) per
-    label (first wins on ties = stable secondary sort), then rank labels
-    by (-duration, position) — identical to the sorted()+break order.
-    """
-    best_per_label: dict[str, tuple[int, int]] = {}
-    for pos, item in enumerate(contributions):
-        if bool(item.get("privacy_redacted")):
-            continue
-        if str(item.get("status") or STATUS_NORMAL) != STATUS_NORMAL:
-            continue
-        label = _contribution_label(item)
-        if not label:
-            continue
-        duration = int(item.get("duration_seconds") or 0)
-        existing = best_per_label.get(label)
-        if existing is None or duration > existing[0]:
-            best_per_label[label] = (duration, pos)
-    ranked = sorted(
-        best_per_label,
-        key=lambda lbl: (-best_per_label[lbl][0], best_per_label[lbl][1]),
+def _top3_activity_summary_labels(
+    contributions: list[dict[str, Any]],
+) -> list[str]:
+    """Return the same three longest activity names shown in Activity Details."""
+    summaries = project_activity_summary_service.build_activity_summary_rows(
+        [dict(item) for item in contributions],
+        report_date="",
+        scope_key="",
+        projection_revision="",
     )
-    return ranked[:3]
+    labels: list[str] = []
+    for summary in summaries[:3]:
+        label = str(summary.get("activity_name") or "").strip()
+        if label:
+            labels.append(label)
+    return labels
 
 
 def _description_display_fields(
@@ -284,7 +262,7 @@ def _description_display_fields(
     contributions: tuple[Mapping[str, Any], ...] = (),
 ) -> dict[str, Any]:
     user_description = str(session.get("session_note") or "").strip()
-    labels = _top3_distinct_labels(list(contributions))
+    labels = _top3_activity_summary_labels([dict(item) for item in contributions])
     derived_summary = " · ".join(labels)
     if user_description:
         display_description = user_description

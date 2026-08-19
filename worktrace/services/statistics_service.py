@@ -8,6 +8,7 @@ unattributed statuses outside reportable totals.
 from __future__ import annotations
 
 from datetime import date
+from typing import Mapping
 
 from ..constants import (
     STATUS_EXCLUDED,
@@ -18,6 +19,10 @@ from ..constants import (
 )
 from ..formatters import format_status_label
 from .report_projection_identity import stable_json_hash
+from .statistics_file_projection import (
+    build_statistics_file_groups,
+    live_statistics_file_key,
+)
 from .statistics_scope_policy import normalize_statistics_project_scope
 
 STATISTICS_SUMMARY_MAX_RANGE_DAYS = 31
@@ -72,20 +77,31 @@ def _build_projection(start_date: str, end_date: str, project_id=None):
     )
 
 
-def _build_summary_projection(start_date: str, end_date: str, project_id=None):
+def _build_summary_snapshot_and_projection(
+    start_date: str,
+    end_date: str,
+    project_id=None,
+):
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import build_statistics_summary_projection
 
-    return build_statistics_summary_projection(
-        build_visible_snapshot(start_date, end_date), project_id=project_id
+    snapshot = build_visible_snapshot(start_date, end_date)
+    return snapshot, build_statistics_summary_projection(
+        snapshot, project_id=project_id
     )
 
 
-def _scoped_live_target(live_target, projection) -> dict | None:
+def _scoped_live_target(
+    live_target,
+    projection,
+    *,
+    file_key: str = "",
+) -> dict | None:
     if not isinstance(live_target, dict) or live_target.get("enabled") is not True:
         return None
     project_keys = {str(group.get("key") or "") for group in projection.by_project}
     target = dict(live_target)
+    target["file_key"] = str(file_key or "")
     target["enabled"] = bool(
         target.get("includes_today") is True
         and str(target.get("project_key") or "") in project_keys
@@ -100,6 +116,7 @@ def _statistics_export_summary_from_projection(
     date_to: str,
     project_id,
     *,
+    by_file=None,
     live_target=None,
 ) -> dict:
     normalized_scope = normalize_statistics_project_scope(project_id)
@@ -127,6 +144,7 @@ def _statistics_export_summary_from_projection(
         "project_count": projection.concrete_project_count,
         "app_count": projection.concrete_app_count,
         "by_project": list(projection.by_project),
+        "by_file": list(by_file or []),
         "by_app": list(projection.by_app),
         "by_status": list(projection.by_status),
         "live_target": live_target,
@@ -154,12 +172,16 @@ def get_statistics_export_summary(
 
     date_from, date_to = resolve_statistics_date_range(date_from, date_to)
     validate_statistics_project_scope(project_id)
-    projection = _build_summary_projection(date_from, date_to, project_id)
+    snapshot, projection = _build_summary_snapshot_and_projection(
+        date_from, date_to, project_id
+    )
+    by_file = build_statistics_file_groups(snapshot, project_id)
     return _statistics_export_summary_from_projection(
         projection,
         date_from,
         date_to,
         project_id,
+        by_file=by_file,
     )
 
 
@@ -173,7 +195,7 @@ def get_statistics_realtime_export_summary(
     date_from, date_to = resolve_statistics_date_range(date_from, date_to)
     validate_statistics_project_scope(project_id)
 
-    from .page_read_context import page_read_scope
+    from .page_read_context import current_page_read_context, page_read_scope
     from .report_as_of_snapshot_service import build_statistics_as_of_snapshot
     from .statistics_projection import build_statistics_summary_projection
     from .statistics_snapshot_provider import get_statistics_base_snapshot
@@ -185,19 +207,35 @@ def get_statistics_realtime_export_summary(
             date_to,
             base_snapshot=base_snapshot,
         )
+        context = current_page_read_context()
+        runtime_snapshot = (
+            context.runtime_sample.snapshot
+            if context is not None
+            and context.runtime_consistent
+            and isinstance(context.runtime_sample.snapshot, Mapping)
+            else None
+        )
         projection = build_statistics_summary_projection(
             as_of.snapshot,
             project_id=project_id,
         )
+        by_file = build_statistics_file_groups(
+            as_of.snapshot,
+            project_id,
+            live_runtime_snapshot=runtime_snapshot,
+        )
+        file_key = live_statistics_file_key(as_of.snapshot, runtime_snapshot)
         live_target = _scoped_live_target(
             dict(as_of.live_target) if as_of.live_target is not None else None,
             projection,
+            file_key=file_key,
         )
     return _statistics_export_summary_from_projection(
         projection,
         date_from,
         date_to,
         project_id,
+        by_file=by_file,
         live_target=live_target,
     )
 

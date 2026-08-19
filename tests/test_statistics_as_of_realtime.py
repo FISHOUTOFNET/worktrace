@@ -93,9 +93,12 @@ def test_statistics_realtime_summary_includes_verified_open_activity_without_per
     assert summary["export_row_count"] == 1
     assert summary["by_project"][0]["display_name"] == "Live Client"
     assert summary["by_project"][0]["duration_seconds"] == 1800
+    assert summary["by_file"][0]["display_name"] == "live.docx"
+    assert summary["by_file"][0]["duration_seconds"] == 1800
     assert summary["by_app"][0]["display_name"] == "Word"
     assert summary["live_target"]["enabled"] is True
     assert summary["live_target"]["elapsed_seconds_at_sample"] == 1800
+    assert summary["live_target"]["file_key"] == summary["by_file"][0]["key"]
 
     with get_connection() as conn:
         row = conn.execute(
@@ -122,9 +125,12 @@ def test_statistics_realtime_summary_projects_transient_runtime_without_database
     assert first["export_row_count"] == 1
     assert first["by_project"][0]["display_name"] == "Transient Client"
     assert first["by_project"][0]["duration_seconds"] == 12
+    assert first["by_file"][0]["display_name"] == "transient.docx"
+    assert first["by_file"][0]["duration_seconds"] == 12
     assert first["by_app"][0]["display_name"] == "Word"
     assert first["live_target"]["enabled"] is True
     assert first["live_target"]["elapsed_seconds_at_sample"] == 12
+    assert first["live_target"]["file_key"] == first["by_file"][0]["key"]
 
     with get_connection() as conn:
         count = conn.execute("SELECT COUNT(*) AS count FROM activity_log").fetchone()["count"]
@@ -138,6 +144,7 @@ def test_statistics_realtime_summary_projects_transient_runtime_without_database
     second = statistics_service.get_statistics_realtime_export_summary(day, day)
     assert second["total_duration_seconds"] == 19
     assert second["by_project"][0]["duration_seconds"] == 19
+    assert second["by_file"][0]["duration_seconds"] == 19
 
     with get_connection() as conn:
         count = conn.execute("SELECT COUNT(*) AS count FROM activity_log").fetchone()["count"]
@@ -187,6 +194,7 @@ def test_statistics_realtime_project_scope_excludes_other_live_project(temp_db):
 
     assert summary["total_duration_seconds"] == 0
     assert summary["by_project"] == []
+    assert summary["by_file"] == []
     assert summary["live_target"] is None
 
 
@@ -207,6 +215,7 @@ def test_statistics_realtime_project_scope_excludes_other_transient_project(temp
 
     assert summary["total_duration_seconds"] == 0
     assert summary["by_project"] == []
+    assert summary["by_file"] == []
     assert summary["live_target"] is None
 
 
