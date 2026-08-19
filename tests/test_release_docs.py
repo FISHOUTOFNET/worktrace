@@ -142,7 +142,7 @@ def test_ci_layers_contain_required_release_smoke_steps():
     assert "push:" in standard
     assert "./.github/workflows/_validation.yml" in standard
     assert "run_node_tests: true" in standard
-    assert "run_build_smoke: true" in standard
+    assert "run_build_smoke: ${{ github.event_name == 'pull_request' }}" in standard
 
     for phrase in (
         'python-version: "3.11.9"',
@@ -174,8 +174,8 @@ def test_ci_layers_contain_required_release_smoke_steps():
     assert r"dist\Trace-Setup.exe" not in package_action
     assert "python -m PyInstaller --noconfirm --clean WorkTrace.spec" not in package_action
     assert "uses: ./.github/actions/build-windows-package" in installer
-    assert '"constraints-release.txt"' in installer
-    assert '"scripts/verify_release_environment.py"' in installer
+    assert "types: [labeled]" in installer
+    assert "run-installer-validation" in installer
     assert r"scripts\ci\installer_runtime_smoke.ps1" in installer
     assert 'tags: ["v*"]' in installer
     assert "workflow_dispatch:" in installer

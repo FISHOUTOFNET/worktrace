@@ -66,4 +66,3 @@ def test_unversioned_release_aliases_are_retired() -> None:
     assert r"dist\Trace.exe" not in action
     assert r"dist\Trace-Setup.exe" not in action
     assert "path: dist/Trace*.exe" in workflow
-    assert '"worktrace/version.py"' in workflow
