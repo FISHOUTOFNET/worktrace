@@ -257,6 +257,10 @@ def _top3_activity_summary_labels(
     return labels
 
 
+# Compatibility name for older internal callers; the shared detail builder owns semantics.
+_top3_distinct_labels = _top3_activity_summary_labels
+
+
 def _description_display_fields(
     session: dict[str, Any],
     contributions: tuple[Mapping[str, Any], ...] = (),
