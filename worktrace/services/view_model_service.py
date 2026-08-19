@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from ..constants import UNCATEGORIZED_PROJECT
+from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
 from ..contracts.live_display_contracts import ActivitySnapshotContract, DisplaySpanContract
 from ..formatters import format_duration, format_status_label
 from . import (
@@ -242,9 +242,15 @@ def _base_session_row(
 def _top3_activity_summary_labels(
     contributions: list[dict[str, Any]],
 ) -> list[str]:
-    """Return the same three longest activity names shown in Activity Details."""
+    """Return the three longest normal, displayable activity/file names."""
+    displayable = [
+        dict(item)
+        for item in contributions
+        if not bool(item.get("privacy_redacted"))
+        and str(item.get("status") or STATUS_NORMAL) == STATUS_NORMAL
+    ]
     summaries = project_activity_summary_service.build_activity_summary_rows(
-        [dict(item) for item in contributions],
+        displayable,
         report_date="",
         scope_key="",
         projection_revision="",

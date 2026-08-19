@@ -111,6 +111,7 @@ def test_service_summary_valid_range_returns_aggregated_data(temp_db):
         end="10:15:00",
         day="2026-06-25",
         project_id=pid,
+        file_path_hint="C:\\Users\\secret\\Report.xlsx",
     )
     summary = statistics_service.get_statistics_export_summary("2026-06-25", "2026-06-25")
     assert summary["date_from"] == "2026-06-25"

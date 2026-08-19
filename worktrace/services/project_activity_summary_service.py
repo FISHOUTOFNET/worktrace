@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
+from ..constants import UNCATEGORIZED_PROJECT
 from ..formatters import format_duration, format_safe_display_name
 
 
@@ -13,14 +13,10 @@ def build_activity_summary_rows(
     scope_key: str,
     projection_revision: str,
 ) -> list[dict]:
-    """Aggregate displayable normal activity rows into detail-summary rows."""
+    """Aggregate already-scoped report rows into activity summary rows."""
     groups: dict[str, dict[str, Any]] = {}
     first_positions: dict[str, int] = {}
     for position, row in enumerate(rows):
-        if bool(row.get("privacy_redacted")):
-            continue
-        if str(row.get("status") or STATUS_NORMAL) != STATUS_NORMAL:
-            continue
         key = activity_group_key(row)
         first_positions.setdefault(key, position)
         accounted_project_id = int(
