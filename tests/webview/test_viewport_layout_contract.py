@@ -21,23 +21,26 @@ def _rule(source: str, selector: str) -> str:
     return match.group(1)
 
 
-def test_layout_scrollbars_keep_scroll_ownership_without_reserving_width():
+def test_layout_scrollbars_follow_explicit_scroll_owners_without_reserving_width():
     base = _resource("styles.css")
     final = _resource("ui_components.css")
 
     base_page = _rule(base, ".page")
     final_page = _rule(final, ".page")
 
+    # styles.css remains the structural baseline, while the final consistency
+    # layer closes active page overflow and assigns scrolling to inner content.
     assert "overflow: auto" in base_page
     assert "min-height: 0" in final_page
     assert "scrollbar-gutter: stable" not in final
 
     for selector in (
-        ".page",
         "#recent-list",
         ".timeline-list",
-        ".timeline-inspector",
+        ".activity-list",
         ".table-scroll",
+        ".rules-scroll-region",
+        ".settings-content",
         ".drawer",
         ".dialog",
         ".first-run-notice-text",
@@ -56,19 +59,30 @@ def test_layout_scrollbars_keep_scroll_ownership_without_reserving_width():
     assert "display: none" in final
 
 
+def test_active_pages_close_page_level_scrolling():
+    final = _resource("ui_components.css")
+    active = _rule(
+        final,
+        ".overview-page.active,\n"
+        ".timeline-page.active,\n"
+        ".statistics-page.active,\n"
+        ".rules-page.active,\n"
+        ".settings-page.active",
+    )
+
+    assert "display: flex" in active
+    assert "flex-direction: column" in active
+    assert "overflow: hidden" in active
+
+
 def test_overview_keeps_summary_fixed_and_restores_symmetric_spacing():
     final = _resource("ui_components.css")
 
-    active = _rule(final, ".overview-page.active,\n.timeline-page.active")
     overview = _rule(final, ".overview-page")
     current = _rule(final, ".current-activity")
     recent_section = _rule(final, ".recent-section")
     recent_heading = _rule(final, ".recent-section h2")
     recent_list = _rule(final, "#recent-list")
-
-    assert "display: flex" in active
-    assert "flex-direction: column" in active
-    assert "overflow: hidden" in active
 
     assert "--overview-time-right-inset: 0px" in overview
     assert "padding-right: 18px" in current
@@ -88,27 +102,88 @@ def test_overview_keeps_summary_fixed_and_restores_symmetric_spacing():
     assert "scrollbar-gutter: auto" in recent_list
 
 
-def test_timeline_uses_remaining_viewport_without_visible_scrollbars():
-    base = _resource("styles.css")
+def test_timeline_keeps_editor_fixed_and_scrolls_only_activity_list():
     final = _resource("ui_components.css")
     index = _resource("index_fd_work_v5.html")
 
     workspace = _rule(final, ".timeline-workspace")
-    panes = _rule(final, ".timeline-list,\n.timeline-inspector")
+    timeline_list = _rule(final, ".timeline-list")
+    inspector = _rule(final, ".timeline-inspector")
+    details = _rule(final, ".activity-details")
+    activity_list = _rule(final, ".activity-list")
 
     assert "flex: 1 1 auto" in workspace
     assert "min-height: 0" in workspace
     assert "height: auto" in workspace
     assert "calc(" not in workspace
 
-    assert "overflow: auto" in panes
-    assert "scrollbar-gutter" not in panes
+    assert "overflow: auto" in timeline_list
+    assert "display: flex" in inspector
+    assert "flex-direction: column" in inspector
+    assert "overflow: hidden" in inspector
 
-    # styles.css still contains the legacy geometry as the structural baseline,
-    # but ui_components.css is the final consistency layer and must load later.
-    assert "height: calc(100% - 86px)" in base
-    assert "height: calc(100% - 82px)" in base
+    assert "flex: 1 1 auto" in details
+    assert "min-height: 0" in details
+    assert "display: flex" in details
+    assert "overflow: hidden" in details
+
+    assert "flex: 1 1 auto" in activity_list
+    assert "min-height: 0" in activity_list
+    assert "overflow: auto" in activity_list
+
+    assert ".timeline-inspector.drawer-open { display: flex; }" in final
     assert index.index("styles.css?") < index.index("ui_components.css?")
+
+
+def test_statistics_keeps_controls_and_metrics_fixed_while_tables_scroll():
+    final = _resource("ui_components.css")
+
+    results = _rule(final, "#statistics-results:not([hidden])")
+    result_panel = _rule(final, ".stats-result")
+    table_scroll = _rule(final, ".stats-result .table-scroll")
+
+    assert "flex: 1 1 auto" in results
+    assert "min-height: 0" in results
+    assert "display: flex" in results
+    assert "flex-direction: column" in results
+
+    assert "flex: 1 1 auto" in result_panel
+    assert "min-height: 0" in result_panel
+    assert "display: flex" in result_panel
+    assert "flex-direction: column" in result_panel
+
+    assert "flex: 1 1 auto" in table_scroll
+    assert "min-height: 0" in table_scroll
+    assert "overflow: auto" in table_scroll
+
+
+def test_rules_keep_search_and_sort_fixed_while_list_region_scrolls():
+    final = _resource("ui_components.css")
+    index = _resource("index_fd_work_v5.html")
+
+    scroll_region = _rule(final, ".rules-scroll-region")
+    assert "flex: 1 1 auto" in scroll_region
+    assert "min-height: 0" in scroll_region
+    assert "overflow: auto" in scroll_region
+
+    wrapper = '<div class="rules-scroll-region"><div id="rules-list" class="rules-list"></div><div id="rules-empty" class="empty-state" hidden><strong>暂无项目</strong></div></div>'
+    assert wrapper in index
+
+
+def test_settings_keep_title_and_categories_fixed_while_content_scrolls():
+    final = _resource("ui_components.css")
+
+    status = _rule(final, "#settings-status:not([hidden])")
+    content = _rule(final, ".settings-content")
+
+    assert "flex: 1 1 auto" in status
+    assert "min-height: 0" in status
+    assert "display: grid" in status
+
+    assert "min-height: 0" in content
+    assert "align-self: stretch" in content
+    assert "overflow: auto" in content
+    assert "grid-template-rows: auto minmax(0, 1fr)" in final
 
 
 def test_timeline_conditional_actions_keep_stable_nonempty_operation_slots():
