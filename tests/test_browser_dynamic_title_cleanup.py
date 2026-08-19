@@ -13,6 +13,8 @@ pytestmark = [pytest.mark.unit, pytest.mark.parallel_safe]
     [
         "ChatGPT - Valuation 和另外 1 个页面 - Microsoft Edge",
         "ChatGPT - Valuation 和另外 7 个页面 - 个人 - Microsoft Edge",
+        "ChatGPT - Valuation 和另外 10 个页面",
+        "ChatGPT - Valuation 和另外 10 个页面 ‐ 个人 ‐ Microsoft Edge",
         "ChatGPT - Valuation and 1 more page - Personal - Microsoft Edge",
         "ChatGPT - Valuation and 12 more pages - Profile 1 - Microsoft Edge Dev",
     ],
@@ -41,6 +43,17 @@ def test_edge_dynamic_window_suffix_does_not_change_page_identity(window_title: 
     assert result.window_title == window_title
 
 
+def test_observed_edge_title_is_normalized():
+    title = "WorkTrace - 规范化浏览器标题 和另外 10 个页面 - 个人 - Microsoft Edge"
+    result = BrowserDetector().detect(
+        ActiveWindow(app_name="Edge", process_name="msedge.exe", window_title=title)
+    )
+
+    assert result is not None
+    assert result.display_name == "WorkTrace - 规范化浏览器标题"
+    assert result.window_title == title
+
+
 def test_edge_dynamic_window_suffix_is_cleaned_before_blank_page_detection():
     result = BrowserDetector().detect(
         ActiveWindow(
@@ -54,6 +67,19 @@ def test_edge_dynamic_window_suffix_is_cleaned_before_blank_page_detection():
     assert result.display_name == "New Tab"
     assert result.identity_key == "browser_blank:msedge.exe"
     assert result.is_anchor is False
+
+
+def test_page_count_cleanup_is_scoped_to_edge_process():
+    result = BrowserDetector().detect(
+        ActiveWindow(
+            app_name="Chrome",
+            process_name="chrome.exe",
+            window_title="Guide 和另外 2 个页面 - Google Chrome",
+        )
+    )
+
+    assert result is not None
+    assert result.display_name == "Guide 和另外 2 个页面"
 
 
 def test_unconfirmed_other_tabs_wording_is_not_collapsed():
