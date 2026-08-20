@@ -529,10 +529,15 @@ def _protected_merge_conflict(
     candidate_members: frozenset[tuple[str, int, str]],
     protected_member_sets: Sequence[frozenset[tuple[str, int, str]]],
 ) -> bool:
-    return any(
-        protected != candidate_members and bool(protected.intersection(candidate_members))
-        for protected in protected_member_sets
-    )
+    for protected in protected_member_sets:
+        if protected == candidate_members or not protected.intersection(candidate_members):
+            continue
+        # A protected superset may be the eventual identity of a later greedy
+        # extension. Let the candidate grow until it reaches that exact set.
+        if candidate_members.issubset(protected):
+            continue
+        return True
+    return False
 
 
 def _status_summary(rows: Sequence[Mapping]) -> str:
