@@ -25,7 +25,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from ..constants import DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS
+from ..constants import DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS, STATUS_PAUSED
 from . import report_operation_repository
 from . import report_session_operation_engine as engine
 from . import session_boundary_service
@@ -395,6 +395,14 @@ def _short_return_blocking_boundaries(
                 occurred_at = str(boundary.get("occurred_at") or "")
                 if occurred_at:
                     result.append(occurred_at)
+    # A persisted paused interval is itself explicit user-pause evidence. Keep
+    # it blocking even for repaired/fixture data where the boundary row is absent.
+    for row in rows:
+        if str(row.get("status") or "") != STATUS_PAUSED:
+            continue
+        for value in (row.get("start_time"), row.get("end_time")):
+            if value:
+                result.append(str(value))
     # Hidden/deleted project intervals must not be silently reassigned to a
     # neighbouring visible project by the short-return rule.
     for row in deleted_rows:
