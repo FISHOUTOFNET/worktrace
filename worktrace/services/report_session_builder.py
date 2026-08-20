@@ -9,6 +9,7 @@ from typing import Mapping, Sequence
 from ..constants import (
     DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS,
     STATUS_NORMAL,
+    STATUS_PAUSED,
     TIME_FORMAT,
     UNCATEGORIZED_PROJECT,
 )
@@ -63,15 +64,17 @@ def merge_short_project_returns(
     *,
     boundary_times: Sequence[str] = (),
     protected_member_sets: Sequence[frozenset[tuple[str, int, str]]] = (),
+    interval_rows: Sequence[Mapping] = (),
     max_interruption_seconds: int = SHORT_PROJECT_RETURN_MERGE_SECONDS,
 ) -> list[dict]:
     """Greedily merge short returns to the same concrete project.
 
     A return is measured by wall clock from the current project session's end
-    to the next session for that project. Intermediate project sessions become
-    members of the merged canonical session. Only caller-supplied semantic
-    boundaries block this second-stage merge; collection lifecycle boundaries
-    such as restart/sleep are intentionally not inferred here.
+    to the next session for that project. Intermediate project sessions and
+    soft status rows inside that interval become members of the merged canonical
+    session. Only caller-supplied semantic boundaries block this second-stage
+    merge; collection lifecycle boundaries such as restart/sleep are
+    intentionally not inferred here.
 
     Existing durable operation bindings are supplied as member sets. A merge
     that would change a strict-subset binding is skipped so historical edits
@@ -81,6 +84,7 @@ def merge_short_project_returns(
     threshold = max(0, int(max_interruption_seconds))
     boundary_index = BoundaryIndex(boundary_times)
     protected = tuple(frozenset(item) for item in protected_member_sets if item)
+    interval_source = tuple(dict(row) for row in interval_rows)
     result: list[dict] = []
     index = 0
     total = len(sessions)
@@ -122,7 +126,17 @@ def merge_short_project_returns(
                 *(deepcopy(dict(item)) for item in sessions[consumed + 1 : matched_index + 1]),
             ]
             candidate_members = _group_member_identity_set(group)
-            if _protected_merge_conflict(candidate_members, protected):
+            candidate_members = candidate_members.union(
+                _interval_row_member_identity_set(
+                    current,
+                    sessions[matched_index],
+                    interval_source,
+                )
+            )
+            if _protected_merge_conflict(
+                frozenset(candidate_members),
+                protected,
+            ):
                 break
             current = _merge_short_return_group(group)
             consumed = matched_index
@@ -130,7 +144,7 @@ def merge_short_project_returns(
         result.append(current)
         index = consumed + 1
 
-    return result
+    return _attach_short_return_interval_rows(result, interval_source)
 
 
 def _build_session(rows: Sequence[Mapping], uncategorized_id: int) -> dict:
@@ -379,6 +393,105 @@ def _merge_short_return_group(group: Sequence[Mapping]) -> dict:
         merged["is_official_project"] = True
         merged["report_attribution_kind"] = "official_direct"
     return merged
+
+
+def _attach_short_return_interval_rows(
+    sessions: Sequence[dict],
+    rows: Sequence[Mapping],
+) -> list[dict]:
+    if not rows:
+        return [deepcopy(dict(session)) for session in sessions]
+    result = [deepcopy(dict(session)) for session in sessions]
+    for session in result:
+        if not bool(session.get("_short_project_return_merged")):
+            continue
+        existing = set(_session_member_identity_set(session))
+        start = _parse_time(session.get("start_time"))
+        end = _parse_time(session.get("end_time"))
+        if start is None or end is None or end <= start:
+            continue
+        for row in rows:
+            if str(row.get("report_date") or "") != str(session.get("report_date") or ""):
+                continue
+            if str(row.get("status") or "") == STATUS_PAUSED:
+                continue
+            row_start = _parse_time(row.get("start_time"))
+            row_end = _parse_time(row.get("end_time")) or row_start
+            if row_start is None or row_end is None:
+                continue
+            if row_start >= end or row_end <= start:
+                continue
+            identity = _row_member_identity(row)
+            if identity is None or identity in existing:
+                continue
+            existing.add(identity)
+            activity_id = identity[1]
+            session["activity_ids"].append(activity_id)
+            session["member_slices"].append(
+                {
+                    "report_date": identity[0],
+                    "activity_id": activity_id,
+                    "slice_start_time": identity[2],
+                    "slice_end_time": str(row.get("end_time") or identity[2]),
+                }
+            )
+            session["event_count"] = int(session.get("event_count") or 0) + 1
+        session["member_slices"].sort(
+            key=lambda item: (
+                str(item.get("slice_start_time") or ""),
+                int(item.get("activity_id") or 0),
+            )
+        )
+        ordered_ids: list[int] = []
+        for member in session["member_slices"]:
+            activity_id = int(member.get("activity_id") or 0)
+            if activity_id > 0 and activity_id not in ordered_ids:
+                ordered_ids.append(activity_id)
+        session["activity_ids"] = ordered_ids
+        session["activity_member_hash"] = member_set_hash(
+            str(session.get("report_date") or ""),
+            session["member_slices"],
+        )
+        session["anchor_activity_id"] = int(ordered_ids[0]) if ordered_ids else 0
+        session["first_activity_id"] = int(ordered_ids[0]) if ordered_ids else None
+    return result
+
+
+def _interval_row_member_identity_set(
+    left: Mapping,
+    right: Mapping,
+    rows: Sequence[Mapping],
+) -> frozenset[tuple[str, int, str]]:
+    start = _parse_time(left.get("end_time"))
+    end = _parse_time(right.get("start_time"))
+    if start is None or end is None or end < start:
+        return frozenset()
+    report_date = str(left.get("report_date") or "")
+    result: set[tuple[str, int, str]] = set()
+    for row in rows:
+        if str(row.get("report_date") or "") != report_date:
+            continue
+        if str(row.get("status") or "") == STATUS_PAUSED:
+            continue
+        row_start = _parse_time(row.get("start_time"))
+        row_end = _parse_time(row.get("end_time")) or row_start
+        if row_start is None or row_end is None:
+            continue
+        if row_start >= end or row_end <= start:
+            continue
+        identity = _row_member_identity(row)
+        if identity is not None:
+            result.add(identity)
+    return frozenset(result)
+
+
+def _row_member_identity(row: Mapping) -> tuple[str, int, str] | None:
+    report_date = str(row.get("report_date") or "")[:10]
+    activity_id = int(row.get("id") or row.get("activity_id") or 0)
+    start = str(row.get("start_time") or row.get("slice_start_time") or "")
+    if not report_date or activity_id <= 0 or not start:
+        return None
+    return report_date, activity_id, start
 
 
 def _wall_clock_span_seconds(first: Mapping, last: Mapping) -> int | None:
