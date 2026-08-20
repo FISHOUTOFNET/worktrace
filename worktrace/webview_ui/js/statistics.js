@@ -26,6 +26,25 @@
     }
     App.setStatisticsLoading = setStatisticsLoading;
 
+    if (typeof App.statisticsLiveTickerSuspended !== "boolean") {
+        App.statisticsLiveTickerSuspended = false;
+    }
+
+    function suspendStatisticsLiveTicker() {
+        if (App.statisticsLiveTickerSuspended === true) return;
+        if (typeof App.applyStatisticsLocalTicker === "function") {
+            App.applyStatisticsLocalTicker();
+        }
+        App.statisticsLiveTickerSuspended = true;
+    }
+    App.suspendStatisticsLiveTicker = suspendStatisticsLiveTicker;
+
+    function resumeStatisticsLiveTicker() {
+        App.statisticsLiveTickerSuspended = false;
+        App.statisticsLastLiveRenderKey = "";
+    }
+    App.resumeStatisticsLiveTicker = resumeStatisticsLiveTicker;
+
     function validateStatisticsDateRange(dateFrom, dateTo) {
         if (!dateFrom || !dateTo) return "请选择完整日期范围";
         if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
@@ -183,12 +202,42 @@
     }
     App.syncStatisticsSelection = syncStatisticsSelection;
 
+    function statisticsDateInputFocused(input) {
+        return !!(document && document.activeElement && document.activeElement === input);
+    }
+
+    function syncStatisticsDateInputMode(input) {
+        if (!input) return;
+        var hasValue = !!String(input.value || "");
+        if (!hasValue && !statisticsDateInputFocused(input)) {
+            if (input.type !== "text") input.type = "text";
+            input.placeholder = "0000/00/00";
+            return;
+        }
+        if (input.type !== "date") input.type = "date";
+        input.placeholder = "";
+    }
+    App.syncStatisticsDateInputMode = syncStatisticsDateInputMode;
+
+    function handleStatisticsDateFocus(event) {
+        var input = event && (event.currentTarget || event.target);
+        if (!input) return;
+        if (input.type !== "date") input.type = "date";
+        input.placeholder = "";
+    }
+
+    function handleStatisticsDateBlur(event) {
+        syncStatisticsDateInputMode(event && (event.currentTarget || event.target));
+    }
+
     function syncStatisticsDraftSelection() {
         var selection = currentDraftSelection();
         var from = element("statistics-date-from");
         var to = element("statistics-date-to");
         if (from) from.value = selection.dateFrom;
         if (to) to.value = selection.dateTo;
+        syncStatisticsDateInputMode(from);
+        syncStatisticsDateInputMode(to);
         if (element("statistics-date-inputs")) {
             element("statistics-date-inputs").hidden = false;
         }
@@ -236,8 +285,77 @@
         setStatisticsExportStatus("", "");
         clearStatisticsPresentation();
         setStatisticsLoading(false);
+        resumeStatisticsLiveTicker();
     }
     App.invalidateStatisticsSelection = invalidateStatisticsSelection;
+
+    function statisticsGroupKey(group, index) {
+        group = group || {};
+        var key = String(group.key || "");
+        if (key) return key;
+        return "display:" + String(group.display_name || "未知") + "|" + String(index || 0);
+    }
+
+    function patchStatsTable(tbodyId, groups) {
+        var body = element(tbodyId);
+        if (!body || typeof body.querySelectorAll !== "function") return false;
+        var rows = body.querySelectorAll("tr");
+        groups = Array.isArray(groups) ? groups : [];
+        if (rows.length !== groups.length) return false;
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            var group = groups[i] || {};
+            var expectedKey = statisticsGroupKey(group, i);
+            if (typeof row.getAttribute === "function"
+                && String(row.getAttribute("data-statistics-key") || "") !== expectedKey) {
+                return false;
+            }
+            var cells = row.children;
+            if (!cells || cells.length < 4) return false;
+            var displayName = String(group.display_name || "未知");
+            var duration = group.duration || App.formatDuration(group.duration_seconds || 0);
+            var activityCount = String(group.activity_count || 0);
+            var percentage = Math.max(0, Math.min(100, parseFloat(group.percentage) || 0));
+            var percentageText = String(group.percentage || 0) + "%";
+            if (cells[0].title !== displayName) cells[0].title = displayName;
+            var name = typeof row.querySelector === "function"
+                ? row.querySelector(".stats-name > span")
+                : null;
+            if (name && name.textContent !== displayName) name.textContent = displayName;
+            if (cells[1].textContent !== duration) cells[1].textContent = duration;
+            if (cells[2].textContent !== activityCount) cells[2].textContent = activityCount;
+            if (cells[3].textContent !== percentageText) cells[3].textContent = percentageText;
+            var bar = typeof row.querySelector === "function"
+                ? row.querySelector(".stats-share-bar i")
+                : null;
+            if (bar && bar.style) bar.style.width = percentage + "%";
+        }
+        return true;
+    }
+    App.patchStatsTable = patchStatsTable;
+
+    function reconcileStatsTable(tbodyId, emptyId, groups) {
+        groups = Array.isArray(groups) ? groups : [];
+        if (!patchStatsTable(tbodyId, groups)) {
+            renderStatsTable(tbodyId, emptyId, groups);
+            return;
+        }
+        var empty = element(emptyId);
+        if (empty) empty.hidden = groups.length > 0;
+    }
+
+    function reconcileStatisticsPresentation(summary, filters) {
+        if (element("stats-total")) element("stats-total").textContent = summary.total_duration || "00:00:00";
+        if (element("stats-activity-count")) element("stats-activity-count").textContent = String(summary.session_count || 0);
+        if (element("stats-project-count")) element("stats-project-count").textContent = String(summary.project_count || 0);
+        if (element("stats-app-count")) element("stats-app-count").textContent = String(summary.app_count || 0);
+        reconcileStatsTable("stats-by-project", "stats-empty-project", summary.by_project || []);
+        reconcileStatsTable("stats-by-file", "stats-empty-file", summary.by_file || []);
+        reconcileStatsTable("stats-by-app", "stats-empty-app", summary.by_app || []);
+        updateStatisticsScope(filters);
+        if (element("statistics-results")) element("statistics-results").hidden = false;
+    }
+    App.reconcileStatisticsPresentation = reconcileStatisticsPresentation;
 
     function executeStatisticsQuery(owner) {
         var filters = owner.filters;
@@ -248,8 +366,14 @@
         );
         var pending = request.then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return null;
-            var data = App.handleResult(result, showStatisticsError);
+            var data = App.handleResult(
+                result,
+                owner.preservePresentation === true ? function () {} : showStatisticsError
+            );
             if (!data || !data.summary || !data.export_ticket) {
+                if (owner.preservePresentation === true) {
+                    throw new Error("statistics_background_refresh_failed");
+                }
                 if (!data) return null;
                 showStatisticsError("加载统计失败");
                 return null;
@@ -260,19 +384,29 @@
                 filters: filters
             };
             App.statisticsSnapshotRevision = String(data.export_ticket.revision || "");
-            showStatistics(data.summary, filters);
+            if (owner.preservePresentation === true && App.statisticsLoaded === true) {
+                reconcileStatisticsPresentation(data.summary, filters);
+            } else {
+                showStatistics(data.summary, filters);
+            }
             App.statisticsLoaded = true;
             accepted = true;
+            resumeStatisticsLiveTicker();
+            App.clearStatisticsError();
             if (typeof App.markPageFresh === "function") App.markPageFresh("statistics");
             return data;
-        }).catch(function () {
-            if (App.requestCoordinator.isCurrent(token)) showStatisticsError("加载统计失败");
+        }).catch(function (error) {
+            if (!App.requestCoordinator.isCurrent(token)) return null;
+            if (owner.preservePresentation === true) throw error;
+            showStatisticsError("加载统计失败");
             return null;
         }).finally(function () {
             if (!App.requestCoordinator.isCurrent(token)) return;
-            setStatisticsLoading(false);
-            if (!accepted && owner.preservePresentation === true && element("statistics-update-status")) {
-                element("statistics-update-status").textContent = "更新失败，仍显示上次结果";
+            if (owner.preservePresentation !== true) setStatisticsLoading(false);
+            if (accepted && owner.preservePresentation === true) {
+                var button = element("stats-export-action-btn");
+                if (button) button.disabled = !!App.statisticsExportSaving
+                    || !App.statisticsAcceptedPayload;
             }
         });
         App.statisticsLoadPromise = pending;
@@ -284,6 +418,9 @@
         var preservePresentation = options.preservePresentation === true
             && App.statisticsLoaded === true
             && !!App.statisticsAcceptedPayload;
+        if (preservePresentation && App.statisticsLoading === true) {
+            return App.statisticsLoadPromise || Promise.resolve(null);
+        }
         if (App.statisticsQueryTimer) window.clearTimeout(App.statisticsQueryTimer);
         App.statisticsQueryTimer = null;
         if (!preservePresentation && typeof App.clearScheduledAutomaticPageRefresh === "function") {
@@ -292,18 +429,18 @@
         var filters = selectedFilters();
         var key = JSON.stringify(filters);
         var token = App.requestCoordinator.beginLatest("statistics", key);
-        if (!preservePresentation) invalidateStatisticsSelection();
-        App.clearStatisticsError();
+        if (!preservePresentation) {
+            invalidateStatisticsSelection();
+            App.clearStatisticsError();
+        }
         updateStatisticsScope(filters);
-        setStatisticsLoading(true);
+        if (!preservePresentation) setStatisticsLoading(true);
         if (!filters.allTime) {
             var message = validateStatisticsDateRange(filters.dateFrom, filters.dateTo);
             if (message) {
+                if (preservePresentation) return Promise.reject(new Error("statistics_background_scope_invalid"));
                 showStatisticsError(message);
                 setStatisticsLoading(false);
-                if (preservePresentation && element("statistics-update-status")) {
-                    element("statistics-update-status").textContent = "更新失败，仍显示上次结果";
-                }
                 return Promise.resolve(null);
             }
         }
@@ -347,9 +484,10 @@
         groups = Array.isArray(groups) ? groups : [];
         if (!groups.length) { body.innerHTML = ""; empty.hidden = false; return; }
         empty.hidden = true;
-        body.innerHTML = groups.map(function (group) {
+        body.innerHTML = groups.map(function (group, index) {
             var percentage = Math.max(0, Math.min(100, parseFloat(group.percentage) || 0));
-            return '<tr><td title="' + App.escapeHtml(group.display_name || "未知") + '"><div class="stats-name">'
+            return '<tr data-statistics-key="' + App.escapeHtml(statisticsGroupKey(group, index))
+                + '"><td title="' + App.escapeHtml(group.display_name || "未知") + '"><div class="stats-name">'
                 + '<span>' + App.escapeHtml(group.display_name || "未知") + '</span>'
                 + '<span class="stats-share-bar" aria-hidden="true"><i style="width:' + percentage + '%"></i></span>'
                 + '</div></td><td class="number">'
@@ -452,8 +590,11 @@
         if (!App.statisticsControlsBound) {
             App.statisticsControlsBound = true;
             ["statistics-date-from", "statistics-date-to"].forEach(function (id) {
-                element(id).addEventListener("input", handleStatisticsDraftDateChange);
-                element(id).addEventListener("change", handleStatisticsDraftDateChange);
+                var input = element(id);
+                input.addEventListener("focus", handleStatisticsDateFocus);
+                input.addEventListener("blur", handleStatisticsDateBlur);
+                input.addEventListener("input", handleStatisticsDraftDateChange);
+                input.addEventListener("change", handleStatisticsDraftDateChange);
             });
             element("statistics-project-filter").addEventListener("change", function () {
                 syncStatisticsSelection();
@@ -524,6 +665,8 @@
         App.statisticsDraftDirty = false;
         App.statisticsSelectionInitialized = false;
         App.statisticsRequestToken = (App.statisticsRequestToken || 0) + 1;
+        App.statisticsLiveTickerSuspended = false;
+        App.statisticsLastLiveRenderKey = "";
         if (App.statisticsQueryTimer) window.clearTimeout(App.statisticsQueryTimer);
         App.statisticsQueryTimer = null;
         clearStatisticsPresentation();

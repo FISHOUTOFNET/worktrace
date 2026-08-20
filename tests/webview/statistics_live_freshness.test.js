@@ -15,6 +15,7 @@ function formatDuration(value) {
 function harness() {
   const listeners = {};
   let runtime = null;
+  let baseRefreshCalls = 0;
   const document = {
     addEventListener(name, handler) { listeners[name] = handler; },
     getElementById() { return null; },
@@ -25,7 +26,7 @@ function harness() {
     WorkTraceApp: {
       formatDuration,
       applyLocalTicker() {},
-      refreshAll() { return Promise.resolve("base"); },
+      refreshAll() { baseRefreshCalls += 1; return Promise.resolve("base"); },
       acceptRefreshStateRuntime(state) {
         if (state && state.runtime) runtime = state.runtime;
         return true;
@@ -62,14 +63,16 @@ function harness() {
     App: window.WorkTraceApp,
     listeners,
     setRuntime(value) { runtime = value; },
+    baseRefreshCalls() { return baseRefreshCalls; },
   };
 }
 
-function runtimeState(structureRevision, liveRevision = "live-1") {
+function runtimeState(structureRevision, reportGeneration = 1, liveRevision = "live-1") {
   return {
     structureRevision,
     liveRevision,
     generations: {
+      report_structure: reportGeneration,
       classification_catalog: 1,
       settings: 1,
     },
@@ -133,8 +136,8 @@ test("statistics live math adds only post-sample delta and recomputes every shar
   assert.equal(base.by_file[0].duration_seconds, 80);
 });
 
-test("manual refresh is routed to the active composed page", async () => {
-  const { App } = harness();
+test("manual statistics refresh stays owned by the central coordinator", async () => {
+  const { App, baseRefreshCalls } = harness();
   let rules = 0;
   let statistics = 0;
   let settings = 0;
@@ -149,7 +152,8 @@ test("manual refresh is routed to the active composed page", async () => {
   App.currentPage = "settings";
   await App.refreshAll();
 
-  assert.deepEqual([rules, statistics, settings], [1, 1, 1]);
+  assert.deepEqual([rules, statistics, settings], [1, 0, 1]);
+  assert.equal(baseRefreshCalls(), 1);
 });
 
 test("loaded settings refresh in the background on every page entry", async () => {
@@ -201,65 +205,74 @@ test("timeline structural refresh is held while editing and drains when clean", 
 
 test("page payload structure changes invalidate project last-used presentation", () => {
   const { App, setRuntime } = harness();
-  setRuntime(runtimeState("structure-1"));
+  setRuntime(runtimeState("structure-1", 1));
   App.currentPage = "timeline";
   App.rulesRefreshPending = false;
 
-  App.acceptPagePayloadRuntime({ runtime: runtimeState("structure-2") });
+  App.acceptPagePayloadRuntime({ runtime: runtimeState("structure-2", 2) });
 
   assert.equal(App.rulesRefreshPending, true);
   assert.equal(App.timelineStructuralRefreshPending, undefined);
 });
 
-test("statistics local ticker never marks an unfetched runtime revision as accepted", () => {
+test("statistics report boundary freezes the old live target without issuing a second fetch", () => {
   const { App, setRuntime } = harness();
-  setRuntime(runtimeState("structure-2"));
+  setRuntime(runtimeState("structure-1", 1, "live-1"));
   App.currentPage = "statistics";
-  App.statisticsAcceptedRefreshIdentity = "structure-1|live-1";
+  let suspended = 0;
+  let statisticsFetches = 0;
+  App.suspendStatisticsLiveTicker = () => { suspended += 1; };
+  App.bridge = {
+    getStatisticsExportSummary() { statisticsFetches += 1; return Promise.resolve({}); },
+  };
+
+  App.acceptRefreshStateRuntime({ runtime: runtimeState("structure-2", 2, "live-2") });
+
+  assert.equal(suspended, 1);
+  assert.equal(statisticsFetches, 0);
+  assert.equal(App.backgroundStatisticsRefresh, undefined);
+});
+
+test("live revision alone neither freezes nor refetches statistics", () => {
+  const { App, setRuntime } = harness();
+  setRuntime(runtimeState("structure-1", 1, "live-1"));
+  App.currentPage = "statistics";
+  let suspended = 0;
+  App.suspendStatisticsLiveTicker = () => { suspended += 1; };
+
+  App.acceptRefreshStateRuntime({ runtime: runtimeState("structure-1", 1, "live-2") });
+
+  assert.equal(suspended, 0);
+});
+
+test("statistics local ticker stops while an activity-boundary sync is pending", () => {
+  const { App } = harness();
+  App.currentPage = "statistics";
   App.statisticsAcceptedPayload = {
     summary: {
       snapshot_revision: "snapshot-1",
       total_duration_seconds: 10,
-      by_project: [],
-      by_file: [],
-      by_app: [],
-      by_status: [],
+      total_duration: "00:00:10",
+      by_project: [], by_file: [], by_app: [], by_status: [],
     },
-    exportTicket: { revision: "snapshot-1" },
-    filters: { dateFrom: "2026-08-16", dateTo: "2026-08-16", projectId: "" },
+    exportTicket: {
+      revision: "snapshot-1",
+      live_target: {
+        enabled: true,
+        ticking: true,
+        sampled_at_epoch_ms: Date.now() - 5000,
+        elapsed_seconds_at_sample: 10,
+      },
+    },
+    filters: { dateFrom: "2026-08-20", dateTo: "2026-08-20", projectId: "" },
   };
+  App.statisticsLastLiveRenderKey = "unchanged";
+  App.statisticsLiveTickerSuspended = true;
 
   App.applyStatisticsLocalTicker();
+  assert.equal(App.statisticsLastLiveRenderKey, "unchanged");
 
-  assert.equal(App.statisticsAcceptedRefreshIdentity, "structure-1|live-1");
-});
-
-test("background statistics refresh records the runtime identity captured at request start", async () => {
-  const { App, setRuntime } = harness();
-  setRuntime(runtimeState("structure-1"));
-  let resolveRequest;
-  const response = new Promise((resolve) => { resolveRequest = resolve; });
-  App.bridge = { getStatisticsExportSummary() { return response; } };
-  App.selectedStatisticsFilters = () => ({
-    dateFrom: "2026-08-16",
-    dateTo: "2026-08-16",
-    projectId: "",
-  });
-  App.requestCoordinator = {
-    beginLatest() { return { id: 1 }; },
-    isCurrent() { return true; },
-  };
-  App.handleResult = (result) => result;
-  App.showStatistics = () => {};
-  App.clearStatisticsError = () => {};
-
-  const pending = App.backgroundStatisticsRefresh();
-  setRuntime(runtimeState("structure-2"));
-  resolveRequest({
-    summary: { total_duration_seconds: 20, by_project: [], by_file: [], by_app: [], by_status: [] },
-    export_ticket: { revision: "snapshot-2" },
-  });
-  await pending;
-
-  assert.equal(App.statisticsAcceptedRefreshIdentity, "structure-1|live-1");
+  App.statisticsLiveTickerSuspended = false;
+  App.applyStatisticsLocalTicker();
+  assert.notEqual(App.statisticsLastLiveRenderKey, "unchanged");
 });

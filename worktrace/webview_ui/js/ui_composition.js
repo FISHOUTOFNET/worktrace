@@ -137,17 +137,6 @@
         return nonNegativeInt(generations && generations[name]);
     }
 
-    function runtimeRefreshIdentity(runtime) {
-        runtime = runtime || (App.liveRuntimeStore && typeof App.liveRuntimeStore.get === "function"
-            ? App.liveRuntimeStore.get()
-            : null);
-        if (!runtime) return "";
-        return [
-            String(runtime.structureRevision || ""),
-            String(runtime.liveRevision || "")
-        ].join("|");
-    }
-
     function patchStatisticsGroupTable(tbodyId, groups) {
         var body = document.getElementById(tbodyId);
         if (!body || typeof body.querySelectorAll !== "function") return false;
@@ -183,7 +172,7 @@
     App.patchStatisticsLiveSummary = patchStatisticsLiveSummary;
 
     function applyStatisticsLocalTicker() {
-        if (App.currentPage !== "statistics") return;
+        if (App.currentPage !== "statistics" || App.statisticsLiveTickerSuspended === true) return;
         var accepted = App.statisticsAcceptedPayload;
         if (!accepted || !accepted.summary || !accepted.filters) return;
         var liveTarget = accepted.exportTicket && accepted.exportTicket.live_target;
@@ -230,45 +219,6 @@
     }
     App.backgroundRulesRefresh = backgroundRulesRefresh;
 
-    function backgroundStatisticsRefresh() {
-        if (!App.bridge || typeof App.bridge.getStatisticsExportSummary !== "function"
-            || typeof App.selectedStatisticsFilters !== "function") {
-            return Promise.resolve(null);
-        }
-        if (App.statisticsLoading) return App.statisticsLoadPromise || Promise.resolve(null);
-        var filters = App.selectedStatisticsFilters();
-        var key = "background|" + JSON.stringify(filters || {});
-        var requestIdentity = runtimeRefreshIdentity();
-        var token = App.requestCoordinator.beginLatest("statistics", key);
-        return App.bridge.getStatisticsExportSummary(
-            filters.dateFrom, filters.dateTo, filters.projectId
-        ).then(function (result) {
-            if (!App.requestCoordinator.isCurrent(token)) return null;
-            var data = App.handleResult(result, function (message) {
-                if (typeof App.showStatisticsError === "function") App.showStatisticsError(message);
-            });
-            if (!data || !data.summary || !data.export_ticket) return null;
-            App.statisticsAcceptedPayload = {
-                summary: data.summary,
-                exportTicket: data.export_ticket,
-                filters: filters
-            };
-            App.statisticsSnapshotRevision = String(data.export_ticket.revision || "");
-            App.statisticsAcceptedRefreshIdentity = requestIdentity;
-            App.statisticsLastLiveRenderKey = "";
-            if (typeof App.showStatistics === "function") App.showStatistics(data.summary, filters);
-            App.statisticsLoaded = true;
-            if (typeof App.clearStatisticsError === "function") App.clearStatisticsError();
-            return data;
-        }).catch(function () {
-            if (App.requestCoordinator.isCurrent(token) && typeof App.showStatisticsError === "function") {
-                App.showStatisticsError("加载统计失败");
-            }
-            return null;
-        });
-    }
-    App.backgroundStatisticsRefresh = backgroundStatisticsRefresh;
-
     function backgroundSettingsRefresh() {
         if (!App.bridge || typeof App.bridge.getSettingsPrivacyStatus !== "function") {
             return Promise.resolve(null);
@@ -308,18 +258,11 @@
     }
     App.backgroundSettingsRefresh = backgroundSettingsRefresh;
 
-    function refreshComposedPage(page, reason) {
+    function refreshComposedPage(page) {
         page = String(page || App.currentPage || "");
-        reason = String(reason || "manual");
         if (page === "rules" && typeof App.loadProjectRules === "function") {
             if (!App.rulesLoaded) return App.loadProjectRules();
             return backgroundRulesRefresh();
-        }
-        if (page === "statistics" && typeof App.loadStatisticsExportSummary === "function") {
-            if (App.statisticsLoading) return App.statisticsLoadPromise || Promise.resolve(null);
-            App.statisticsLastLiveRenderKey = "";
-            if (reason === "manual" || !App.statisticsLoaded) return App.loadStatisticsExportSummary();
-            return backgroundStatisticsRefresh();
         }
         if (page === "settings" && typeof App.loadSettingsPrivacyStatus === "function") {
             if (App.settingsLoading) return App.settingsLoadPromise || Promise.resolve(null);
@@ -329,13 +272,6 @@
         return Promise.resolve(null);
     }
     App.refreshComposedPage = refreshComposedPage;
-
-    function statisticsNeedsEntryRefresh() {
-        if (!App.statisticsLoaded || !App.statisticsAcceptedPayload) return true;
-        var currentIdentity = runtimeRefreshIdentity();
-        if (!currentIdentity || !App.statisticsAcceptedRefreshIdentity) return true;
-        return currentIdentity !== App.statisticsAcceptedRefreshIdentity;
-    }
 
     function drainTimelineStructuralRefresh() {
         if (!App.timelineStructuralRefreshPending || App.currentPage !== "timeline") {
@@ -390,6 +326,8 @@
             !== String(current.structureRevision || "");
         var liveChanged = String(previous.liveRevision || "")
             !== String(current.liveRevision || "");
+        var reportStructureChanged = runtimeGeneration(previous, "report_structure")
+            !== runtimeGeneration(current, "report_structure");
         var classificationChanged = runtimeGeneration(previous, "classification_catalog")
             !== runtimeGeneration(current, "classification_catalog");
         var settingsChanged = runtimeGeneration(previous, "settings")
@@ -413,16 +351,22 @@
             App.suppressNextOverviewCollectionRefresh = !structureChanged && liveChanged;
         }
 
+        // Statistics query ownership belongs to init_fd_work_v5.js. Composition
+        // only freezes the old live target immediately at an activity boundary;
+        // the central generation coordinator performs the debounced silent sync.
+        if (page === "statistics" && reportStructureChanged
+            && typeof App.suspendStatisticsLiveTicker === "function") {
+            App.suspendStatisticsLiveTicker();
+        }
+
         if (page === "timeline" && structureChanged
             && typeof App._timelineEditingActive === "function"
             && App._timelineEditingActive()) {
             App.timelineStructuralRefreshPending = true;
         } else if (page === "rules" && rulesDataChanged) {
-            refreshComposedPage("rules", "runtime-dependency");
-        } else if (page === "statistics" && (structureChanged || liveChanged)) {
-            refreshComposedPage("statistics", "runtime-revision");
+            refreshComposedPage("rules");
         } else if (page === "settings" && settingsChanged) {
-            refreshComposedPage("settings", "settings-generation");
+            refreshComposedPage("settings");
         }
         return accepted;
     }
@@ -457,8 +401,8 @@
     if (typeof baseRefreshAll === "function") {
         App.refreshAll = function () {
             var page = String(App.currentPage || "");
-            if (page === "rules" || page === "statistics" || page === "settings") {
-                return refreshComposedPage(page, "manual");
+            if (page === "rules" || page === "settings") {
+                return refreshComposedPage(page);
             }
             // A user-initiated refresh must never inherit a one-shot suppression
             // token from a preceding passive runtime transition.
@@ -500,11 +444,9 @@
         window.setTimeout(function () {
             if (navPage && App.currentPage === navPage) {
                 if (navPage === "rules" && App.rulesRefreshPending === true) {
-                    refreshComposedPage("rules", "page-entry");
+                    refreshComposedPage("rules");
                 } else if (navPage === "settings") {
-                    refreshComposedPage("settings", "page-entry");
-                } else if (navPage === "statistics" && statisticsNeedsEntryRefresh()) {
-                    refreshComposedPage("statistics", "page-entry");
+                    refreshComposedPage("settings");
                 }
             }
             if (App.timelineStructuralRefreshPending) {
