@@ -27,6 +27,19 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         return 0 if request_running_instance_shutdown(timeout_seconds=20.0) else 5
 
+    # Installer-confirmed privacy acceptance is a one-shot bootstrap intent. Consume
+    # it before the WebView/runtime composition can start collection or expose UI.
+    try:
+        from .desktop.install_bootstrap import consume_privacy_install_intent
+
+        if consume_privacy_install_intent():
+            logging.info("privacy acceptance persisted from installer bootstrap")
+    except Exception:
+        # A transient storage/registry failure must not make the application
+        # unstartable. The pending marker remains retryable and the normal
+        # first-run privacy gate stays authoritative.
+        logging.exception("installer privacy bootstrap consumption failed")
+
     # WebView is the sole shipping UI (no Tkinter fallback); a missing WebView2
     # Runtime or pywebview dependency is a blocking error that exits non-zero.
     from .webview_main import main as webview_main
