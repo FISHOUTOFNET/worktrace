@@ -70,23 +70,9 @@ def merge_short_project_returns(
 ) -> list[dict]:
     """Greedily merge short returns to the same concrete project.
 
-    A return is measured by wall clock from the current project session's end
-    to the next session for that project. Intermediate project sessions and
-    soft status rows inside that interval become members of the merged canonical
-    session. Only caller-supplied semantic boundaries block this second-stage
-    merge; collection lifecycle boundaries such as restart/sleep are
-    intentionally not inferred here.
-
-    Existing durable operation bindings are supplied as member sets. A merge
-    that would change a strict-subset binding is skipped so historical edits
-    keep their exact replay identity. Operations already bound to the complete
-    merged member set remain valid.
-
-    Adjacent same-project sessions are only rejoined when their gap is within
-    the canonical unrecorded-gap threshold (for example a technical lifecycle
-    boundary) or when a real interval row exists between them. This preserves
-    explicit data-gap semantics while still allowing short sleep/restart and
-    privacy/status interruptions to collapse naturally.
+    Wall-clock interruption and caller-supplied boundaries define eligibility.
+    Protected member sets preserve durable operation replay identity, while
+    adjacent same-project gaps still respect canonical unrecorded-gap policy.
     """
     threshold = max(0, int(max_interruption_seconds))
     gap_threshold = max(0, int(unrecorded_gap_boundary_seconds))
