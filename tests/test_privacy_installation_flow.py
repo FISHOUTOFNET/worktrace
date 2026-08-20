@@ -103,11 +103,17 @@ def test_installer_requires_interactive_privacy_review_before_tasks():
 def test_silent_install_does_not_forge_privacy_acceptance():
     source = _read(INSTALLER_PATH)
 
-    assert "if WizardSilent then" in source
-    assert "PrivacyAcceptedForInstall := True" in source
-    assert "if not PrivacyAcceptedForInstall then" in source
-    assert "--accept-privacy-notice " in source
-    assert "--source installer" in source
+    silent_guard = source.index("if WizardSilent then")
+    acceptance_set = source.index("PrivacyAcceptedForInstall := True")
+    staging_guard = source.index("if not PrivacyAcceptedForInstall then")
+    pending_write = source.index("PendingPrivacyNoticeValueName")
+
+    assert silent_guard < acceptance_set
+    assert staging_guard < source.index("RegWriteStringValue", staging_guard)
+    assert pending_write >= 0
+    assert "StagePrivacyAcceptanceForApplication;" in source
+    assert "--accept-privacy-notice " not in source
+    assert "--source installer" not in source
     assert "dontcopy noencryption" in source
 
 
