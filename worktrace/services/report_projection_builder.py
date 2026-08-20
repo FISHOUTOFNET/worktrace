@@ -206,6 +206,7 @@ def compute_projection(
             boundary_times=short_return_boundaries,
             protected_member_sets=protected_member_sets,
             interval_rows=reportable_rows,
+            unrecorded_gap_boundary_seconds=gap_threshold,
         )
         base_projection = build_base_projection(
             base_sessions,
@@ -423,21 +424,38 @@ def _operation_binding_member_sets(
     result: list[frozenset[tuple[str, int, str]]] = []
     for operations in operations_by_date.values():
         for operation in operations:
+            raw_members = (
+                operation.get("members", {})
+                if isinstance(operation, Mapping)
+                else None
+            )
             for role in ("source", "target"):
-                members = operation.members_for(role)
+                if isinstance(raw_members, Mapping):
+                    members = raw_members.get(role, ())
+                else:
+                    members = operation.members_for(role)
                 if not members:
                     continue
-                member_set = frozenset(
-                    (
-                        str(member.report_date or "")[:10],
-                        int(member.activity_id or 0),
-                        str(member.slice_start_time or ""),
-                    )
-                    for member in members
-                    if int(member.activity_id or 0) > 0
-                )
-                if member_set:
-                    result.append(member_set)
+                identities: set[tuple[str, int, str]] = set()
+                for member in members:
+                    if isinstance(member, Mapping):
+                        activity_id = int(
+                            member.get("activity_id") or member.get("id") or 0
+                        )
+                        report_date = str(member.get("report_date") or "")[:10]
+                        slice_start = str(
+                            member.get("slice_start_time")
+                            or member.get("start_time")
+                            or ""
+                        )
+                    else:
+                        activity_id = int(member.activity_id or 0)
+                        report_date = str(member.report_date or "")[:10]
+                        slice_start = str(member.slice_start_time or "")
+                    if activity_id > 0:
+                        identities.add((report_date, activity_id, slice_start))
+                if identities:
+                    result.append(frozenset(identities))
     return tuple(result)
 
 

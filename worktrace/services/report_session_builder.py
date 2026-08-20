@@ -65,6 +65,7 @@ def merge_short_project_returns(
     boundary_times: Sequence[str] = (),
     protected_member_sets: Sequence[frozenset[tuple[str, int, str]]] = (),
     interval_rows: Sequence[Mapping] = (),
+    unrecorded_gap_boundary_seconds: int = DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS,
     max_interruption_seconds: int = SHORT_PROJECT_RETURN_MERGE_SECONDS,
 ) -> list[dict]:
     """Greedily merge short returns to the same concrete project.
@@ -80,8 +81,15 @@ def merge_short_project_returns(
     that would change a strict-subset binding is skipped so historical edits
     keep their exact replay identity. Operations already bound to the complete
     merged member set remain valid.
+
+    Adjacent same-project sessions are only rejoined when their gap is within
+    the canonical unrecorded-gap threshold (for example a technical lifecycle
+    boundary) or when a real interval row exists between them. This preserves
+    explicit data-gap semantics while still allowing short sleep/restart and
+    privacy/status interruptions to collapse naturally.
     """
     threshold = max(0, int(max_interruption_seconds))
+    gap_threshold = max(0, int(unrecorded_gap_boundary_seconds))
     boundary_index = BoundaryIndex(boundary_times)
     protected = tuple(frozenset(item) for item in protected_member_sets if item)
     interval_source = tuple(dict(row) for row in interval_rows)
@@ -114,6 +122,14 @@ def merge_short_project_returns(
                 if _same_concrete_project(current, candidate):
                     if bool(candidate.get("is_in_progress")):
                         break
+                    if cursor == consumed + 1:
+                        interval_members = _interval_row_member_identity_set(
+                            current,
+                            candidate,
+                            interval_source,
+                        )
+                        if not interval_members and interruption > gap_threshold:
+                            break
                     matched_index = cursor
                     break
                 cursor += 1
@@ -332,8 +348,8 @@ def _crosses_session_boundary(
 
 
 def _merge_short_return_group(group: Sequence[Mapping]) -> dict:
-    if len(group) < 3:
-        raise ValueError("short_return_merge_requires_interruption")
+    if len(group) < 2:
+        raise ValueError("short_return_merge_requires_return")
     first = group[0]
     last = group[-1]
     if not _same_concrete_project(first, last):
