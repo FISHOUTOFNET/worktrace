@@ -199,9 +199,26 @@
     }
     App.openRulesPanel = openRulesPanel;
 
+    function collapseExpandedProjectRules() {
+        if (typeof document.querySelectorAll !== "function") return;
+        var buttons = document.querySelectorAll(".rules-project-toggle");
+        Array.prototype.forEach.call(buttons, function (button) {
+            var card = button && button.closest ? button.closest(".rules-project-card") : null;
+            var rows = card && card.querySelector ? card.querySelector(".rules-row-list") : null;
+            if (rows) rows.hidden = true;
+            if (!button) return;
+            button.setAttribute("aria-expanded", "false");
+            button.classList.remove("is-expanded");
+            button.setAttribute("aria-label", "展开项目规则");
+            button.setAttribute("data-tooltip", "展开规则");
+        });
+    }
+    App.collapseExpandedProjectRules = collapseExpandedProjectRules;
+
     function resetRulesTransientUi(options) {
         options = options || {};
         App.rulesPanelSessionToken += 1;
+        collapseExpandedProjectRules();
         var panel = document.getElementById("rules-create-panel");
         if (panel && App.closeManagedDrawer) {
             App.closeManagedDrawer(panel, {
