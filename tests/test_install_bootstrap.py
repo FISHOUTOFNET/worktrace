@@ -1,4 +1,4 @@
-"""Installer bootstrap contracts for optional integrations."""
+"""Installer bootstrap contracts for optional integrations and privacy."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,8 +6,12 @@ from pathlib import Path
 from worktrace.desktop.install_bootstrap import (
     ENABLE_FD_WORK_VALUE,
     INSTALL_BOOTSTRAP_KEY,
+    PENDING_PRIVACY_NOTICE_VALUE,
+    PRIVACY_NOTICE_VALUE,
     consume_fd_work_install_intent,
+    consume_privacy_install_intent,
 )
+from worktrace.privacy_policy import PRIVACY_NOTICE_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,9 +21,18 @@ class _FakeRegistry:
     KEY_QUERY_VALUE = 0x0001
     KEY_SET_VALUE = 0x0002
 
-    def __init__(self, *, value=1, exists: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        value=1,
+        exists: bool = True,
+        values: dict[str, object] | None = None,
+    ) -> None:
         self.exists = exists
-        self.values = {ENABLE_FD_WORK_VALUE: value} if exists else {}
+        if values is None:
+            self.values = {ENABLE_FD_WORK_VALUE: value} if exists else {}
+        else:
+            self.values = dict(values)
         self.open_calls = 0
         self.closed = False
         self.key_deleted = False
@@ -153,6 +166,68 @@ def test_invalid_bootstrap_value_is_removed_without_enabling_plugin() -> None:
     assert registry.key_deleted is True
 
 
+def test_privacy_intent_persists_through_application_service_and_is_consumed() -> None:
+    registry = _FakeRegistry(
+        values={
+            PRIVACY_NOTICE_VALUE: PRIVACY_NOTICE_VERSION,
+            PENDING_PRIVACY_NOTICE_VALUE: PRIVACY_NOTICE_VERSION,
+        }
+    )
+    accepted_versions: list[str] = []
+
+    assert consume_privacy_install_intent(
+        accept_notice=lambda version: accepted_versions.append(version) or True,
+        registry=registry,
+        platform="win32",
+    ) is True
+    assert accepted_versions == [PRIVACY_NOTICE_VERSION]
+    assert registry.values == {PRIVACY_NOTICE_VALUE: PRIVACY_NOTICE_VERSION}
+    assert registry.closed is True
+    assert registry.key_deleted is False
+
+
+def test_privacy_persistence_failure_keeps_intent_retryable() -> None:
+    registry = _FakeRegistry(
+        values={PENDING_PRIVACY_NOTICE_VALUE: PRIVACY_NOTICE_VERSION}
+    )
+
+    assert consume_privacy_install_intent(
+        accept_notice=lambda _version: False,
+        registry=registry,
+        platform="win32",
+    ) is False
+    assert registry.values == {
+        PENDING_PRIVACY_NOTICE_VALUE: PRIVACY_NOTICE_VERSION
+    }
+    assert registry.closed is True
+
+
+def test_invalid_privacy_version_is_discarded_without_persisting() -> None:
+    registry = _FakeRegistry(values={PENDING_PRIVACY_NOTICE_VALUE: "999"})
+    accepted_versions: list[str] = []
+
+    assert consume_privacy_install_intent(
+        accept_notice=lambda version: accepted_versions.append(version) or True,
+        registry=registry,
+        platform="win32",
+    ) is False
+    assert accepted_versions == []
+    assert registry.values == {}
+    assert registry.key_deleted is True
+
+
+def test_application_consumes_privacy_intent_only_for_normal_startup() -> None:
+    source = (ROOT / "worktrace" / "main.py").read_text(encoding="utf-8")
+    maintenance_index = source.index("if options.shutdown_for_maintenance:")
+    maintenance_return_index = source.index(
+        "return 0 if request_running_instance_shutdown(timeout_seconds=20.0) else 5"
+    )
+    privacy_index = source.index("consume_privacy_install_intent()")
+    webview_index = source.index("from .webview_main import main as webview_main")
+
+    assert maintenance_index < maintenance_return_index < privacy_index < webview_index
+
+
 def test_composition_root_consumes_intent_before_authorized_startup() -> None:
     source = (ROOT / "worktrace" / "webview_main.py").read_text(encoding="utf-8")
     build_index = source.index("services = build_application_services(")
@@ -198,3 +273,15 @@ def test_installer_exposes_default_tasks_and_red_fd_work_notice() -> None:
         in source
     )
     assert "ConfigureFDWorkTaskNotice;" in source
+
+
+def test_installer_privacy_bootstrap_does_not_cold_start_trace_after_progress() -> None:
+    source = (ROOT / "installer" / "WorkTrace.iss").read_text(encoding="utf-8")
+
+    assert f"PrivacyNoticeVersion = '{PRIVACY_NOTICE_VERSION}';" in source
+    assert "PendingPrivacyNoticeValueName = 'PendingPrivacyNoticeVersion';" in source
+    assert "StagePrivacyAcceptanceForApplication;" in source
+    assert "--accept-privacy-notice" not in source
+    assert "ewWaitUntilTerminated" in source  # maintenance shutdown remains synchronous
+    assert "正在关闭正在运行的有迹并准备安装，请稍候..." in source
+    assert "CompareText(Trim(ExistingValue), '2') = 0" in source
