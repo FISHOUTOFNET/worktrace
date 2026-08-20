@@ -6,7 +6,7 @@ import sys
 from collections.abc import Callable
 from typing import Any, Protocol
 
-from worktrace.privacy_policy import PRIVACY_NOTICE_VERSION
+from worktrace.constants import PRIVACY_NOTICE_VERSION
 
 logger = logging.getLogger(__name__)
 
