@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime
 from typing import Mapping, Sequence
 
@@ -16,6 +17,8 @@ from ..resources.title_parsing import extract_anchor_file_name
 from .context_service import BoundaryIndex
 from .report_projection_identity import member_set_hash
 from .report_status_policy import SESSION_CONTRIBUTION, decide_report_status
+
+SHORT_PROJECT_RETURN_MERGE_SECONDS = 5 * 60
 
 
 def build_report_sessions(
@@ -55,6 +58,81 @@ def build_report_sessions(
     return sessions
 
 
+def merge_short_project_returns(
+    sessions: Sequence[dict],
+    *,
+    boundary_times: Sequence[str] = (),
+    protected_member_sets: Sequence[frozenset[tuple[str, int, str]]] = (),
+    max_interruption_seconds: int = SHORT_PROJECT_RETURN_MERGE_SECONDS,
+) -> list[dict]:
+    """Greedily merge short returns to the same concrete project.
+
+    A return is measured by wall clock from the current project session's end
+    to the next session for that project. Intermediate project sessions become
+    members of the merged canonical session. Only caller-supplied semantic
+    boundaries block this second-stage merge; collection lifecycle boundaries
+    such as restart/sleep are intentionally not inferred here.
+
+    Existing durable operation bindings are supplied as member sets. A merge
+    that would change a strict-subset binding is skipped so historical edits
+    keep their exact replay identity. Operations already bound to the complete
+    merged member set remain valid.
+    """
+    threshold = max(0, int(max_interruption_seconds))
+    boundary_index = BoundaryIndex(boundary_times)
+    protected = tuple(frozenset(item) for item in protected_member_sets if item)
+    result: list[dict] = []
+    index = 0
+    total = len(sessions)
+
+    while index < total:
+        current = deepcopy(dict(sessions[index]))
+        consumed = index
+        if not _is_short_return_anchor(current):
+            result.append(current)
+            index += 1
+            continue
+
+        while True:
+            matched_index: int | None = None
+            cursor = consumed + 1
+            while cursor < total:
+                candidate = sessions[cursor]
+                if str(candidate.get("report_date") or "") != str(
+                    current.get("report_date") or ""
+                ):
+                    break
+                interruption = _session_gap_seconds(current, candidate)
+                if interruption is None or interruption > threshold:
+                    break
+                if _crosses_session_boundary(current, candidate, boundary_index):
+                    break
+                if _same_concrete_project(current, candidate):
+                    if bool(candidate.get("is_in_progress")):
+                        break
+                    matched_index = cursor
+                    break
+                cursor += 1
+
+            if matched_index is None:
+                break
+
+            group = [
+                current,
+                *(deepcopy(dict(item)) for item in sessions[consumed + 1 : matched_index + 1]),
+            ]
+            candidate_members = _group_member_identity_set(group)
+            if _protected_merge_conflict(candidate_members, protected):
+                break
+            current = _merge_short_return_group(group)
+            consumed = matched_index
+
+        result.append(current)
+        index = consumed + 1
+
+    return result
+
+
 def _build_session(rows: Sequence[Mapping], uncategorized_id: int) -> dict:
     """Build one canonical session and aggregate semantics from every member."""
     if not rows:
@@ -87,6 +165,7 @@ def _build_session(rows: Sequence[Mapping], uncategorized_id: int) -> dict:
         ),
         "project_is_deleted": bool(first.get("report_project_is_deleted")),
         "project_is_archived": bool(first.get("report_project_is_archived")),
+        "report_project_key": str(first.get("report_project_key") or ""),
         "start_time": first.get("start_time"),
         "end_time": last.get("end_time"),
         "report_date": first.get("report_date"),
@@ -199,6 +278,148 @@ def _finalize_session_semantics(
     session["is_classified"] = bool(session["is_report_classified"])
     session["is_uncategorized"] = bool(session["is_report_uncategorized"])
     return session
+
+
+def _is_short_return_anchor(session: Mapping) -> bool:
+    return bool(
+        str(session.get("row_kind") or "project_session") == "project_session"
+        and bool(session.get("is_report_project"))
+        and int(session.get("project_id") or 0) > 0
+        and not bool(session.get("project_is_deleted"))
+        and not bool(session.get("is_in_progress"))
+    )
+
+
+def _same_concrete_project(left: Mapping, right: Mapping) -> bool:
+    return bool(
+        _is_short_return_anchor(left)
+        and bool(right.get("is_report_project"))
+        and int(right.get("project_id") or 0) == int(left.get("project_id") or 0)
+        and not bool(right.get("project_is_deleted"))
+    )
+
+
+def _session_gap_seconds(left: Mapping, right: Mapping) -> int | None:
+    left_end = _parse_time(left.get("end_time"))
+    right_start = _parse_time(right.get("start_time"))
+    if left_end is None or right_start is None or right_start < left_end:
+        return None
+    return int((right_start - left_end).total_seconds())
+
+
+def _crosses_session_boundary(
+    left: Mapping,
+    right: Mapping,
+    boundary_index: BoundaryIndex,
+) -> bool:
+    start = str(left.get("end_time") or left.get("start_time") or "")
+    end = str(right.get("start_time") or "")
+    return boundary_index.crosses(start, end)
+
+
+def _merge_short_return_group(group: Sequence[Mapping]) -> dict:
+    if len(group) < 3:
+        raise ValueError("short_return_merge_requires_interruption")
+    first = group[0]
+    last = group[-1]
+    if not _same_concrete_project(first, last):
+        raise ValueError("short_return_merge_project_mismatch")
+
+    merged = deepcopy(dict(first))
+    activity_ids: list[int] = []
+    member_slices: list[dict] = []
+    for session in group:
+        for activity_id in session.get("activity_ids") or []:
+            value = int(activity_id or 0)
+            if value > 0 and value not in activity_ids:
+                activity_ids.append(value)
+        member_slices.extend(
+            deepcopy(dict(member)) for member in session.get("member_slices") or []
+        )
+
+    duration = _wall_clock_span_seconds(first, last)
+    if duration is None:
+        duration = sum(max(0, int(item.get("duration_seconds") or 0)) for item in group)
+
+    merged.update(
+        {
+            "start_time": first.get("start_time"),
+            "end_time": last.get("end_time"),
+            "duration_seconds": duration,
+            "closed_duration_seconds": duration,
+            "open_activity_id": 0,
+            "activity_ids": activity_ids,
+            "member_slices": member_slices,
+            "activity_member_hash": member_set_hash(
+                str(first.get("report_date") or ""),
+                member_slices,
+            ),
+            "anchor_activity_id": int(activity_ids[0]) if activity_ids else 0,
+            "first_activity_id": int(activity_ids[0]) if activity_ids else None,
+            "sort_time": last.get("start_time") or first.get("start_time"),
+            "event_count": sum(max(0, int(item.get("event_count") or 0)) for item in group),
+            "status": (
+                first.get("status")
+                if len({str(item.get("status") or "") for item in group}) == 1
+                else "mixed"
+            ),
+            "status_code": STATUS_NORMAL,
+            "contributes_to_totals": True,
+            "live_delta_eligible": False,
+            "editable": all(bool(item.get("editable", True)) for item in group),
+            "exportable": all(bool(item.get("exportable", True)) for item in group),
+            "is_in_progress": False,
+            "_wall_clock_duration_seconds": duration,
+            "_short_project_return_merged": True,
+        }
+    )
+
+    anchor_sessions = (first, last)
+    if any(bool(item.get("is_official_project")) for item in anchor_sessions):
+        merged["is_official_project"] = True
+        merged["report_attribution_kind"] = "official_direct"
+    return merged
+
+
+def _wall_clock_span_seconds(first: Mapping, last: Mapping) -> int | None:
+    start = _parse_time(first.get("start_time"))
+    end = _parse_time(last.get("end_time"))
+    if start is None or end is None or end < start:
+        return None
+    return int((end - start).total_seconds())
+
+
+def _group_member_identity_set(
+    group: Sequence[Mapping],
+) -> frozenset[tuple[str, int, str]]:
+    result: set[tuple[str, int, str]] = set()
+    for session in group:
+        result.update(_session_member_identity_set(session))
+    return frozenset(result)
+
+
+def _session_member_identity_set(
+    session: Mapping,
+) -> frozenset[tuple[str, int, str]]:
+    return frozenset(
+        (
+            str(member.get("report_date") or session.get("report_date") or "")[:10],
+            int(member.get("activity_id") or member.get("id") or 0),
+            str(member.get("slice_start_time") or member.get("start_time") or ""),
+        )
+        for member in session.get("member_slices") or []
+        if int(member.get("activity_id") or member.get("id") or 0) > 0
+    )
+
+
+def _protected_merge_conflict(
+    candidate_members: frozenset[tuple[str, int, str]],
+    protected_member_sets: Sequence[frozenset[tuple[str, int, str]]],
+) -> bool:
+    return any(
+        protected != candidate_members and bool(protected.intersection(candidate_members))
+        for protected in protected_member_sets
+    )
 
 
 def _status_summary(rows: Sequence[Mapping]) -> str:
@@ -316,4 +537,8 @@ def _parse_time(value: object) -> datetime | None:
         return None
 
 
-__all__ = ["build_report_sessions"]
+__all__ = [
+    "SHORT_PROJECT_RETURN_MERGE_SECONDS",
+    "build_report_sessions",
+    "merge_short_project_returns",
+]

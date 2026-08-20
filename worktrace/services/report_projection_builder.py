@@ -28,6 +28,7 @@ from typing import Any
 from ..constants import DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS
 from . import report_operation_repository
 from . import report_session_operation_engine as engine
+from . import session_boundary_service
 from .projection_performance import record_counts, stage
 from .report_fact_query_service import (
     boundary_times_for_rows,
@@ -41,13 +42,18 @@ from .report_projection_model import (
     ProjectState,
     project_state_from_row,
 )
-from .report_session_builder import build_report_sessions
+from .report_session_builder import (
+    build_report_sessions,
+    merge_short_project_returns,
+)
 from .report_session_projection_service import (
     build_base_projection,
     display_safe_contribution,
 )
 from .report_status_policy import STANDALONE_STATUS, SUPPRESSED, decide_report_status
 from .settings_service import get_int_setting
+
+_SHORT_RETURN_BLOCKING_REASONS = frozenset({"user_pause", "user_stop"})
 
 
 @dataclass
@@ -166,6 +172,19 @@ def compute_projection(
             if value:
                 boundary_values.append(str(value))
     boundaries = sorted(set(boundary_values))
+    short_return_boundaries = _short_return_blocking_boundaries(
+        rows,
+        deleted_rows,
+        conn=conn,
+    )
+
+    with stage("operation_load"):
+        operations_by_date = report_operation_repository.load_operations_by_date(
+            conn,
+            start_date,
+            end_date,
+        )
+    protected_member_sets = _operation_binding_member_sets(operations_by_date)
 
     gap_threshold = max(
         60,
@@ -182,6 +201,11 @@ def compute_projection(
             boundary_times=boundaries,
             unrecorded_gap_boundary_seconds=gap_threshold,
         )
+        base_sessions = merge_short_project_returns(
+            base_sessions,
+            boundary_times=short_return_boundaries,
+            protected_member_sets=protected_member_sets,
+        )
         base_projection = build_base_projection(
             base_sessions,
             reportable_rows,
@@ -189,12 +213,6 @@ def compute_projection(
         )
         base_sessions = list(base_projection.sessions)
 
-    with stage("operation_load"):
-        operations_by_date = report_operation_repository.load_operations_by_date(
-            conn,
-            start_date,
-            end_date,
-        )
     dates = {
         str(session.get("report_date") or "")
         for session in base_sessions
@@ -352,6 +370,63 @@ def compute_projection(
         snapshot_revision=revision,
         activity_count=len(rows),
     )
+
+
+def _short_return_blocking_boundaries(
+    rows: list[dict[str, Any]],
+    deleted_rows: list[dict[str, Any]],
+    *,
+    conn,
+) -> list[str]:
+    values = [
+        str(value)
+        for row in rows
+        for value in (row.get("start_time"), row.get("end_time"))
+        if value
+    ]
+    result: list[str] = []
+    if values:
+        for boundary in session_boundary_service.list_boundaries(
+            min(values),
+            max(values),
+            conn=conn,
+        ):
+            if str(boundary.get("reason") or "") in _SHORT_RETURN_BLOCKING_REASONS:
+                occurred_at = str(boundary.get("occurred_at") or "")
+                if occurred_at:
+                    result.append(occurred_at)
+    # Hidden/deleted project intervals must not be silently reassigned to a
+    # neighbouring visible project by the short-return rule.
+    for row in deleted_rows:
+        for value in (row.get("start_time"), row.get("end_time")):
+            if value:
+                result.append(str(value))
+    return sorted(set(result))
+
+
+def _operation_binding_member_sets(
+    operations_by_date,
+) -> tuple[frozenset[tuple[str, int, str]], ...]:
+    """Return source/target member sets that must retain replay identity."""
+    result: list[frozenset[tuple[str, int, str]]] = []
+    for operations in operations_by_date.values():
+        for operation in operations:
+            for role in ("source", "target"):
+                members = operation.members_for(role)
+                if not members:
+                    continue
+                member_set = frozenset(
+                    (
+                        str(member.report_date or "")[:10],
+                        int(member.activity_id or 0),
+                        str(member.slice_start_time or ""),
+                    )
+                    for member in members
+                    if int(member.activity_id or 0) > 0
+                )
+                if member_set:
+                    result.append(member_set)
+    return tuple(result)
 
 
 def _load_project_states(conn, uncategorized_id: int) -> list[ProjectState]:
