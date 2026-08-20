@@ -136,8 +136,27 @@ def test_sleep_resume_boundary_allows_short_project_return(temp_db):
     assert sessions[0]["duration_seconds"] == 21 * 60
 
 
-def test_short_project_return_wall_clock_includes_small_unrecorded_gap(temp_db):
+def test_short_project_return_absorbs_excluded_row_without_double_count(temp_db):
     day = "2026-07-10"
+    project_a = project_service.create_project("A")
+    project_b = project_service.create_project("B")
+    _closed(day, "09:00:00", "09:10:00", project_id=project_a)
+    _closed(day, "09:10:00", "09:11:00", project_id=project_b)
+    _closed(day, "09:11:00", "09:12:00", status="excluded")
+    _closed(day, "09:12:00", "09:22:00", project_id=project_a)
+
+    snapshot = build_visible_snapshot(day, day)
+    assert len(snapshot.final_sessions) == 1
+    assert len(snapshot.standalone_status_entries) == 0
+    session = snapshot.final_sessions[0]
+    assert session["project_name"] == "A"
+    assert int(session["duration_seconds"]) == 22 * 60
+    assert len(session["activity_ids"]) == 4
+    assert sum(int(row["duration_seconds"]) for row in snapshot.final_contributions) == 22 * 60
+
+
+def test_short_project_return_wall_clock_includes_small_unrecorded_gap(temp_db):
+    day = "2026-07-11"
     project_a = project_service.create_project("A")
     project_b = project_service.create_project("B")
     _closed(day, "09:00:00", "09:10:00", project_id=project_a)
