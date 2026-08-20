@@ -127,8 +127,10 @@ begin
   ) then
   begin
     Result := CompareText(Trim(ExistingValue), PrivacyNoticeVersion) = 0;
-    ; Version 2 was an unpublished historical marker for the same version-1 policy.
-    if (not Result) and (CompareText(Trim(ExistingValue), '2') = 0) then
+    // Version 2 was an unpublished historical marker for the same version-1 policy.
+    if (not Result) and
+       (CompareText(PrivacyNoticeVersion, '1') = 0) and
+       (CompareText(Trim(ExistingValue), '2') = 0) then
       Result := True;
   end;
 end;
