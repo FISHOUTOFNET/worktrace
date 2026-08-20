@@ -13,9 +13,11 @@ import logging
 import threading
 from typing import Any
 
+from ..constants import STATUS_NORMAL
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
+from ..path_utils import looks_like_anchor_file_path
 from ..worker_health import WorkerHealthReporter
 from ..write_gate import DATABASE_WRITE_GATE
 from . import (
@@ -70,6 +72,11 @@ def submit_rule_job(
                 or 0
             )
         cutoff = _activity_cutoff(read_conn)
+        requires_folder_index = bool(
+            kind == "rule_backfill"
+            and rule_type == "folder"
+            and _history_requires_folder_index(read_conn, cutoff)
+        )
 
     timestamp = now_str()
     restore_enabled = bool(int(rule.get("enabled") or 0))
@@ -78,6 +85,7 @@ def submit_rule_job(
         "rule_id": rule_id,
         "restore_enabled": restore_enabled,
         "estimated_count": estimated,
+        "requires_folder_index": requires_folder_index,
     }
     with DomainUnitOfWork() as uow:
         conn = uow.connection
@@ -155,6 +163,7 @@ def submit_rule_batch_job(
         "collision_counts": [0 for _ in normalized],
         "updated_by_rule": [0 for _ in normalized],
         "estimated_count": None,
+        "requires_folder_index": False,
     }
     timestamp = now_str()
     with DomainUnitOfWork() as uow:
@@ -228,43 +237,22 @@ def run_pending_jobs(limit: int = 1) -> int:
     if maximum <= 0:
         return 0
     with get_connection() as conn:
-        ids = [
-            int(row["id"])
-            for row in conn.execute(
-                """
-                SELECT job.id
-                FROM history_mutation_job AS job
-                WHERE job.status IN ('pending', 'running')
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM history_mutation_job_rule AS job_rule
-                      LEFT JOIN folder_rule_index_state AS state
-                        ON state.folder_rule_id = job_rule.rule_id
-                      WHERE job_rule.job_id = job.id
-                        AND job.kind = 'rule_backfill'
-                        AND job_rule.rule_type = 'folder'
-                        AND (
-                            state.folder_rule_id IS NULL
-                            OR NOT (
-                                (
-                                    state.status = 'ready'
-                                    AND state.build_status = 'ready'
-                                    AND state.active_generation IS NOT NULL
-                                    AND state.valid_from IS NOT NULL
-                                    AND state.building_generation IS NULL
-                                    AND COALESCE(state.refresh_requested, 0) = 0
-                                )
-                                OR state.status = 'error'
-                                OR state.build_status = 'error'
-                            )
-                        )
-                  )
-                ORDER BY job.created_at, job.id
-                LIMIT ?
-                """,
-                (maximum,),
-            ).fetchall()
-        ]
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM history_mutation_job
+            WHERE status IN ('pending', 'running')
+            ORDER BY created_at, id
+            """
+        ).fetchall()
+    ids: list[int] = []
+    for row in rows:
+        job = dict(row)
+        if _folder_index_gate(job) == "waiting":
+            continue
+        ids.append(int(job["id"]))
+        if len(ids) >= maximum:
+            break
     for job_id in ids:
         run_job_batch(job_id)
     return len(ids)
@@ -882,6 +870,43 @@ def _activity_cutoff(conn) -> int:
     )
 
 
+def _history_requires_folder_index(conn, cutoff_id: int) -> bool:
+    """Return whether eligible history contains a file without path evidence."""
+
+    rows = conn.execute(
+        """
+        SELECT a.file_path_hint, a.window_title,
+               ar.path_hint AS resource_path_hint,
+               ar.display_name AS resource_display_name
+        FROM activity_log AS a
+        LEFT JOIN activity_resource AS ar ON ar.activity_id = a.id
+        LEFT JOIN activity_project_assignment AS apa ON apa.activity_id = a.id
+        WHERE a.id <= ?
+          AND COALESCE(a.is_deleted, 0) = 0
+          AND COALESCE(a.is_hidden, 0) = 0
+          AND a.end_time IS NOT NULL
+          AND a.status = ?
+          AND COALESCE(apa.is_manual, 0) = 0
+        ORDER BY a.id
+        """,
+        (int(cutoff_id), STATUS_NORMAL),
+    )
+    for row in rows:
+        if any(
+            looks_like_anchor_file_path(str(value or "").strip())
+            for value in (row["resource_path_hint"], row["file_path_hint"])
+        ):
+            continue
+        if planner.activity_file_name(
+            {
+                "resource_display_name": row["resource_display_name"],
+                "window_title": row["window_title"],
+            }
+        ):
+            return True
+    return False
+
+
 def _normalize_rule_refs(rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
     refs = catalog.normalize_rule_refs(rules)
     return [
@@ -891,9 +916,12 @@ def _normalize_rule_refs(rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _folder_index_gate(job: dict) -> str:
-    """Return ready/waiting/error for folder-backed history application."""
+    """Return ready/waiting/error when this history job needs folder index facts."""
 
     if str(job.get("kind") or "") != "rule_backfill":
+        return "ready"
+    payload = _payload(job)
+    if not bool(payload.get("requires_folder_index")):
         return "ready"
     with get_connection() as conn:
         rows = conn.execute(

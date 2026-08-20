@@ -95,7 +95,7 @@ def test_waiting_folder_backfill_does_not_block_ready_keyword_job(
     keyword_project = project_service.create_project("Ready Keyword")
     keyword_rule_id = rule_service.create_rule("Spec", keyword_project)
     activity_id = _closed_activity(
-        "Spec document - Word",
+        "Spec.docx - Word",
         "2026-06-18 10:00:00",
         "2026-06-18 10:10:00",
     )
