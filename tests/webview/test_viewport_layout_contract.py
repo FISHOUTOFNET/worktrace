@@ -143,6 +143,12 @@ def test_statistics_keeps_controls_and_metrics_fixed_while_tables_scroll():
 
     results = _rule(final, "#statistics-results:not([hidden])")
     result_panel = _rule(final, ".stats-result")
+    stats_panels = _rule(
+        final,
+        "#stats-project-panel:not([hidden]),\n"
+        "#stats-file-panel:not([hidden]),\n"
+        "#stats-app-panel:not([hidden])",
+    )
     table_scroll = _rule(final, ".stats-result .table-scroll")
 
     assert "flex: 1 1 auto" in results
@@ -154,6 +160,11 @@ def test_statistics_keeps_controls_and_metrics_fixed_while_tables_scroll():
     assert "min-height: 0" in result_panel
     assert "display: flex" in result_panel
     assert "flex-direction: column" in result_panel
+
+    assert "flex: 1 1 auto" in stats_panels
+    assert "min-height: 0" in stats_panels
+    assert "display: flex" in stats_panels
+    assert "flex-direction: column" in stats_panels
 
     assert "flex: 1 1 auto" in table_scroll
     assert "min-height: 0" in table_scroll
