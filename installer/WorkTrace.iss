@@ -79,9 +79,10 @@ const
   WebView2BootstrapperName = 'MicrosoftEdgeWebview2Setup.exe';
   MaintenanceShutdownArgument = '--shutdown-for-maintenance';
   PrivacyPolicyFileName = 'privacy_policy_zh-CN.txt';
-  PrivacyNoticeVersion = '2';
+  PrivacyNoticeVersion = '1';
   InstallBootstrapKey = 'Software\WorkTrace\InstallBootstrap';
   PrivacyNoticeValueName = 'PrivacyNoticeVersion';
+  PendingPrivacyNoticeValueName = 'PendingPrivacyNoticeVersion';
 
 var
   FDWorkTaskNotice: TNewStaticText;
@@ -124,7 +125,12 @@ begin
     PrivacyNoticeValueName,
     ExistingValue
   ) then
+  begin
     Result := CompareText(Trim(ExistingValue), PrivacyNoticeVersion) = 0;
+    ; Version 2 was an unpublished historical marker for the same version-1 policy.
+    if (not Result) and (CompareText(Trim(ExistingValue), '2') = 0) then
+      Result := True;
+  end;
 end;
 
 function ExistingApplicationExePath: String;
@@ -346,10 +352,7 @@ begin
   Result := (PageID = PrivacyPage.ID) and PrivacyAcceptedForInstall;
 end;
 
-procedure PersistPrivacyAcceptanceFromInstaller;
-var
-  ResultCode: Integer;
-  Arguments: String;
+procedure StagePrivacyAcceptanceForApplication;
 begin
   if not PrivacyAcceptedForInstall then
   begin
@@ -357,31 +360,32 @@ begin
     exit;
   end;
 
-  Arguments :=
-    '--accept-privacy-notice ' + PrivacyNoticeVersion + ' --source installer';
-  ResultCode := -1;
-  if Exec(
-    ExpandConstant('{app}\{#MyAppExeName}'),
-    Arguments,
-    ExpandConstant('{app}'),
-    SW_HIDE,
-    ewWaitUntilTerminated,
-    ResultCode
-  ) and (ResultCode = 0) then
+  if not RegWriteStringValue(
+    HKCU,
+    InstallBootstrapKey,
+    PendingPrivacyNoticeValueName,
+    PrivacyNoticeVersion
+  ) then
   begin
-    RegWriteStringValue(
-      HKCU,
-      InstallBootstrapKey,
-      PrivacyNoticeValueName,
-      PrivacyNoticeVersion
-    );
-    Log('Privacy policy version ' + PrivacyNoticeVersion + ' accepted and persisted.');
-  end
-  else
-    Log(
-      'Privacy acceptance bootstrap did not complete; first-run gate remains authoritative. ' +
-      'Exit code: ' + IntToStr(ResultCode)
-    );
+    Log('Failed to queue privacy acceptance for application persistence.');
+    exit;
+  end;
+
+  if not RegWriteStringValue(
+    HKCU,
+    InstallBootstrapKey,
+    PrivacyNoticeValueName,
+    PrivacyNoticeVersion
+  ) then
+  begin
+    Log('Failed to persist installer privacy acceptance marker.');
+    exit;
+  end;
+
+  Log(
+    'Privacy policy version ' + PrivacyNoticeVersion +
+    ' accepted; application persistence queued for next normal launch.'
+  );
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -391,9 +395,14 @@ var
 begin
   Result := '';
 
-  if (ExistingApplicationExePath <> '') and
-     not RequestWorkTraceShutdown('upgrade') then
-    Log('Continuing upgrade so Restart Manager can apply the configured fallback.');
+  if ExistingApplicationExePath <> '' then
+  begin
+    WizardForm.PreparingLabel.Caption :=
+      '正在关闭正在运行的有迹并准备安装，请稍候...';
+    WizardForm.StatusLabel.Caption := '正在关闭正在运行的有迹，请稍候...';
+    if not RequestWorkTraceShutdown('upgrade') then
+      Log('Continuing upgrade so Restart Manager can apply the configured fallback.');
+  end;
 
   if IsWebView2RuntimeInstalled then
   begin
@@ -403,6 +412,8 @@ begin
 
   Log('WebView2 Runtime missing; downloading Microsoft Evergreen Bootstrapper.');
   try
+    WizardForm.PreparingLabel.Caption :=
+      '正在安装 Microsoft Edge WebView2 Runtime，请稍候...';
     WizardForm.StatusLabel.Caption := '正在安装 Microsoft Edge WebView2 Runtime...';
     DownloadTemporaryFile(
       WebView2BootstrapperUrl,
@@ -460,6 +471,8 @@ begin
   ConfigurePrivacyPage;
   ConfigureFDWorkTaskNotice;
 
+  WizardForm.PreparingLabel.Caption := '正在准备安装，请稍候...';
+
   if not IsUpgradeInstall then
     WizardSelectTasks('startup')
   else if ExistingStartupEnabled then
@@ -471,7 +484,7 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
-    PersistPrivacyAcceptanceFromInstaller;
+    StagePrivacyAcceptanceForApplication;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
@@ -487,6 +500,11 @@ begin
       HKCU,
       InstallBootstrapKey,
       PrivacyNoticeValueName
+    );
+    RegDeleteValue(
+      HKCU,
+      InstallBootstrapKey,
+      PendingPrivacyNoticeValueName
     );
   end;
 end;
