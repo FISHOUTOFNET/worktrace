@@ -205,6 +205,7 @@ def compute_projection(
             base_sessions,
             boundary_times=short_return_boundaries,
             protected_member_sets=protected_member_sets,
+            interval_rows=reportable_rows,
         )
         base_projection = build_base_projection(
             base_sessions,
@@ -212,6 +213,7 @@ def compute_projection(
             uncategorized_id,
         )
         base_sessions = list(base_projection.sessions)
+    base_session_member_keys = _session_member_keys(base_sessions)
 
     dates = {
         str(session.get("report_date") or "")
@@ -250,6 +252,8 @@ def compute_projection(
     with stage("snapshot_finalize"):
         standalone_entries: list[dict[str, Any]] = []
         for row in reportable_rows:
+            if _row_member_key(row) in base_session_member_keys:
+                continue
             decision = decide_report_status(
                 str(row.get("status") or ""),
                 has_project_attribution=bool(row.get("is_report_project")),
@@ -435,6 +439,29 @@ def _operation_binding_member_sets(
                 if member_set:
                     result.append(member_set)
     return tuple(result)
+
+
+def _session_member_keys(
+    sessions: Iterable[Mapping[str, Any]],
+) -> frozenset[tuple[str, int, str]]:
+    return frozenset(
+        (
+            str(member.get("report_date") or session.get("report_date") or "")[:10],
+            int(member.get("activity_id") or member.get("id") or 0),
+            str(member.get("slice_start_time") or member.get("start_time") or ""),
+        )
+        for session in sessions
+        for member in session.get("member_slices") or []
+        if int(member.get("activity_id") or member.get("id") or 0) > 0
+    )
+
+
+def _row_member_key(row: Mapping[str, Any]) -> tuple[str, int, str]:
+    return (
+        str(row.get("report_date") or "")[:10],
+        int(row.get("id") or row.get("activity_id") or 0),
+        str(row.get("start_time") or row.get("slice_start_time") or ""),
+    )
 
 
 def _load_project_states(conn, uncategorized_id: int) -> list[ProjectState]:
