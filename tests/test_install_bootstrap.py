@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from worktrace.constants import PRIVACY_NOTICE_VERSION
 from worktrace.desktop.install_bootstrap import (
     ENABLE_FD_WORK_VALUE,
     INSTALL_BOOTSTRAP_KEY,
@@ -11,7 +12,6 @@ from worktrace.desktop.install_bootstrap import (
     consume_fd_work_install_intent,
     consume_privacy_install_intent,
 )
-from worktrace.privacy_policy import PRIVACY_NOTICE_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
 
