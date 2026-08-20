@@ -195,9 +195,13 @@ def activity_matches_rule(
         file_name = activity_file_name(activity)
         if not file_name:
             return False
+        # This planner is used only for explicit history preview/backfill. Once
+        # the rule's current index generation is published, the user's explicit
+        # history command may use that snapshot for older pathless activities.
+        # Automatic inference keeps its separate activity-time valid_from gate.
         candidates = folder_index_query_service.lookup_indexed_paths_for_file_name(
             file_name,
-            str(activity.get("start_time") or "") or None,
+            None,
             include_excluded=False,
             conn=conn,
         )

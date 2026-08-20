@@ -222,18 +222,47 @@ def compensate_failed_synchronous_job(job_id: int) -> bool:
 
 
 def run_pending_jobs(limit: int = 1) -> int:
+    """Run ready jobs without letting folder-index waits block the queue."""
+
+    maximum = max(0, int(limit))
+    if maximum <= 0:
+        return 0
     with get_connection() as conn:
         ids = [
             int(row["id"])
             for row in conn.execute(
                 """
-                SELECT id
-                FROM history_mutation_job
-                WHERE status IN ('pending', 'running')
-                ORDER BY created_at, id
+                SELECT job.id
+                FROM history_mutation_job AS job
+                WHERE job.status IN ('pending', 'running')
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM history_mutation_job_rule AS job_rule
+                      LEFT JOIN folder_rule_index_state AS state
+                        ON state.folder_rule_id = job_rule.rule_id
+                      WHERE job_rule.job_id = job.id
+                        AND job.kind = 'rule_backfill'
+                        AND job_rule.rule_type = 'folder'
+                        AND (
+                            state.folder_rule_id IS NULL
+                            OR NOT (
+                                (
+                                    state.status = 'ready'
+                                    AND state.build_status = 'ready'
+                                    AND state.active_generation IS NOT NULL
+                                    AND state.valid_from IS NOT NULL
+                                    AND state.building_generation IS NULL
+                                    AND COALESCE(state.refresh_requested, 0) = 0
+                                )
+                                OR state.status = 'error'
+                                OR state.build_status = 'error'
+                            )
+                        )
+                  )
+                ORDER BY job.created_at, job.id
                 LIMIT ?
                 """,
-                (max(0, int(limit)),),
+                (maximum,),
             ).fetchall()
         ]
     for job_id in ids:
@@ -249,6 +278,9 @@ def run_job_to_completion(
         result = run_job_batch(job_id)
         if result["status"] not in {"pending", "running"}:
             return result
+        latest = _load_job(job_id)
+        if latest is not None and _folder_index_gate(latest) == "waiting":
+            return result
     raise RuntimeError("history_job_batch_limit")
 
 
@@ -263,6 +295,11 @@ def run_job_batch(job_id: int, batch_size: int = _BATCH_SIZE) -> dict[str, Any]:
         if job["status"] not in {"pending", "running"}:
             return _result_for_job(job_id, payload)
         try:
+            folder_index_gate = _folder_index_gate(job)
+            if folder_index_gate == "waiting":
+                return _result_for_job(job_id, payload)
+            if folder_index_gate == "error":
+                raise ValueError("folder_index_unavailable")
             if payload.get("mode") == _BATCH_MODE:
                 _run_ordered_batch_plan(job, payload, batch_size)
             elif job["kind"] == "rule_backfill":
@@ -851,6 +888,50 @@ def _normalize_rule_refs(rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
         {"rule_type": rule_type, "rule_id": rule_id}
         for rule_type, rule_id in refs
     ]
+
+
+def _folder_index_gate(job: dict) -> str:
+    """Return ready/waiting/error for folder-backed history application."""
+
+    if str(job.get("kind") or "") != "rule_backfill":
+        return "ready"
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                state.folder_rule_id AS state_rule_id,
+                state.status AS index_status,
+                state.build_status AS build_status,
+                state.valid_from AS valid_from,
+                state.active_generation AS active_generation,
+                state.building_generation AS building_generation,
+                state.refresh_requested AS refresh_requested
+            FROM history_mutation_job_rule AS job_rule
+            LEFT JOIN folder_rule_index_state AS state
+              ON state.folder_rule_id = job_rule.rule_id
+            WHERE job_rule.job_id = ?
+              AND job_rule.rule_type = 'folder'
+            ORDER BY job_rule.rule_id
+            """,
+            (int(job["id"]),),
+        ).fetchall()
+    for row in rows:
+        status = str(row["index_status"] or "")
+        build_status = str(row["build_status"] or "")
+        if status == "error" or build_status == "error":
+            return "error"
+        ready = (
+            row["state_rule_id"] is not None
+            and status == "ready"
+            and build_status == "ready"
+            and row["active_generation"] is not None
+            and row["valid_from"] is not None
+            and row["building_generation"] is None
+            and int(row["refresh_requested"] or 0) == 0
+        )
+        if not ready:
+            return "waiting"
+    return "ready"
 
 
 def _resolve_job_rules(
