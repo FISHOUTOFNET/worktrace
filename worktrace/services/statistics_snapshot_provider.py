@@ -23,7 +23,7 @@ from .statistics_scope_policy import normalize_statistics_project_scope
 if TYPE_CHECKING:
     from .statistics_projection import StatisticsSummaryProjection
 
-_MAX_SNAPSHOT_SLOTS = 4
+_MAX_SLOTS = 4
 _MAX_SUMMARY_SLOTS = 32
 _CACHE_LOCK = threading.Lock()
 _SNAPSHOT_CACHE: OrderedDict[
@@ -81,7 +81,7 @@ def _put_snapshot(key, snapshot: ReportProjectionSnapshot) -> None:
     with _CACHE_LOCK:
         _SNAPSHOT_CACHE[key] = snapshot
         _SNAPSHOT_CACHE.move_to_end(key)
-        while len(_SNAPSHOT_CACHE) > _MAX_SNAPSHOT_SLOTS:
+        while len(_SNAPSHOT_CACHE) > _MAX_SLOTS:
             _SNAPSHOT_CACHE.popitem(last=False)
 
 
