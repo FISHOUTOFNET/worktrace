@@ -77,7 +77,12 @@ const
   WebView2ClientGuid = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
   WebView2BootstrapperUrl = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703';
   WebView2BootstrapperName = 'MicrosoftEdgeWebview2Setup.exe';
-  MaintenanceShutdownArgument = '--shutdown-for-maintenance';
+  MaintenanceShutdownEventName = 'Local\WorkTrace_UpdateShutdown_v1';
+  EventModifyState = $0002;
+  Synchronize = $00100000;
+  MaintenanceShutdownPollMilliseconds = 100;
+  MaintenanceShutdownPollAttempts = 200;
+  MaintenanceShutdownBootloaderSettleMilliseconds = 500;
   PrivacyPolicyFileName = 'privacy_policy_zh-CN.txt';
   PrivacyNoticeVersion = '1';
   InstallBootstrapKey = 'Software\WorkTrace\InstallBootstrap';
@@ -91,6 +96,19 @@ var
   PrivacyAcceptedCheck: TNewCheckBox;
   PrivacyAcceptedForInstall: Boolean;
   PrivacyPolicyLoaded: Boolean;
+
+function OpenEvent(
+  dwDesiredAccess: DWORD;
+  bInheritHandle: BOOL;
+  lpName: String
+): THandle;
+  external 'OpenEventW@kernel32.dll stdcall';
+
+function SetEvent(hEvent: THandle): BOOL;
+  external 'SetEvent@kernel32.dll stdcall';
+
+function CloseHandle(hObject: THandle): BOOL;
+  external 'CloseHandle@kernel32.dll stdcall';
 
 function IsUpgradeInstall: Boolean;
 begin
@@ -154,10 +172,42 @@ begin
   Result := '';
 end;
 
+function MaintenanceShutdownEventExists: Boolean;
+var
+  EventHandle: THandle;
+begin
+  EventHandle := OpenEvent(Synchronize, False, MaintenanceShutdownEventName);
+  Result := EventHandle <> 0;
+  if Result then
+    CloseHandle(EventHandle);
+end;
+
+function SignalMaintenanceShutdownEvent: Boolean;
+var
+  EventHandle: THandle;
+begin
+  EventHandle := OpenEvent(
+    EventModifyState or Synchronize,
+    False,
+    MaintenanceShutdownEventName
+  );
+  if EventHandle = 0 then
+  begin
+    Result := False;
+    exit;
+  end;
+
+  try
+    Result := SetEvent(EventHandle);
+  finally
+    CloseHandle(EventHandle);
+  end;
+end;
+
 function RequestWorkTraceShutdown(const Context: String): Boolean;
 var
   ExePath: String;
-  ResultCode: Integer;
+  Attempt: Integer;
 begin
   ExePath := ExistingApplicationExePath;
   if ExePath = '' then
@@ -167,29 +217,46 @@ begin
     exit;
   end;
 
-  Log('Requesting application maintenance shutdown for ' + Context + '.');
-  if not Exec(
-    ExePath,
-    MaintenanceShutdownArgument,
-    ExpandConstant('{app}'),
-    SW_HIDE,
-    ewWaitUntilTerminated,
-    ResultCode
-  ) then
+  if not MaintenanceShutdownEventExists then
   begin
-    Log('Failed to start maintenance shutdown client for ' + Context + '.');
+    Log(
+      'Application maintenance shutdown Event not present for ' + Context +
+      '; no cooperative process is currently advertised.'
+    );
+    // Upgrade can still rely on Inno Setup Restart Manager for a legacy or
+    // partially initialized process that does not expose the current Event.
+    Result := CompareText(Context, 'upgrade') <> 0;
+    exit;
+  end;
+
+  Log('Signaling application maintenance shutdown Event for ' + Context + '.');
+  if not SignalMaintenanceShutdownEvent then
+  begin
+    Log('Failed to signal application maintenance shutdown Event for ' + Context + '.');
     Result := False;
     exit;
   end;
 
-  Result := ResultCode = 0;
-  if Result then
-    Log('Maintenance shutdown client completed for ' + Context + '.')
-  else
-    Log(
-      'Maintenance shutdown client failed for ' + Context +
-      ' with exit code ' + IntToStr(ResultCode) + '.'
-    );
+  for Attempt := 1 to MaintenanceShutdownPollAttempts do
+  begin
+    if not MaintenanceShutdownEventExists then
+    begin
+      // The Event belongs to the inner Python process. The PyInstaller one-file
+      // bootloader may hold Trace.exe briefly after that process exits, so leave
+      // a small bounded cleanup window without starting another Trace.exe.
+      Sleep(MaintenanceShutdownBootloaderSettleMilliseconds);
+      Log('Application maintenance shutdown completed for ' + Context + '.');
+      Result := True;
+      exit;
+    end;
+
+    if CompareText(Context, 'upgrade') = 0 then
+      WizardForm.Repaint;
+    Sleep(MaintenanceShutdownPollMilliseconds);
+  end;
+
+  Log('Application maintenance shutdown timed out for ' + Context + '.');
+  Result := False;
 end;
 
 function IsUsableWebView2Version(const Version: String): Boolean;
@@ -402,8 +469,12 @@ begin
     WizardForm.PreparingLabel.Caption :=
       '正在关闭正在运行的有迹并准备安装，请稍候...';
     WizardForm.StatusLabel.Caption := '正在关闭正在运行的有迹，请稍候...';
+    WizardForm.Repaint;
     if not RequestWorkTraceShutdown('upgrade') then
       Log('Continuing upgrade so Restart Manager can apply the configured fallback.');
+    WizardForm.PreparingLabel.Caption := '正在准备安装，请稍候...';
+    WizardForm.StatusLabel.Caption := '正在准备安装，请稍候...';
+    WizardForm.Repaint;
   end;
 
   if IsWebView2RuntimeInstalled then
@@ -417,6 +488,7 @@ begin
     WizardForm.PreparingLabel.Caption :=
       '正在安装 Microsoft Edge WebView2 Runtime，请稍候...';
     WizardForm.StatusLabel.Caption := '正在安装 Microsoft Edge WebView2 Runtime...';
+    WizardForm.Repaint;
     DownloadTemporaryFile(
       WebView2BootstrapperUrl,
       WebView2BootstrapperName,

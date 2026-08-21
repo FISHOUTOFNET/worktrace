@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from worktrace.desktop.update_shutdown import UPDATE_SHUTDOWN_EVENT_NAME
+
 pytestmark = [pytest.mark.packaging, pytest.mark.contract, pytest.mark.serial]
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,13 +59,25 @@ def test_webview2_prerequisite_is_detected_and_installed_per_user() -> None:
     assert "PrivilegesRequired=lowest" in source
 
 
-def test_upgrade_delegates_shutdown_with_force_only_as_fallback() -> None:
+def test_upgrade_signals_native_shutdown_event_with_force_only_as_fallback() -> None:
     source = ISS_PATH.read_text(encoding="utf-8")
+    shutdown = source[
+        source.index("function RequestWorkTraceShutdown") :
+        source.index("function IsUsableWebView2Version")
+    ]
+
     assert "CloseApplications=force" in source
     assert "RestartApplications=no" in source
-    assert "MaintenanceShutdownArgument = '--shutdown-for-maintenance'" in source
+    assert f"MaintenanceShutdownEventName = '{UPDATE_SHUTDOWN_EVENT_NAME}'" in source
+    assert "OpenEventW@kernel32.dll" in source
+    assert "SetEvent@kernel32.dll" in source
+    assert "MaintenanceShutdownEventExists" in shutdown
+    assert "SignalMaintenanceShutdownEvent" in shutdown
     assert "RequestWorkTraceShutdown('upgrade')" in source
-    assert "ewWaitUntilTerminated" in source
+    assert "MaintenanceShutdownArgument" not in source
+    assert "Exec(" not in shutdown
+    assert "ewWaitUntilTerminated" not in shutdown
+    assert "WizardForm.Repaint" in source
     assert "Restart Manager can apply the configured fallback" in source
 
 
