@@ -23,14 +23,9 @@ logger = logging.getLogger(__name__)
 _CSV_COLUMNS = [
     ("date", "日期"),
     ("start_time", "开始时间"),
-    ("end_time", "结束时间"),
     ("duration", "时长"),
-    ("duration_seconds", "时长秒数"),
     ("project", "项目"),
-    ("status", "状态"),
     ("note", "备注"),
-    ("adjusted_duration", "修正时长"),
-    ("is_adjusted", "是否已修正"),
 ]
 _FORMULA_INJECTION_PREFIXES = ("=", "+", "-", "@", "\t")
 _DERIVED_RUNTIME_TABLES = frozenset(
@@ -376,7 +371,7 @@ def clear_all_local_data(confirm: bool) -> None:
     )
 
     try:
-        clear_all_live_data()
+        clear_all_live_data(confirm=True)
     except MaintenanceInProgressError as exc:
         raise ValueError("operation_in_progress") from exc
     logging.info("all local data cleared at %s", now_str())
