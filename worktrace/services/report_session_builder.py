@@ -20,6 +20,8 @@ from .report_projection_identity import member_set_hash
 from .report_status_policy import SESSION_CONTRIBUTION, decide_report_status
 
 SHORT_PROJECT_RETURN_MERGE_SECONDS = 5 * 60
+_SHORT_PROJECT_RETURN_WINDOW_SECONDS = DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS
+_SHORT_UNCATEGORIZED_BRIDGE_SECONDS = DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS
 
 
 def build_report_sessions(
@@ -68,13 +70,20 @@ def merge_short_project_returns(
     unrecorded_gap_boundary_seconds: int = DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS,
     max_interruption_seconds: int = SHORT_PROJECT_RETURN_MERGE_SECONDS,
 ) -> list[dict]:
-    """Greedily merge short returns to the same concrete project.
+    """Greedily compact short project returns, then assign short uncategorized bridges.
 
-    Wall-clock interruption and caller-supplied boundaries define eligibility.
-    Protected member sets preserve durable operation replay identity, while
-    adjacent same-project gaps still respect canonical unrecorded-gap policy.
+    A concrete project may reclaim a later return within the canonical
+    15-minute look-ahead window while the intervening duration attributed to
+    other concrete projects stays within ``max_interruption_seconds``. Raw
+    uncategorized time does not consume that foreign-project budget.
+
+    After greedy return compaction, a short ``A / uncategorized / B`` bridge is
+    assigned to the longer neighboring concrete project (left wins ties).
+    Both stages preserve durable operation member identities and caller-supplied
+    session boundaries.
     """
-    threshold = max(0, int(max_interruption_seconds))
+    foreign_threshold = max(0, int(max_interruption_seconds))
+    window_threshold = max(0, int(_SHORT_PROJECT_RETURN_WINDOW_SECONDS))
     gap_threshold = max(0, int(unrecorded_gap_boundary_seconds))
     boundary_index = BoundaryIndex(boundary_times)
     protected = tuple(frozenset(item) for item in protected_member_sets if item)
@@ -93,6 +102,7 @@ def merge_short_project_returns(
 
         while True:
             matched_index: int | None = None
+            foreign_project_seconds = 0
             cursor = consumed + 1
             while cursor < total:
                 candidate = sessions[cursor]
@@ -101,13 +111,13 @@ def merge_short_project_returns(
                 ):
                     break
                 interruption = _session_gap_seconds(current, candidate)
-                if interruption is None or interruption > threshold:
+                if interruption is None or interruption > window_threshold:
                     break
                 if _crosses_session_boundary(current, candidate, boundary_index):
                     break
+                if bool(candidate.get("is_in_progress")):
+                    break
                 if _same_concrete_project(current, candidate):
-                    if bool(candidate.get("is_in_progress")):
-                        break
                     if cursor == consumed + 1:
                         interval_members = _interval_row_member_identity_set(
                             current,
@@ -118,6 +128,13 @@ def merge_short_project_returns(
                             break
                     matched_index = cursor
                     break
+                if _is_short_return_anchor(candidate):
+                    foreign_project_seconds += max(
+                        0,
+                        int(candidate.get("duration_seconds") or 0),
+                    )
+                    if foreign_project_seconds > foreign_threshold:
+                        break
                 cursor += 1
 
             if matched_index is None:
@@ -146,7 +163,13 @@ def merge_short_project_returns(
         result.append(current)
         index = consumed + 1
 
-    return _attach_short_return_interval_rows(result, interval_source)
+    greedy_result = _attach_short_return_interval_rows(result, interval_source)
+    return _assign_short_uncategorized_bridges(
+        greedy_result,
+        boundary_index=boundary_index,
+        protected_member_sets=protected,
+        gap_threshold_seconds=gap_threshold,
+    )
 
 
 def _build_session(rows: Sequence[Mapping], uncategorized_id: int) -> dict:
@@ -306,6 +329,18 @@ def _is_short_return_anchor(session: Mapping) -> bool:
     )
 
 
+def _is_short_uncategorized_bridge(session: Mapping) -> bool:
+    return bool(
+        str(session.get("row_kind") or "project_session") == "project_session"
+        and bool(session.get("is_report_uncategorized"))
+        and not bool(session.get("is_report_project"))
+        and not bool(session.get("project_is_deleted"))
+        and not bool(session.get("is_in_progress"))
+        and max(0, int(session.get("duration_seconds") or 0))
+        <= _SHORT_UNCATEGORIZED_BRIDGE_SECONDS
+    )
+
+
 def _same_concrete_project(left: Mapping, right: Mapping) -> bool:
     return bool(
         _is_short_return_anchor(left)
@@ -341,7 +376,32 @@ def _merge_short_return_group(group: Sequence[Mapping]) -> dict:
     if not _same_concrete_project(first, last):
         raise ValueError("short_return_merge_project_mismatch")
 
-    merged = deepcopy(dict(first))
+    duration = _wall_clock_span_seconds(first, last)
+    if duration is None:
+        duration = _summed_session_duration(group)
+    merged = _merge_session_group(
+        group,
+        project_anchor=first,
+        duration_seconds=duration,
+    )
+    anchor_sessions = (first, last)
+    if any(bool(item.get("is_official_project")) for item in anchor_sessions):
+        merged["is_official_project"] = True
+        merged["report_attribution_kind"] = "official_direct"
+    return merged
+
+
+def _merge_session_group(
+    group: Sequence[Mapping],
+    *,
+    project_anchor: Mapping,
+    duration_seconds: int,
+) -> dict:
+    if len(group) < 2:
+        raise ValueError("session_merge_requires_members")
+    first = group[0]
+    last = group[-1]
+    merged = deepcopy(dict(project_anchor))
     activity_ids: list[int] = []
     member_slices: list[dict] = []
     for session in group:
@@ -353,10 +413,7 @@ def _merge_short_return_group(group: Sequence[Mapping]) -> dict:
             deepcopy(dict(member)) for member in session.get("member_slices") or []
         )
 
-    duration = _wall_clock_span_seconds(first, last)
-    if duration is None:
-        duration = sum(max(0, int(item.get("duration_seconds") or 0)) for item in group)
-
+    duration = max(0, int(duration_seconds))
     merged.update(
         {
             "start_time": first.get("start_time"),
@@ -389,12 +446,82 @@ def _merge_short_return_group(group: Sequence[Mapping]) -> dict:
             "_short_project_return_merged": True,
         }
     )
-
-    anchor_sessions = (first, last)
-    if any(bool(item.get("is_official_project")) for item in anchor_sessions):
-        merged["is_official_project"] = True
-        merged["report_attribution_kind"] = "official_direct"
     return merged
+
+
+def _assign_short_uncategorized_bridges(
+    sessions: Sequence[dict],
+    *,
+    boundary_index: BoundaryIndex,
+    protected_member_sets: Sequence[frozenset[tuple[str, int, str]]],
+    gap_threshold_seconds: int,
+) -> list[dict]:
+    result = [deepcopy(dict(session)) for session in sessions]
+    index = 1
+    while index < len(result) - 1:
+        left = result[index - 1]
+        middle = result[index]
+        right = result[index + 1]
+        if not (
+            _is_short_return_anchor(left)
+            and _is_short_uncategorized_bridge(middle)
+            and _is_short_return_anchor(right)
+        ):
+            index += 1
+            continue
+        report_date = str(middle.get("report_date") or "")
+        if (
+            str(left.get("report_date") or "") != report_date
+            or str(right.get("report_date") or "") != report_date
+        ):
+            index += 1
+            continue
+        if (
+            _crosses_session_boundary(left, middle, boundary_index)
+            or _crosses_session_boundary(middle, right, boundary_index)
+        ):
+            index += 1
+            continue
+        left_gap = _session_gap_seconds(left, middle)
+        right_gap = _session_gap_seconds(middle, right)
+        if (
+            left_gap is None
+            or right_gap is None
+            or left_gap > gap_threshold_seconds
+            or right_gap > gap_threshold_seconds
+        ):
+            index += 1
+            continue
+
+        left_duration = max(0, int(left.get("duration_seconds") or 0))
+        right_duration = max(0, int(right.get("duration_seconds") or 0))
+        assign_left = left_duration >= right_duration
+        if assign_left:
+            group = [left, middle]
+            anchor = left
+            slice_start = index - 1
+            slice_end = index + 1
+        else:
+            group = [middle, right]
+            anchor = right
+            slice_start = index
+            slice_end = index + 2
+        candidate_members = _group_member_identity_set(group)
+        if _protected_bridge_conflict(candidate_members, protected_member_sets):
+            index += 1
+            continue
+        merged = _merge_session_group(
+            group,
+            project_anchor=anchor,
+            duration_seconds=_summed_session_duration(group),
+        )
+        result[slice_start:slice_end] = [merged]
+        index += 1
+    return result
+
+
+def _summed_session_duration(group: Sequence[Mapping]) -> int:
+    return sum(max(0, int(item.get("duration_seconds") or 0)) for item in group)
 
 
 def _attach_short_return_interval_rows(
@@ -540,6 +667,16 @@ def _protected_merge_conflict(
             continue
         return True
     return False
+
+
+def _protected_bridge_conflict(
+    candidate_members: frozenset[tuple[str, int, str]],
+    protected_member_sets: Sequence[frozenset[tuple[str, int, str]]],
+) -> bool:
+    return any(
+        protected != candidate_members and bool(protected.intersection(candidate_members))
+        for protected in protected_member_sets
+    )
 
 
 def _status_summary(rows: Sequence[Mapping]) -> str:
