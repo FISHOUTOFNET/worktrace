@@ -41,7 +41,7 @@ def test_project_rules_keep_card_height_and_rule_typography_visually_stable():
     css = _resource("ui_components.css")
 
     assert 'rules-project-description is-empty' in body
-    assert 'text("无描述", "无描述")' in body
+    assert 'text("暂无描述", "暂无描述")' in body
     assert ".rules-project-title-group:not(:has(.rules-project-description))::after" not in css
 
     rule_row = re.search(r"\.rules-row\s*\{([^}]*)\}", css)
@@ -71,7 +71,11 @@ def test_statistics_and_timeline_autocomplete_keep_stable_visual_bounds():
     desktop = re.search(r"@media \(min-width: 960px\)\s*\{(.*)\}\s*$", css, re.DOTALL)
     assert desktop is not None
     assert re.search(r"\.statistics-date-range\s*\{[^}]*min-width:", desktop.group(1))
-    assert re.search(r"\.statistics-all-time-label\s*\{[^}]*width:\s*100%", desktop.group(1))
+    shell = re.search(r"\.statistics-date-control-shell\s*\{([^}]*)\}", css)
+    assert shell is not None
+    assert "width: var(--date-control-width)" in shell.group(1)
+    assert "min-width: var(--date-control-width)" in shell.group(1)
+    assert ".statistics-date-empty-label" in css
 
     menu = re.search(r"\.timeline-edit-panel \.project-autocomplete-menu\s*\{([^}]*)\}", css)
     assert menu is not None
@@ -81,3 +85,4 @@ def test_statistics_and_timeline_autocomplete_keep_stable_visual_bounds():
     metric = re.search(r"\.metric-strip\s*\{([^}]*)\}", css)
     assert metric is not None
     assert "border-width: 0" in metric.group(1)
+    assert "repeat(5, minmax(0, 1fr))" in metric.group(1)

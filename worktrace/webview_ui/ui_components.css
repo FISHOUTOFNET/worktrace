@@ -99,7 +99,47 @@ th,
     grid-column: 1 / -1;
 }
 
-.metric-strip { border-width: 0; }
+.metric-strip {
+    border-width: 0;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+/* Statistics keeps the native date input and its picker indicator in every
+   range mode. The controlled overlay masks Chromium's locale-dependent empty
+   segments without changing the input type or date-picker behavior. */
+.statistics-date-control-shell {
+    position: relative;
+    width: var(--date-control-width);
+    min-width: var(--date-control-width);
+}
+.statistics-date-control-shell .date-control {
+    width: 100%;
+    min-width: 100%;
+}
+.statistics-date-empty-label {
+    position: absolute;
+    z-index: 1;
+    left: 9px;
+    right: 30px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--color-text-tertiary);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    pointer-events: none;
+    white-space: nowrap;
+}
+.statistics-date-control[data-empty="false"] + .statistics-date-empty-label {
+    display: none;
+}
+.statistics-date-control[data-empty="true"]::-webkit-datetime-edit,
+.statistics-date-control[data-empty="true"]::-webkit-datetime-edit-fields-wrapper,
+.statistics-date-control[data-empty="true"]::-webkit-datetime-edit-text,
+.statistics-date-control[data-empty="true"]::-webkit-datetime-edit-month-field,
+.statistics-date-control[data-empty="true"]::-webkit-datetime-edit-day-field,
+.statistics-date-control[data-empty="true"]::-webkit-datetime-edit-year-field {
+    color: transparent;
+}
 
 .timeline-edit-panel .project-autocomplete-menu {
     width: 100%;
@@ -196,7 +236,6 @@ th,
 .timeline-page > .loading-state,
 .statistics-page > .page-header,
 .statistics-page > .statistics-toolbar,
-.statistics-page > .stats-scope-row,
 .statistics-page > .inline-alert,
 .statistics-page > #statistics-loading,
 .statistics-page > #stats-export-status,
@@ -338,5 +377,4 @@ th,
 
 @media (min-width: 960px) {
     .statistics-date-range { min-width: 310px; }
-    .statistics-all-time-label { width: 100%; }
 }

@@ -23,7 +23,7 @@
         var lastUsedAt = String((project && project.last_used_at) || "").trim();
         var descriptionMarkup = projectDescription
             ? '<div class="rules-project-description">' + text(projectDescription, "") + '</div>'
-            : '<div class="rules-project-description is-empty">' + text("无描述", "无描述") + '</div>';
+            : '<div class="rules-project-description is-empty">' + text("暂无描述", "暂无描述") + '</div>';
         var metaMarkup = lastUsedAt
             ? '<div class="rules-project-meta"><span>上次使用：' + text(lastUsedAt, "") + '</span></div>'
             : "";

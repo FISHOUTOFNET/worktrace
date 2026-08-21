@@ -16,10 +16,6 @@
     function setStatisticsLoading(loading) {
         App.statisticsLoading = !!loading;
         if (element("statistics-loading")) element("statistics-loading").hidden = !loading;
-        if (element("statistics-update-status")) {
-            element("statistics-update-status").textContent = loading
-                ? "更新中…" : (App.statisticsLoaded ? "已自动更新" : "");
-        }
         var button = element("stats-export-action-btn");
         if (button) button.disabled = !!loading || !!App.statisticsExportSaving
             || !App.statisticsAcceptedPayload;
@@ -146,10 +142,6 @@
     }
     App.setStatisticsSelection = setStatisticsSelection;
 
-    function displayDate(value) {
-        return String(value || "").replace(/-/g, "/");
-    }
-
     function setStatisticsDraftStatus(message, isError) {
         var status = element("statistics-date-status");
         if (!status) return;
@@ -160,23 +152,6 @@
             var input = element(id);
             if (input) input.setAttribute("aria-invalid", isError ? "true" : "false");
         });
-    }
-
-    function selectedProjectLabel() {
-        var select = element("statistics-project-filter");
-        return select && select.selectedIndex >= 0 && select.options
-            ? select.options[select.selectedIndex].text
-            : "全部项目";
-    }
-
-    function updateStatisticsScope(filters) {
-        filters = filters || selectedFilters();
-        var scope = filters.allTime
-            ? "全部时间"
-            : displayDate(filters.dateFrom) + " 至 " + displayDate(filters.dateTo);
-        if (element("stats-scope")) {
-            element("stats-scope").textContent = "当前范围：" + scope + " · " + selectedProjectLabel();
-        }
     }
 
     function syncStatisticsSelection() {
@@ -192,43 +167,14 @@
             var button = element("statistics-" + type + "-btn");
             if (button) button.setAttribute("aria-pressed", pressed ? "true" : "false");
         });
-        updateStatisticsScope({
-            allTime: selection.allTime,
-            dateFrom: selection.dateFrom,
-            dateTo: selection.dateTo,
-            projectId: element("statistics-project-filter")
-                ? element("statistics-project-filter").value : ""
-        });
     }
     App.syncStatisticsSelection = syncStatisticsSelection;
 
-    function statisticsDateInputFocused(input) {
-        return !!(document && document.activeElement && document.activeElement === input);
-    }
-
-    function syncStatisticsDateInputMode(input) {
+    function syncStatisticsDateInputPresentation(input) {
         if (!input) return;
-        var hasValue = !!String(input.value || "");
-        if (!hasValue && !statisticsDateInputFocused(input)) {
-            if (input.type !== "text") input.type = "text";
-            input.placeholder = "0000/00/00";
-            return;
-        }
-        if (input.type !== "date") input.type = "date";
-        input.placeholder = "";
+        input.setAttribute("data-empty", String(!String(input.value || "")));
     }
-    App.syncStatisticsDateInputMode = syncStatisticsDateInputMode;
-
-    function handleStatisticsDateFocus(event) {
-        var input = event && (event.currentTarget || event.target);
-        if (!input) return;
-        if (input.type !== "date") input.type = "date";
-        input.placeholder = "";
-    }
-
-    function handleStatisticsDateBlur(event) {
-        syncStatisticsDateInputMode(event && (event.currentTarget || event.target));
-    }
+    App.syncStatisticsDateInputPresentation = syncStatisticsDateInputPresentation;
 
     function syncStatisticsDraftSelection() {
         var selection = currentDraftSelection();
@@ -236,14 +182,8 @@
         var to = element("statistics-date-to");
         if (from) from.value = selection.dateFrom;
         if (to) to.value = selection.dateTo;
-        syncStatisticsDateInputMode(from);
-        syncStatisticsDateInputMode(to);
-        if (element("statistics-date-inputs")) {
-            element("statistics-date-inputs").hidden = false;
-        }
-        if (element("statistics-all-time-label")) {
-            element("statistics-all-time-label").hidden = true;
-        }
+        syncStatisticsDateInputPresentation(from);
+        syncStatisticsDateInputPresentation(to);
         setStatisticsDraftStatus(
             App.statisticsDraftDirty ? "日期范围尚未应用" : "",
             false
@@ -265,7 +205,7 @@
     function clearStatisticsPresentation() {
         var results = element("statistics-results");
         if (results) results.hidden = true;
-        ["stats-total", "stats-activity-count", "stats-project-count", "stats-app-count"]
+        ["stats-total", "stats-activity-count", "stats-project-count", "stats-file-count", "stats-app-count"]
             .forEach(function (id) {
                 if (element(id)) element(id).textContent = "";
             });
@@ -296,6 +236,23 @@
         return "display:" + String(group.display_name || "未知") + "|" + String(index || 0);
     }
 
+    function statisticsGroupRecordCount(group) {
+        group = group || {};
+        var value = group.record_count;
+        if (value === undefined || value === null) value = group.session_count;
+        if (value === undefined || value === null) value = group.activity_count;
+        var parsed = parseInt(value, 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+    }
+    App.statisticsGroupRecordCount = statisticsGroupRecordCount;
+
+    function statisticsConcreteFileCount(groups) {
+        return (Array.isArray(groups) ? groups : []).filter(function (group) {
+            return String(group && group.key || "") !== "file:excluded";
+        }).length;
+    }
+    App.statisticsConcreteFileCount = statisticsConcreteFileCount;
+
     function patchStatsTable(tbodyId, groups) {
         var body = element(tbodyId);
         if (!body || typeof body.querySelectorAll !== "function") return false;
@@ -314,7 +271,7 @@
             if (!cells || cells.length < 4) return false;
             var displayName = String(group.display_name || "未知");
             var duration = group.duration || App.formatDuration(group.duration_seconds || 0);
-            var activityCount = String(group.activity_count || 0);
+            var recordCount = String(statisticsGroupRecordCount(group));
             var percentage = Math.max(0, Math.min(100, parseFloat(group.percentage) || 0));
             var percentageText = String(group.percentage || 0) + "%";
             if (cells[0].title !== displayName) cells[0].title = displayName;
@@ -323,7 +280,7 @@
                 : null;
             if (name && name.textContent !== displayName) name.textContent = displayName;
             if (cells[1].textContent !== duration) cells[1].textContent = duration;
-            if (cells[2].textContent !== activityCount) cells[2].textContent = activityCount;
+            if (cells[2].textContent !== recordCount) cells[2].textContent = recordCount;
             if (cells[3].textContent !== percentageText) cells[3].textContent = percentageText;
             var bar = typeof row.querySelector === "function"
                 ? row.querySelector(".stats-share-bar i")
@@ -344,15 +301,31 @@
         if (empty) empty.hidden = groups.length > 0;
     }
 
-    function reconcileStatisticsPresentation(summary, filters) {
-        if (element("stats-total")) element("stats-total").textContent = summary.total_duration || "00:00:00";
-        if (element("stats-activity-count")) element("stats-activity-count").textContent = String(summary.session_count || 0);
-        if (element("stats-project-count")) element("stats-project-count").textContent = String(summary.project_count || 0);
-        if (element("stats-app-count")) element("stats-app-count").textContent = String(summary.app_count || 0);
+    function renderStatisticsMetrics(summary) {
+        var byFile = Array.isArray(summary && summary.by_file) ? summary.by_file : [];
+        if (element("stats-total")) {
+            element("stats-total").textContent = summary.total_duration || "00:00:00";
+        }
+        if (element("stats-activity-count")) {
+            element("stats-activity-count").textContent = String(summary.session_count || 0);
+        }
+        if (element("stats-project-count")) {
+            element("stats-project-count").textContent = String(summary.project_count || 0);
+        }
+        if (element("stats-file-count")) {
+            element("stats-file-count").textContent = String(statisticsConcreteFileCount(byFile));
+        }
+        if (element("stats-app-count")) {
+            element("stats-app-count").textContent = String(summary.app_count || 0);
+        }
+    }
+    App.renderStatisticsMetrics = renderStatisticsMetrics;
+
+    function reconcileStatisticsPresentation(summary) {
+        renderStatisticsMetrics(summary);
         reconcileStatsTable("stats-by-project", "stats-empty-project", summary.by_project || []);
         reconcileStatsTable("stats-by-file", "stats-empty-file", summary.by_file || []);
         reconcileStatsTable("stats-by-app", "stats-empty-app", summary.by_app || []);
-        updateStatisticsScope(filters);
         if (element("statistics-results")) element("statistics-results").hidden = false;
     }
     App.reconcileStatisticsPresentation = reconcileStatisticsPresentation;
@@ -385,9 +358,9 @@
             };
             App.statisticsSnapshotRevision = String(data.export_ticket.revision || "");
             if (owner.preservePresentation === true && App.statisticsLoaded === true) {
-                reconcileStatisticsPresentation(data.summary, filters);
+                reconcileStatisticsPresentation(data.summary);
             } else {
-                showStatistics(data.summary, filters);
+                showStatistics(data.summary);
             }
             App.statisticsLoaded = true;
             accepted = true;
@@ -433,7 +406,6 @@
             invalidateStatisticsSelection();
             App.clearStatisticsError();
         }
-        updateStatisticsScope(filters);
         if (!preservePresentation) setStatisticsLoading(true);
         if (!filters.allTime) {
             var message = validateStatisticsDateRange(filters.dateFrom, filters.dateTo);
@@ -465,15 +437,11 @@
     }
     App.loadStatisticsExportSummary = loadStatisticsExportSummary;
 
-    function showStatistics(summary, filters) {
-        element("stats-total").textContent = summary.total_duration || "00:00:00";
-        element("stats-activity-count").textContent = String(summary.session_count || 0);
-        element("stats-project-count").textContent = String(summary.project_count || 0);
-        element("stats-app-count").textContent = String(summary.app_count || 0);
+    function showStatistics(summary) {
+        renderStatisticsMetrics(summary);
         renderStatsTable("stats-by-project", "stats-empty-project", summary.by_project || []);
         renderStatsTable("stats-by-file", "stats-empty-file", summary.by_file || []);
         renderStatsTable("stats-by-app", "stats-empty-app", summary.by_app || []);
-        updateStatisticsScope(filters);
         if (element("statistics-results")) element("statistics-results").hidden = false;
     }
     App.showStatistics = showStatistics;
@@ -492,7 +460,7 @@
                 + '<span class="stats-share-bar" aria-hidden="true"><i style="width:' + percentage + '%"></i></span>'
                 + '</div></td><td class="number">'
                 + App.escapeHtml(group.duration || App.formatDuration(group.duration_seconds || 0))
-                + '</td><td class="number">' + App.escapeHtml(String(group.activity_count || 0))
+                + '</td><td class="number">' + App.escapeHtml(String(statisticsGroupRecordCount(group)))
                 + '</td><td class="number">' + App.escapeHtml(String(group.percentage || 0)) + '%</td></tr>';
         }).join("");
     }
@@ -503,16 +471,35 @@
         file: { tab: "stats-file-tab", panel: "stats-file-panel" },
         app: { tab: "stats-app-tab", panel: "stats-app-panel" }
     };
+    var statisticsTabOrder = ["project", "file", "app"];
 
     function activateStatisticsTab(view) {
         Object.keys(statisticsTabs).forEach(function (name) {
             var descriptor = statisticsTabs[name];
             var selected = name === view;
-            element(descriptor.tab).setAttribute("aria-selected", selected ? "true" : "false");
+            var tab = element(descriptor.tab);
+            tab.setAttribute("aria-selected", selected ? "true" : "false");
+            tab.tabIndex = selected ? 0 : -1;
             element(descriptor.panel).hidden = !selected;
         });
     }
     App.activateStatisticsTab = activateStatisticsTab;
+
+    function handleStatisticsTabKeydown(event, view) {
+        var key = event && event.key;
+        if (["ArrowLeft", "ArrowRight", "Home", "End"].indexOf(key) < 0) return;
+        if (event.preventDefault) event.preventDefault();
+        var index = statisticsTabOrder.indexOf(view);
+        if (key === "Home") index = 0;
+        else if (key === "End") index = statisticsTabOrder.length - 1;
+        else if (key === "ArrowRight") index = (index + 1) % statisticsTabOrder.length;
+        else index = (index + statisticsTabOrder.length - 1) % statisticsTabOrder.length;
+        var targetView = statisticsTabOrder[index];
+        activateStatisticsTab(targetView);
+        var target = element(statisticsTabs[targetView].tab);
+        if (target && target.focus) target.focus();
+    }
+    App.handleStatisticsTabKeydown = handleStatisticsTabKeydown;
 
     function applyStatisticsQuickRange(type) {
         var today = new Date();
@@ -587,12 +574,11 @@
         currentSelection();
         syncStatisticsSelection();
         syncStatisticsDraftSelection();
+        activateStatisticsTab("project");
         if (!App.statisticsControlsBound) {
             App.statisticsControlsBound = true;
             ["statistics-date-from", "statistics-date-to"].forEach(function (id) {
                 var input = element(id);
-                input.addEventListener("focus", handleStatisticsDateFocus);
-                input.addEventListener("blur", handleStatisticsDateBlur);
                 input.addEventListener("input", handleStatisticsDraftDateChange);
                 input.addEventListener("change", handleStatisticsDraftDateChange);
             });
@@ -601,8 +587,12 @@
                 scheduleStatisticsQuery(0);
             });
             Object.keys(statisticsTabs).forEach(function (view) {
-                element(statisticsTabs[view].tab).addEventListener("click", function () {
+                var tab = element(statisticsTabs[view].tab);
+                tab.addEventListener("click", function () {
                     activateStatisticsTab(view);
+                });
+                tab.addEventListener("keydown", function (event) {
+                    handleStatisticsTabKeydown(event, view);
                 });
             });
             loadStatisticsProjectCatalog();

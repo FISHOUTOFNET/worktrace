@@ -28,9 +28,9 @@ def test_statistics_surface_matches_current_information_architecture() -> None:
     for dom_id in (
         "statistics-date-from", "statistics-date-to", "statistics-project-filter",
         "statistics-today-btn", "statistics-week-btn", "statistics-month-btn",
-        "statistics-all-btn", "statistics-results", "statistics-update-status",
+        "statistics-all-btn", "statistics-results",
         "statistics-apply-range-btn", "statistics-date-status",
-        "stats-total", "stats-activity-count", "stats-project-count", "stats-app-count",
+        "stats-total", "stats-activity-count", "stats-project-count", "stats-file-count", "stats-app-count",
         "stats-project-tab", "stats-file-tab", "stats-app-tab",
         "stats-project-panel", "stats-file-panel", "stats-app-panel",
         "stats-by-project", "stats-by-file", "stats-by-app",
@@ -41,7 +41,8 @@ def test_statistics_surface_matches_current_information_architecture() -> None:
     for forbidden in (
         "statistics-range-mode", "statistics-custom-range", "statistics-load-btn",
         "statistics-7d-btn", "status-filter", "stats-by-status", "最近七天",
-        "自定义范围", "导出范围与隐私说明",
+        "自定义范围", "导出范围与隐私说明", "stats-scope-row",
+        "statistics-update-status", "statistics-all-time-label",
     ):
         assert forbidden not in html
     assert [html.index(f'id="statistics-{name}-btn"') for name in ("today", "week", "month", "all")] == sorted(
@@ -51,7 +52,9 @@ def test_statistics_surface_matches_current_information_architecture() -> None:
         html.index(f'id="stats-{name}-tab"') for name in ("project", "file", "app")
     )
     assert "按项目" in html and "按文件" in html and "按应用" in html
+    assert ">今日</button>" in html
     assert html.count('aria-pressed="false"') >= 4
+    assert '<header class="page-header page-header-compact">' in html
 
 
 def test_statistics_uses_only_fixed_local_capabilities() -> None:
@@ -71,7 +74,7 @@ def test_latest_query_owns_acceptance_and_keeps_one_export_ticket() -> None:
     assert "App.statisticsAcceptedPayload =" in execute
     assert "exportTicket: data.export_ticket" in execute
     assert "filters.dateFrom, filters.dateTo, filters.projectId" in execute
-    assert "showStatistics(data.summary, filters)" in execute
+    assert "showStatistics(data.summary)" in execute
 
 
 def test_export_is_bound_to_accepted_snapshot_and_disabled_while_querying() -> None:
@@ -119,18 +122,25 @@ def test_draft_dates_stay_local_while_project_and_quick_ranges_query_immediately
         assert f'App.applyStatisticsQuickRange("{name}")' in buttons
 
 
-def test_statistics_tabs_share_one_activation_path() -> None:
+def test_statistics_tabs_share_keyboard_activation_path() -> None:
     init = func_body(source(), "initStatisticsDefaults")
     activate = func_body(source(), "activateStatisticsTab")
+    keyboard = func_body(source(), "handleStatisticsTabKeydown")
     assert "Object.keys(statisticsTabs)" in init
     assert "activateStatisticsTab(view)" in init
+    assert "handleStatisticsTabKeydown(event, view)" in init
     assert "Object.keys(statisticsTabs)" in activate
     assert 'setAttribute("aria-selected"' in activate
+    assert "tabIndex = selected ? 0 : -1" in activate
     assert "panel).hidden" in activate
+    for key in ("ArrowLeft", "ArrowRight", "Home", "End"):
+        assert key in keyboard
 
 
 def test_dynamic_table_values_are_escaped_without_export_preview_ui() -> None:
-    assert "App.escapeHtml" in func_body(source(), "renderStatsTable")
+    body = func_body(source(), "renderStatsTable")
+    assert "App.escapeHtml" in body
+    assert "statisticsGroupRecordCount(group)" in body
     assert "renderExportPreview" not in source()
     assert "stats-export-range" not in section()
 
@@ -144,37 +154,27 @@ def test_statistics_styles_are_responsive_local_surfaces() -> None:
         assert selector in styles
 
 
-def test_statistics_dates_reuse_timeline_native_date_control() -> None:
+def test_statistics_dates_keep_native_picker_with_controlled_empty_copy() -> None:
     html = section()
     index = (WEBVIEW_UI_DIR / "index_fd_work_v5.html").read_text(encoding="utf-8")
-    styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    final = (WEBVIEW_UI_DIR / "ui_components.css").read_text(encoding="utf-8")
+    js = source()
     date_inputs = re.findall(
-        r'<input id="statistics-date-(?:from|to)" class="date-control" type="date"',
+        r'<input id="statistics-date-(?:from|to)" class="date-control statistics-date-control" type="date" data-empty="true"',
         html,
     )
-    date_range = re.search(r"\.statistics-date-range\s*\{([^}]*)\}", styles)
-    all_time = re.search(r"\.statistics-all-time-label\s*\{([^}]*)\}", styles)
     assert len(date_inputs) == 2
-    assert '<span class="statistics-date-label">日期范围</span>' not in html
+    assert html.count('class="statistics-date-empty-label" aria-hidden="true">YYYY/MM/DD</span>') == 2
     assert 'aria-label="统计日期范围"' in html
-    assert "statistics-date-field" not in html
-    assert "statistics-date-display" not in html
-    assert "statistics-date-icon" not in html
-    assert "statistics-date-from-display" not in html
-    assert "statistics-date-to-display" not in html
-    assert html.count('<use href="#icon-calendar"/>') == 0
     assert 'id="timeline-date-input" class="date-control" type="date"' in index
-    assert date_range is not None
-    assert "width: fit-content" in date_range.group(1)
-    assert "276px" not in date_range.group(1)
-    assert all_time is not None and "--date-control-width" in all_time.group(1)
-    assert "--statistics-date-width" not in styles
-    assert ".statistics-date-field" not in styles
-    assert ".statistics-date-display" not in styles
-    assert ".statistics-date-icon" not in styles
-    assert "278px" not in styles
-    assert "@media (max-width: 767px)" in styles
-    assert "@media (max-width: 719px)" not in styles
+    assert "input.type" not in js
+    assert "syncStatisticsDateInputMode" not in js
+    assert 'setAttribute("data-empty"' in js
+    assert ".statistics-date-control-shell" in final
+    assert ".statistics-date-empty-label" in final
+    assert "pointer-events: none" in final
+    assert "::-webkit-datetime-edit" in final
+    assert 'statistics-date-control[data-empty="true"]' in final
 
 
 def test_metric_strip_is_open_and_not_a_surface_card() -> None:
@@ -184,20 +184,35 @@ def test_metric_strip_is_open_and_not_a_surface_card() -> None:
     assert metric.group(1).split() == ["metric-strip"]
 
 
-def test_metric_strip_remains_one_row_at_narrow_widths() -> None:
-    styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
-    metric = re.search(r"\.metric-strip\s*\{([^}]*)\}", styles)
-    narrow = styles[styles.index("@media (max-width: 959px)") :]
+def test_metric_strip_remains_one_row_with_file_kpi() -> None:
+    final = (WEBVIEW_UI_DIR / "ui_components.css").read_text(encoding="utf-8")
+    metric = re.search(r"\.metric-strip\s*\{([^}]*)\}", final)
     assert metric is not None
-    assert "repeat(4, minmax(0, 1fr))" in metric.group(1)
-    assert "white-space: nowrap" in metric.group(1)
-    assert "repeat(2, minmax(0, 1fr))" not in narrow
-    assert ".metric:nth-child(2)" not in narrow
-    assert ".metric:nth-child(-n+2)" not in narrow
+    assert "repeat(5, minmax(0, 1fr))" in metric.group(1)
+    assert section().count('class="metric"') == 5
 
 
-def test_statistics_table_adds_visual_comparison_without_changing_values() -> None:
+def test_statistics_time_segment_column_uses_report_record_count() -> None:
+    js = source()
+    body = func_body(js, "statisticsGroupRecordCount")
+    table = func_body(js, "renderStatsTable")
+    assert "group.record_count" in body
+    assert "group.session_count" in body
+    assert "group.activity_count" in body
+    assert "statisticsGroupRecordCount(group)" in table
+
+
+def test_file_kpi_reuses_existing_file_groups_without_new_backend_contract() -> None:
+    js = source()
+    count = func_body(js, "statisticsConcreteFileCount")
+    metrics = func_body(js, "renderStatisticsMetrics")
+    assert '!== "file:excluded"' in count
+    assert "summary && summary.by_file" in metrics
+    assert 'element("stats-file-count")' in metrics
+
+
+def test_statistics_table_adds_visual_comparison_without_changing_duration_or_percentage() -> None:
     body = func_body(source(), "renderStatsTable")
     assert 'class="stats-share-bar"' in body
     assert "Math.max(0, Math.min(100" in body
-    assert "group.duration" in body and "group.activity_count" in body and "group.percentage" in body
+    assert "group.duration" in body and "group.percentage" in body

@@ -14,6 +14,7 @@
     App.rulesCreatingPanelProject = false;
     App.rulesCreatingPanelRule = false;
     App.rulesDeletingProjectId = null;
+    var rulesPanelFolderRecursiveDraft = true;
 
     function initRulesPanelEvents() {
         bindClick("rules-open-create-rule", function () { openRulesPanel("rule", { ruleType: "folder" }); });
@@ -34,6 +35,21 @@
                 if (event.target && event.target.getAttribute("data-rules-panel-close") === "1") closeRulesPanel();
             });
         }
+        var recursive = document.getElementById("rules-panel-folder-recursive");
+        if (recursive && recursive.getAttribute("data-rules-recursive-bound") !== "1") {
+            recursive.setAttribute("data-rules-recursive-bound", "1");
+            recursive.addEventListener("change", function () {
+                rulesPanelFolderRecursiveDraft = !!recursive.checked;
+            });
+        }
+        ["folder", "keyword"].forEach(function (type) {
+            var tab = document.getElementById("rules-panel-" + type + "-type");
+            if (!tab || tab.getAttribute("data-rules-tab-keyboard-bound") === "1") return;
+            tab.setAttribute("data-rules-tab-keyboard-bound", "1");
+            tab.addEventListener("keydown", function (event) {
+                handleRuleTypeKeydown(event, type);
+            });
+        });
         var languageSelect = document.getElementById("rules-panel-project-language");
         if (languageSelect) languageSelect.addEventListener("change", refreshLanguageOther);
         App.projectIdentity.bindHost({
@@ -176,6 +192,9 @@
         var panel = document.getElementById("rules-create-panel");
         setValue("rules-panel-folder-path", "");
         setValue("rules-panel-keyword", "");
+        rulesPanelFolderRecursiveDraft = true;
+        var recursive = document.getElementById("rules-panel-folder-recursive");
+        if (recursive) recursive.checked = true;
         var backfill = document.getElementById("rules-panel-backfill");
         if (backfill) backfill.checked = true;
         fillProjectFields(options.project || null);
@@ -233,6 +252,9 @@
         fillProjectFields(null);
         setValue("rules-panel-folder-path", "");
         setValue("rules-panel-keyword", "");
+        rulesPanelFolderRecursiveDraft = true;
+        var recursive = document.getElementById("rules-panel-folder-recursive");
+        if (recursive) recursive.checked = true;
         setRuleType("folder");
         var backfill = document.getElementById("rules-panel-backfill");
         if (backfill) backfill.checked = true;
@@ -301,10 +323,24 @@
         }
         if (folderGroup) folderGroup.hidden = !isFolder;
         var recursive = document.getElementById("rules-panel-folder-recursive");
-        if (recursive) recursive.checked = true;
+        if (recursive) recursive.checked = rulesPanelFolderRecursiveDraft;
         if (keywordRow) keywordRow.hidden = isFolder;
     }
     App.setRulesPanelRuleType = setRuleType;
+
+    function handleRuleTypeKeydown(event, type) {
+        var key = event && event.key;
+        if (["ArrowLeft", "ArrowRight", "Home", "End"].indexOf(key) < 0) return;
+        if (event.preventDefault) event.preventDefault();
+        var targetType = type;
+        if (key === "Home") targetType = "folder";
+        else if (key === "End") targetType = "keyword";
+        else targetType = type === "folder" ? "keyword" : "folder";
+        setRuleType(targetType);
+        var target = document.getElementById("rules-panel-" + targetType + "-type");
+        if (target && target.focus) target.focus();
+    }
+    App.handleRulesRuleTypeKeydown = handleRuleTypeKeydown;
 
     function renderRulesPanelProjectContext(projectId, options) {
         options = options || {};
