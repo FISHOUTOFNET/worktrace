@@ -51,9 +51,10 @@ from .report_session_projection_service import (
     display_safe_contribution,
 )
 from .report_status_policy import STANDALONE_STATUS, SUPPRESSED, decide_report_status
+from .session_boundary_policy import ALLOWED_HARD_BOUNDARY_REASONS
 from .settings_service import get_int_setting
 
-_SHORT_RETURN_BLOCKING_REASONS = frozenset({"user_pause", "user_stop"})
+_SHORT_RETURN_BLOCKING_REASONS = frozenset(ALLOWED_HARD_BOUNDARY_REASONS)
 
 
 @dataclass
