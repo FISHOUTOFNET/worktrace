@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-from datetime import datetime
 
 import pytest
 
@@ -174,7 +173,8 @@ def test_prepared_statistics_export_freezes_transient_runtime_without_database_w
     with open(output, "r", encoding="utf-8-sig", newline="") as handle:
         rows = list(csv.DictReader(handle))
     assert len(rows) == 1
-    assert rows[0]["时长秒数"] == "12"
+    assert set(rows[0]) == {"日期", "开始时间", "时长", "项目", "备注"}
+    assert rows[0]["时长"] == "00:00:12"
     assert rows[0]["项目"] == "Transient Frozen"
     with get_connection() as conn:
         count = conn.execute("SELECT COUNT(*) AS count FROM activity_log").fetchone()["count"]
@@ -246,6 +246,5 @@ def test_prepared_statistics_export_is_frozen_before_later_runtime_updates(temp_
     with open(output, "r", encoding="utf-8-sig", newline="") as handle:
         rows = list(csv.DictReader(handle))
     assert len(rows) == 1
-    assert rows[0]["时长秒数"] == "1800"
-    expected_end = datetime.fromisoformat(f"{day}T09:30:00").strftime("%Y-%m-%d %H:%M:%S")
-    assert rows[0]["结束时间"] == expected_end
+    assert set(rows[0]) == {"日期", "开始时间", "时长", "项目", "备注"}
+    assert rows[0]["时长"] == "00:30:00"
