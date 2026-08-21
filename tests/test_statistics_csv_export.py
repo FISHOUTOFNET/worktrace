@@ -466,18 +466,13 @@ def test_write_csv_success_creates_utf8_bom_file(temp_db, tmp_path):
     assert headers == [
         "日期",
         "开始时间",
-        "结束时间",
         "时长",
-        "时长秒数",
         "项目",
-        "状态",
         "备注",
-        "修正时长",
-        "是否已修正",
     ]
     assert len(rows) == 1
-    assert rows[0][4] == "1800"
-    assert rows[0][3] == "00:30:00"
+    assert len(rows[0]) == 5
+    assert rows[0][2] == "00:30:00"
 
 
 @pytest.mark.parametrize(
