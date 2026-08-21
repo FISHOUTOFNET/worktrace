@@ -29,6 +29,9 @@ $uninstaller = Join-Path $InstallDir "unins000.exe"
 $expectedStartup = '"' + (Join-Path $InstallDir "Trace.exe") + '" --background'
 $upgradePidFile = Join-Path $tempRoot "worktrace-upgrade-smoke.pid"
 $uninstallPidFile = Join-Path $tempRoot "worktrace-uninstall-smoke.pid"
+$firstInstallLog = Join-Path $tempRoot "worktrace-first-install.log"
+$upgradeInstallLog = Join-Path $tempRoot "worktrace-upgrade-install.log"
+$uninstallLog = Join-Path $tempRoot "worktrace-uninstall.log"
 $upgradePid = $null
 $uninstallPid = $null
 
@@ -36,16 +39,29 @@ function Invoke-CheckedProcess {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [Parameter(Mandatory = $true)][string]$Operation
+        [Parameter(Mandatory = $true)][string]$Operation,
+        [string]$LogPath = ""
     )
+
+    $effectiveArguments = @($Arguments)
+    if (-not [string]::IsNullOrWhiteSpace($LogPath)) {
+        Remove-Item -Force -LiteralPath $LogPath -ErrorAction SilentlyContinue
+        $effectiveArguments += "/LOG=`"$LogPath`""
+    }
 
     $process = Start-Process `
         -FilePath $FilePath `
-        -ArgumentList $Arguments `
+        -ArgumentList $effectiveArguments `
         -WindowStyle Hidden `
         -Wait `
         -PassThru
     if ($process.ExitCode -ne 0) {
+        if (-not [string]::IsNullOrWhiteSpace($LogPath) -and (Test-Path -LiteralPath $LogPath)) {
+            Write-Host "---- $Operation installer log ----"
+            Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
+                ForEach-Object { Write-Host $_ }
+            Write-Host "---- end $Operation installer log ----"
+        }
         throw "$Operation exited with code $($process.ExitCode)"
     }
 }
@@ -55,6 +71,9 @@ if (Test-Path -LiteralPath $InstallDir) {
 }
 Remove-Item -Force -LiteralPath $upgradePidFile -ErrorAction SilentlyContinue
 Remove-Item -Force -LiteralPath $uninstallPidFile -ErrorAction SilentlyContinue
+Remove-Item -Force -LiteralPath $firstInstallLog -ErrorAction SilentlyContinue
+Remove-Item -Force -LiteralPath $upgradeInstallLog -ErrorAction SilentlyContinue
+Remove-Item -Force -LiteralPath $uninstallLog -ErrorAction SilentlyContinue
 Remove-ItemProperty `
     -Path $runKey `
     -Name "WorkTrace" `
@@ -64,6 +83,7 @@ try {
     Invoke-CheckedProcess `
         -FilePath $setup `
         -Operation "First install" `
+        -LogPath $firstInstallLog `
         -Arguments @(
             "/VERYSILENT",
             "/SUPPRESSMSGBOXES",
@@ -100,6 +120,7 @@ try {
     Invoke-CheckedProcess `
         -FilePath $setup `
         -Operation "Upgrade install" `
+        -LogPath $upgradeInstallLog `
         -Arguments @(
             "/VERYSILENT",
             "/SUPPRESSMSGBOXES",
@@ -139,6 +160,7 @@ try {
     Invoke-CheckedProcess `
         -FilePath $uninstaller `
         -Operation "Uninstall" `
+        -LogPath $uninstallLog `
         -Arguments @(
             "/VERYSILENT",
             "/SUPPRESSMSGBOXES",
@@ -188,6 +210,9 @@ finally {
         -ErrorAction SilentlyContinue
     Remove-Item -Force -LiteralPath $upgradePidFile -ErrorAction SilentlyContinue
     Remove-Item -Force -LiteralPath $uninstallPidFile -ErrorAction SilentlyContinue
+    Remove-Item -Force -LiteralPath $firstInstallLog -ErrorAction SilentlyContinue
+    Remove-Item -Force -LiteralPath $upgradeInstallLog -ErrorAction SilentlyContinue
+    Remove-Item -Force -LiteralPath $uninstallLog -ErrorAction SilentlyContinue
 
     $smokeStateRoot = Join-Path $tempRoot "worktrace-installed-launch-state"
     if (Test-Path -LiteralPath $smokeStateRoot) {

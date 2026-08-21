@@ -80,9 +80,14 @@ const
   MaintenanceShutdownEventName = 'Local\WorkTrace_UpdateShutdown_v1';
   EventModifyState = $0002;
   Synchronize = $00100000;
+  GenericWrite = $40000000;
+  FileShareRead = $00000001;
+  FileShareWrite = $00000002;
+  FileShareDelete = $00000004;
+  OpenExisting = 3;
+  InvalidHandleValue = 4294967295;
   MaintenanceShutdownPollMilliseconds = 100;
   MaintenanceShutdownPollAttempts = 200;
-  MaintenanceShutdownBootloaderSettleMilliseconds = 500;
   PrivacyPolicyFileName = 'privacy_policy_zh-CN.txt';
   PrivacyNoticeVersion = '1';
   InstallBootstrapKey = 'Software\WorkTrace\InstallBootstrap';
@@ -106,6 +111,17 @@ function OpenEvent(
 
 function SetEvent(hEvent: THandle): BOOL;
   external 'SetEvent@kernel32.dll stdcall';
+
+function CreateFile(
+  lpFileName: String;
+  dwDesiredAccess: DWORD;
+  dwShareMode: DWORD;
+  lpSecurityAttributes: DWORD;
+  dwCreationDisposition: DWORD;
+  dwFlagsAndAttributes: DWORD;
+  hTemplateFile: THandle
+): THandle;
+  external 'CreateFileW@kernel32.dll stdcall';
 
 function CloseHandle(hObject: THandle): BOOL;
   external 'CloseHandle@kernel32.dll stdcall';
@@ -204,10 +220,37 @@ begin
   end;
 end;
 
+function ApplicationExecutableReleased(const ExePath: String): Boolean;
+var
+  FileHandle: THandle;
+begin
+  if not FileExists(ExePath) then
+  begin
+    Result := True;
+    exit;
+  end;
+
+  // A mapped/running executable cannot be opened for write access. We do not
+  // write to it; the handle is only a precise readiness probe for replacement.
+  FileHandle := CreateFile(
+    ExePath,
+    GenericWrite,
+    FileShareRead or FileShareWrite or FileShareDelete,
+    0,
+    OpenExisting,
+    FILE_ATTRIBUTE_NORMAL,
+    0
+  );
+  Result := FileHandle <> InvalidHandleValue;
+  if Result then
+    CloseHandle(FileHandle);
+end;
+
 function RequestWorkTraceShutdown(const Context: String): Boolean;
 var
   ExePath: String;
   Attempt: Integer;
+  EventWasPresent: Boolean;
 begin
   ExePath := ExistingApplicationExePath;
   if ExePath = '' then
@@ -217,34 +260,41 @@ begin
     exit;
   end;
 
-  if not MaintenanceShutdownEventExists then
+  EventWasPresent := MaintenanceShutdownEventExists;
+  if EventWasPresent then
+  begin
+    Log('Signaling application maintenance shutdown Event for ' + Context + '.');
+    if not SignalMaintenanceShutdownEvent then
+    begin
+      Log('Failed to signal application maintenance shutdown Event for ' + Context + '.');
+      Result := False;
+      exit;
+    end;
+  end
+  else if ApplicationExecutableReleased(ExePath) then
+  begin
+    Log('Application executable is already released for ' + Context + '.');
+    Result := True;
+    exit;
+  end
+  else
   begin
     Log(
       'Application maintenance shutdown Event not present for ' + Context +
-      '; no cooperative process is currently advertised.'
+      ', but the executable is still in use.'
     );
-    // Upgrade can still rely on Inno Setup Restart Manager for a legacy or
-    // partially initialized process that does not expose the current Event.
-    Result := CompareText(Context, 'upgrade') <> 0;
-    exit;
-  end;
-
-  Log('Signaling application maintenance shutdown Event for ' + Context + '.');
-  if not SignalMaintenanceShutdownEvent then
-  begin
-    Log('Failed to signal application maintenance shutdown Event for ' + Context + '.');
     Result := False;
     exit;
   end;
 
   for Attempt := 1 to MaintenanceShutdownPollAttempts do
   begin
-    if not MaintenanceShutdownEventExists then
+    // Event disappearance proves the inner Python process has left its shutdown
+    // coordinator. File write access additionally proves the one-file bootloader
+    // has released Trace.exe, which is the actual condition Setup needs.
+    if (not MaintenanceShutdownEventExists) and
+       ApplicationExecutableReleased(ExePath) then
     begin
-      // The Event belongs to the inner Python process. The PyInstaller one-file
-      // bootloader may hold Trace.exe briefly after that process exits, so leave
-      // a small bounded cleanup window without starting another Trace.exe.
-      Sleep(MaintenanceShutdownBootloaderSettleMilliseconds);
       Log('Application maintenance shutdown completed for ' + Context + '.');
       Result := True;
       exit;
