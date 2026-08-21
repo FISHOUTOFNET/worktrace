@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Iterator
 
@@ -9,6 +10,7 @@ from ..constants import STATUS_EXCLUDED, UNCATEGORIZED_PROJECT
 from ..formatters import format_duration, format_status_label
 from .report_projection_snapshot_service import ReportProjectionSnapshot
 from .report_revision_service import export_revision as build_export_revision
+from .statistics_file_projection import file_group_identity
 from .statistics_scope_policy import (
     entry_matches_statistics_project_scope,
     normalize_statistics_project_scope,
@@ -33,8 +35,10 @@ class StatisticsSummaryProjection:
     concrete_project_count: int
     concrete_app_count: int
     by_project: tuple[dict[str, Any], ...]
+    by_file: tuple[dict[str, Any], ...]
     by_app: tuple[dict[str, Any], ...]
     by_status: tuple[dict[str, Any], ...]
+    live_file_key: str
 
 
 @dataclass(frozen=True)
@@ -62,8 +66,10 @@ class ReportAnalyticsProjection:
 def build_statistics_summary_projection(
     snapshot: ReportProjectionSnapshot,
     project_id: str | int | None = None,
+    *,
+    live_runtime_snapshot: Mapping[str, Any] | None = None,
 ) -> StatisticsSummaryProjection:
-    """Compute summary fields without building or holding export records."""
+    """Compute every Statistics summary group in one contribution scan."""
 
     normalized_scope = normalize_statistics_project_scope(project_id)
     contributions_by_entry = _index_contributions(snapshot)
@@ -71,6 +77,7 @@ def build_statistics_summary_projection(
     members: set[tuple[str, int, str]] = set()
     activity_ids: set[int] = set()
     by_project: dict[str, dict] = {}
+    by_file: dict[str, dict] = {}
     by_app: dict[str, dict] = {}
     by_status: dict[str, dict] = {}
     concrete_apps: set[str] = set()
@@ -78,6 +85,17 @@ def build_statistics_summary_projection(
     export_row_count = 0
     closed_keys: set[str] = set()
     meta_by_key: dict[str, dict[str, Any]] = {}
+
+    live_file_key = ""
+    persisted_live_activity_id = 0
+    if isinstance(live_runtime_snapshot, Mapping):
+        live_file_key = file_group_identity(live_runtime_snapshot)[0]
+        try:
+            persisted_live_activity_id = int(
+                live_runtime_snapshot.get("persisted_activity_id") or 0
+            )
+        except (TypeError, ValueError):
+            persisted_live_activity_id = 0
 
     for entry in snapshot.final_entries:
         if not entry_matches_statistics_project_scope(entry, normalized_scope):
@@ -133,6 +151,20 @@ def build_statistics_summary_projection(
             app = "已排除" if privacy_redacted else str(row.get("app_name") or "未知应用")
             if not privacy_redacted:
                 concrete_apps.add(app)
+            file_key, file_display_name = file_group_identity(
+                row,
+                live_runtime_snapshot,
+            )
+            _accumulate(
+                by_file,
+                file_key,
+                duration,
+                [identity],
+                key,
+                display_name=file_display_name,
+            )
+            if persisted_live_activity_id > 0 and identity[1] == persisted_live_activity_id:
+                live_file_key = file_key
             _accumulate(by_app, app, duration, [identity], key)
             _accumulate(
                 by_status,
@@ -174,8 +206,10 @@ def build_statistics_summary_projection(
         ),
         concrete_app_count=len(concrete_apps),
         by_project=project_groups,
+        by_file=tuple(_file_groups(by_file, total)),
         by_app=tuple(_groups(by_app, total)),
         by_status=tuple(_groups(by_status, total)),
+        live_file_key=live_file_key,
     )
 
 
@@ -565,6 +599,31 @@ def _groups(groups: dict[str, dict], total: int) -> list[dict[str, Any]]:
     return sorted(
         result,
         key=lambda item: (-int(item["duration_seconds"]), str(item["display_name"])),
+    )
+
+
+def _file_groups(groups: dict[str, dict], total: int) -> list[dict[str, Any]]:
+    result = [
+        {
+            "key": key,
+            "display_name": str(value["display_name"] or "未知"),
+            "duration_seconds": int(value["duration"]),
+            "activity_count": len(
+                {int(member[1]) for member in value["members"] if int(member[1]) > 0}
+            ),
+            "report_slice_count": len(value["members"]),
+            "record_count": len(value["records"]),
+            "percentage": round(int(value["duration"]) / total * 100, 1) if total else 0.0,
+        }
+        for key, value in groups.items()
+    ]
+    return sorted(
+        result,
+        key=lambda item: (
+            -int(item["duration_seconds"]),
+            str(item["display_name"]).casefold(),
+            str(item["key"]),
+        ),
     )
 
 

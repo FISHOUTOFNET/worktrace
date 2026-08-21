@@ -20,12 +20,15 @@ def _public_file_key(identity_key: str) -> str:
     return "file:" + stable_json_hash(["statistics-file", str(identity_key or "")])[:24]
 
 
-def file_group_identity(row: Mapping[str, Any]) -> tuple[str, str]:
-    """Return an opaque stable Statistics key and its safe resource display name."""
-    status = str(row.get("status") or "unknown")
-    if bool(row.get("privacy_redacted")) or status == STATUS_EXCLUDED:
+def file_group_identity(
+    row: Mapping[str, Any],
+    live_runtime_snapshot: Mapping[str, Any] | None = None,
+) -> tuple[str, str]:
+    """Return the stable Statistics file key and safe display name for one row."""
+    materialized = _identity_row(row, live_runtime_snapshot)
+    status = str(materialized.get("status") or "unknown")
+    if bool(materialized.get("privacy_redacted")) or status == STATUS_EXCLUDED:
         return "file:excluded", "已排除"
-    materialized = dict(row)
     identity_key = activity_group_key(materialized)
     return _public_file_key(identity_key), format_safe_display_name(materialized)
 
@@ -71,7 +74,7 @@ def live_statistics_file_key(
             except (TypeError, ValueError):
                 activity_id = 0
             if activity_id == persisted_activity_id:
-                return file_group_identity(contribution)[0]
+                return file_group_identity(contribution, live_runtime_snapshot)[0]
     return file_group_identity(live_runtime_snapshot)[0]
 
 
@@ -104,8 +107,10 @@ def build_statistics_file_groups(
         duration = max(0, int(contribution.get("duration_seconds") or 0))
         if duration <= 0:
             continue
-        identity_row = _identity_row(contribution, live_runtime_snapshot)
-        key, display_name = file_group_identity(identity_row)
+        key, display_name = file_group_identity(
+            contribution,
+            live_runtime_snapshot,
+        )
         activity_id = int(contribution.get("activity_id") or 0)
         member = (
             str(contribution.get("report_date") or ""),
