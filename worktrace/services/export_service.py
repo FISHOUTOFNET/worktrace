@@ -371,7 +371,7 @@ def clear_all_local_data(confirm: bool) -> None:
     )
 
     try:
-        clear_all_live_data(confirm=True)
+        clear_all_live_data()
     except MaintenanceInProgressError as exc:
         raise ValueError("operation_in_progress") from exc
     logging.info("all local data cleared at %s", now_str())
