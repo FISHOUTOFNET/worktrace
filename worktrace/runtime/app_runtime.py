@@ -347,7 +347,7 @@ class AppRuntime:
             error_code=handle.error_code,
         )
 
-    def _launch_worker(
+    def _start_worker(
         self,
         spec: WorkerSpec,
     ) -> tuple[WorkerHandle | None, bool, _WorkerStartupStatus | None]:
@@ -401,14 +401,6 @@ class AppRuntime:
                     ),
                 )
             return handle, True, None
-
-    def _start_worker(self, spec: WorkerSpec) -> _WorkerStartupStatus:
-        handle, started, immediate_status = self._launch_worker(spec)
-        if immediate_status is not None:
-            return immediate_status
-        if handle is None:
-            raise RuntimeError("worker_handle_required")
-        return self._await_worker_startup(handle, started=started)
 
     def _timeout_worker_startup(
         self,
@@ -539,7 +531,7 @@ class AppRuntime:
         statuses: dict[str, _WorkerStartupStatus] = {}
         pending: dict[str, tuple[WorkerHandle, bool, float]] = {}
         for name, spec in worker_specs:
-            handle, started, immediate_status = self._launch_worker(spec)
+            handle, started, immediate_status = self._start_worker(spec)
             if immediate_status is not None:
                 statuses[name] = immediate_status
                 continue
