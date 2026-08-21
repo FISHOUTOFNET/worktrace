@@ -45,6 +45,7 @@
         var segments = distribution && Array.isArray(distribution.segments)
             ? distribution.segments.slice(0, 4)
             : [];
+        bar.setAttribute("aria-label", "今日总时长分解");
         if (!segments.length) {
             bar.innerHTML = "";
             bar.hidden = true;
@@ -53,8 +54,15 @@
 
         bar.hidden = false;
         bar.innerHTML = segments.map(function (segment, index) {
+            var clock = App.validateLiveClock(segment && segment.live_clock);
+            var canTick = !!(clock && clock.is_live === true
+                && clock.duration_semantic === "aggregate_live");
             var rawSeconds = Number(segment.duration_seconds);
-            var seconds = Number.isFinite(rawSeconds) ? Math.max(0, rawSeconds) : 0;
+            var durableSeconds = Number.isFinite(rawSeconds) ? Math.max(0, rawSeconds) : 0;
+            var projectedSeconds = canTick
+                ? App.computeClockDurationNow(clock, Date.now())
+                : null;
+            var seconds = projectedSeconds === null ? durableSeconds : projectedSeconds;
             var grow = Math.max(1, Math.round(seconds));
             var label = String(segment.label || "");
             var hours = App.formatCompactHours(seconds);
@@ -65,12 +73,27 @@
                     ? "is-uncategorized"
                     : "rank-" + String(index + 1);
             var accessibleText = label + "，" + exactDuration;
+            var continuity = canTick
+                ? App.liveContinuityKey(
+                    segment,
+                    "overview-project-" + String(segment.key || index)
+                )
+                : "";
+            var durationAttributes = canTick
+                ? App.liveClockDataAttributes(
+                    clock,
+                    continuity,
+                    "overview-project-distribution"
+                )
+                : "";
             return '<div class="overview-project-segment ' + className
                 + '" style="flex-grow: ' + String(grow)
                 + '" role="listitem" title="' + App.escapeHtml(label + " · " + exactDuration)
                 + '" aria-label="' + App.escapeHtml(accessibleText) + '">'
                 + '<span class="overview-project-name">' + App.escapeHtml(label) + '</span>'
-                + '<span class="overview-project-hours">' + App.escapeHtml(hours) + '</span>'
+                + '<span class="overview-project-hours"' + durationAttributes
+                + ' data-duration-format="compact-hours" data-duration-seconds="'
+                + String(seconds || 0) + '">' + App.escapeHtml(hours) + '</span>'
                 + '</div>';
         }).join("");
     }

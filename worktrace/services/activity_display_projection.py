@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, Mapping
 
 from ..constants import UNCATEGORIZED_PROJECT
 from .project_attribution_policy import is_official_project_source
@@ -43,7 +43,7 @@ def resolve_official_anchor_project(anchor: dict[str, Any] | None) -> dict[str, 
     }
 
 
-def _aggregate_clock(source: dict[str, Any], base_seconds: int) -> dict[str, Any]:
+def _aggregate_clock(source: Mapping[str, Any], base_seconds: int) -> dict[str, Any]:
     return {
         "sampled_at_epoch_ms": int(source["sampled_at_epoch_ms"]),
         "started_at_epoch_ms": int(source["started_at_epoch_ms"]),
@@ -57,7 +57,7 @@ def _aggregate_clock(source: dict[str, Any], base_seconds: int) -> dict[str, Any
     }
 
 
-def _row_live_clock(row: dict[str, Any]) -> dict[str, Any] | None:
+def _row_live_clock(row: Mapping[str, Any]) -> Mapping[str, Any] | None:
     clock = row.get("live_clock")
     if not isinstance(clock, dict):
         return None
@@ -70,6 +70,48 @@ def _row_live_clock(row: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _reporting_rows(
+    rows: list[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    return [
+        row
+        for row in rows
+        if row.get("contributes_to_totals", True) is not False
+    ]
+
+
+def build_aggregate_live_clock(
+    rows: list[Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    """Return one aggregate clock for a complete reporting subset.
+
+    Rows are expected to carry the verified row-owned aggregate clock produced
+    by ``activity_row_overlay``. Non-reporting rows are ignored here so every
+    caller gets the same total-duration semantics without duplicating filters.
+    """
+
+    included = _reporting_rows(rows)
+    source_clock = next(
+        (
+            clock
+            for row in included
+            if (clock := _row_live_clock(row)) is not None
+        ),
+        None,
+    )
+    if source_clock is None:
+        return None
+    total_seconds = sum(
+        max(0, int(row.get("duration_seconds") or 0))
+        for row in included
+    )
+    active_elapsed = int(source_clock["elapsed_seconds_at_sample"])
+    return _aggregate_clock(
+        source_clock,
+        max(0, total_seconds - active_elapsed),
+    )
+
+
 def build_kpi_live_targets(
     rows: list[dict[str, Any]],
     live_clock: dict[str, Any],
@@ -77,47 +119,21 @@ def build_kpi_live_targets(
     """Build exact aggregate clocks for KPI rows from verified row clocks."""
 
     del live_clock
-    live_rows = [(row, _row_live_clock(row)) for row in rows]
-    live_rows = [(row, clock) for row, clock in live_rows if clock is not None]
-    source_clock = live_rows[0][1] if live_rows else None
+    included = [dict(row) for row in _reporting_rows(rows)]
 
-    total_seconds = sum(int(row.get("duration_seconds") or 0) for row in rows)
-    classified_seconds = sum(
-        int(row.get("duration_seconds") or 0)
-        for row in rows
-        if bool(row.get("is_classified"))
-    )
-    uncategorized_seconds = sum(
-        int(row.get("duration_seconds") or 0)
-        for row in rows
-        if bool(row.get("is_uncategorized"))
-    )
-    active_elapsed = (
-        int(source_clock["elapsed_seconds_at_sample"])
-        if source_clock is not None
-        else 0
-    )
-
-    def target(enabled: bool, seconds: int) -> dict[str, Any]:
-        if not enabled or source_clock is None:
+    def target(target_rows: list[dict[str, Any]]) -> dict[str, Any]:
+        clock = build_aggregate_live_clock(target_rows)
+        if clock is None:
             return {"enabled": False, "live_clock": None}
-        return {
-            "enabled": True,
-            "live_clock": _aggregate_clock(
-                source_clock,
-                max(0, int(seconds) - active_elapsed),
-            ),
-        }
+        return {"enabled": True, "live_clock": clock}
 
     return {
-        "today_total_seconds": target(bool(live_rows), total_seconds),
+        "today_total_seconds": target(included),
         "classified_seconds": target(
-            any(bool(row.get("is_classified")) for row, _clock in live_rows),
-            classified_seconds,
+            [row for row in included if bool(row.get("is_classified"))]
         ),
         "uncategorized_seconds": target(
-            any(bool(row.get("is_uncategorized")) for row, _clock in live_rows),
-            uncategorized_seconds,
+            [row for row in included if bool(row.get("is_uncategorized"))]
         ),
     }
 
