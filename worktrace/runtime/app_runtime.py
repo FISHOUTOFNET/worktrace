@@ -347,40 +347,91 @@ class AppRuntime:
             error_code=handle.error_code,
         )
 
-    def _start_worker(self, spec: WorkerSpec) -> _WorkerStartupStatus:
-        existing = self._worker_handles.get(spec.name)
-        if existing is not None and _thread_is_alive(existing.thread):
-            return self._await_worker_startup(existing, started=False)
-        if existing is not None:
-            self._worker_handles.pop(spec.name, None)
+    def _launch_worker(
+        self,
+        spec: WorkerSpec,
+    ) -> tuple[WorkerHandle | None, bool, _WorkerStartupStatus | None]:
+        with self._lifecycle_lock:
+            if self._shutdown or self.stop_event.is_set():
+                return (
+                    None,
+                    False,
+                    _WorkerStartupStatus(
+                        _WorkerStartupState.STOPPED,
+                        False,
+                        started=False,
+                        error_code="runtime_stopping",
+                    ),
+                )
 
-        handle = WorkerHandle(
-            spec=spec,
-            thread=None,
-            stop_event=threading.Event(),
-        )
-        thread = threading.Thread(
-            target=self._run_owned_worker,
-            args=(handle,),
-            name=spec.thread_name,
-            daemon=True,
-        )
-        handle.thread = thread
-        self._worker_handles[spec.name] = handle
-        try:
-            thread.start()
-        except Exception:
-            handle.error_code = "worker_thread_start_failed"
-            handle.failed_event.set()
-            self._worker_handles.pop(spec.name, None)
-            logging.exception("worker thread start failed worker=%s", spec.name)
-            return _WorkerStartupStatus(
-                _WorkerStartupState.FAILED,
-                False,
-                started=False,
-                error_code=handle.error_code,
+            existing = self._worker_handles.get(spec.name)
+            if existing is not None and _thread_is_alive(existing.thread):
+                return existing, False, None
+            if existing is not None:
+                self._worker_handles.pop(spec.name, None)
+
+            handle = WorkerHandle(
+                spec=spec,
+                thread=None,
+                stop_event=threading.Event(),
             )
-        return self._await_worker_startup(handle, started=True)
+            thread = threading.Thread(
+                target=self._run_owned_worker,
+                args=(handle,),
+                name=spec.thread_name,
+                daemon=True,
+            )
+            handle.thread = thread
+            self._worker_handles[spec.name] = handle
+            try:
+                thread.start()
+            except Exception:
+                handle.error_code = "worker_thread_start_failed"
+                handle.failed_event.set()
+                self._worker_handles.pop(spec.name, None)
+                logging.exception("worker thread start failed worker=%s", spec.name)
+                return (
+                    None,
+                    False,
+                    _WorkerStartupStatus(
+                        _WorkerStartupState.FAILED,
+                        False,
+                        started=False,
+                        error_code=handle.error_code,
+                    ),
+                )
+            return handle, True, None
+
+    def _start_worker(self, spec: WorkerSpec) -> _WorkerStartupStatus:
+        handle, started, immediate_status = self._launch_worker(spec)
+        if immediate_status is not None:
+            return immediate_status
+        if handle is None:
+            raise RuntimeError("worker_handle_required")
+        return self._await_worker_startup(handle, started=started)
+
+    def _timeout_worker_startup(
+        self,
+        handle: WorkerHandle,
+        *,
+        started: bool,
+        join_thread: bool,
+    ) -> _WorkerStartupStatus:
+        handle.error_code = "worker_startup_timeout"
+        handle.failed_event.set()
+        handle.stop_event.set()
+        if join_thread and handle.thread is not None:
+            handle.thread.join(timeout=1.0)
+        if not _thread_is_alive(handle.thread):
+            with self._lifecycle_lock:
+                if self._worker_handles.get(handle.spec.name) is handle:
+                    self._worker_handles.pop(handle.spec.name, None)
+        return _WorkerStartupStatus(
+            _WorkerStartupState.FAILED,
+            False,
+            started=started,
+            error_code=handle.error_code,
+        )
 
     def _await_worker_startup(
         self,
@@ -394,19 +445,54 @@ class AppRuntime:
                 return self._status_for_handle(handle, started=started)
             if handle.failed_event.is_set() or not _thread_is_alive(handle.thread):
                 return self._status_for_handle(handle, started=started)
-        handle.error_code = "worker_startup_timeout"
-        handle.failed_event.set()
-        handle.stop_event.set()
-        if handle.thread is not None:
-            handle.thread.join(timeout=1.0)
-        if not _thread_is_alive(handle.thread):
-            self._worker_handles.pop(handle.spec.name, None)
-        return _WorkerStartupStatus(
-            _WorkerStartupState.FAILED,
-            False,
+        return self._timeout_worker_startup(
+            handle,
             started=started,
-            error_code=handle.error_code,
+            join_thread=True,
         )
+
+    def _await_worker_startups(
+        self,
+        pending: dict[str, tuple[WorkerHandle, bool, float]],
+    ) -> dict[str, _WorkerStartupStatus]:
+        statuses: dict[str, _WorkerStartupStatus] = {}
+        while pending:
+            current = time.monotonic()
+            nearest_deadline: float | None = None
+            for name, (handle, started, deadline) in list(pending.items()):
+                if (
+                    handle.ready_event.is_set()
+                    or handle.failed_event.is_set()
+                    or not _thread_is_alive(handle.thread)
+                ):
+                    statuses[name] = self._status_for_handle(
+                        handle,
+                        started=started,
+                    )
+                    pending.pop(name, None)
+                    continue
+                if current >= deadline:
+                    statuses[name] = self._timeout_worker_startup(
+                        handle,
+                        started=started,
+                        join_thread=False,
+                    )
+                    pending.pop(name, None)
+                    continue
+                nearest_deadline = (
+                    deadline
+                    if nearest_deadline is None
+                    else min(nearest_deadline, deadline)
+                )
+
+            if not pending:
+                break
+            remaining = max(
+                0.001,
+                (nearest_deadline or (time.monotonic() + 0.05)) - time.monotonic(),
+            )
+            time.sleep(min(0.05, remaining))
+        return statuses
 
     def _blocked_worker_report(self) -> WorkerStartupReport:
         statuses = {
@@ -447,17 +533,48 @@ class AppRuntime:
                     for name in self._worker_specs
                 }
                 return WorkerStartupReport(statuses, "runtime_stopping")
+            worker_specs = tuple(self._worker_specs.items())
 
-            statuses = {
-                name: self._start_worker(spec)
-                for name, spec in self._worker_specs.items()
-            }
-            error_code = (
-                "worker_start_failed"
-                if any(not status.ready for status in statuses.values())
-                else None
+        startup_started_at = time.monotonic()
+        statuses: dict[str, _WorkerStartupStatus] = {}
+        pending: dict[str, tuple[WorkerHandle, bool, float]] = {}
+        for name, spec in worker_specs:
+            handle, started, immediate_status = self._launch_worker(spec)
+            if immediate_status is not None:
+                statuses[name] = immediate_status
+                continue
+            if handle is None:
+                statuses[name] = _WorkerStartupStatus(
+                    _WorkerStartupState.FAILED,
+                    False,
+                    started=False,
+                    error_code="worker_start_failed",
+                )
+                continue
+            pending[name] = (
+                handle,
+                started,
+                time.monotonic() + max(0.1, spec.startup_timeout_seconds),
             )
-            return WorkerStartupReport(statuses, error_code)
+
+        statuses.update(self._await_worker_startups(pending))
+        ordered_statuses = {
+            name: statuses[name]
+            for name, _spec in worker_specs
+        }
+        error_code = (
+            "worker_start_failed"
+            if any(not status.ready for status in ordered_statuses.values())
+            else None
+        )
+        report = WorkerStartupReport(ordered_statuses, error_code)
+        logging.info(
+            "background worker startup complete elapsed_ms=%s ready=%s failed=%s",
+            int((time.monotonic() - startup_started_at) * 1000),
+            report.ready,
+            list(report.failed_workers),
+        )
+        return report
 
     def start_authorized_collection(self) -> _RuntimeStartResult:
         with self._lifecycle_lock:
@@ -488,11 +605,18 @@ class AppRuntime:
                 )
             self.phase = RuntimePhase.STARTING
 
+        startup_started_at = time.monotonic()
+        collector_started_at = time.monotonic()
         try:
             collector_result = self.start_collector()
         except Exception:
             logging.exception("collector startup failed")
             collector_result = {"ok": False, "error": "collector_start_failed"}
+        logging.info(
+            "collector startup complete elapsed_ms=%s ok=%s",
+            int((time.monotonic() - collector_started_at) * 1000),
+            bool(collector_result.get("ok")),
+        )
 
         if not bool(collector_result.get("ok")):
             error_code = str(collector_result.get("error") or "collector_start_failed")
@@ -527,6 +651,11 @@ class AppRuntime:
 
         degraded = not report.ready
         self.phase = RuntimePhase.DEGRADED if degraded else RuntimePhase.RUNNING
+        logging.info(
+            "authorized runtime startup complete elapsed_ms=%s degraded=%s",
+            int((time.monotonic() - startup_started_at) * 1000),
+            degraded,
+        )
         return _RuntimeStartResult(
             ok=True,
             collector_ready=True,

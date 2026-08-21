@@ -1,10 +1,16 @@
 from types import SimpleNamespace
+import threading
 
 import pytest
 
 from worktrace.platforms.fake_adapter import FakeAdapter
 from worktrace.runtime import app_runtime
-from worktrace.runtime.app_runtime import AppRuntime, RuntimePhase, WorkerStartupReport
+from worktrace.runtime.app_runtime import (
+    AppRuntime,
+    RuntimePhase,
+    WorkerSpec,
+    WorkerStartupReport,
+)
 from worktrace.runtime.contracts import WorkerStartupState, WorkerStartupStatus
 
 pytestmark = [pytest.mark.db, pytest.mark.collector_runtime, pytest.mark.integration]
@@ -60,6 +66,45 @@ def test_live_thread_without_ready_handshake_times_out_closed(temp_db, monkeypat
     assert runtime.phase is RuntimePhase.RECOVERABLE_FAILURE
     assert runtime.stop_event.is_set() is False
     assert runtime._collector_thread is None
+
+
+def test_background_workers_launch_before_waiting_for_readiness(temp_db):
+    runtime = _owned_runtime()
+    runtime._initialized = True
+    barrier = threading.Barrier(3)
+
+    def coordinated_worker(stop_event, *, health):
+        try:
+            barrier.wait(timeout=1.0)
+        except threading.BrokenBarrierError:
+            health.failed("workers_started_serially")
+            return
+        health.succeeded()
+        stop_event.wait(1.0)
+
+    runtime._worker_specs = {
+        f"worker_{index}": WorkerSpec(
+            name=f"worker_{index}",
+            thread_name=f"WorkTraceTestWorker{index}",
+            target=coordinated_worker,
+            args_factory=lambda stop: (stop,),
+            startup_timeout_seconds=0.5,
+        )
+        for index in range(3)
+    }
+
+    try:
+        report = runtime.start_background_workers()
+
+        assert report.ready is True
+        assert report.error_code is None
+        assert tuple(report.workers) == ("worker_0", "worker_1", "worker_2")
+        assert all(status.ready for status in report.workers.values())
+    finally:
+        runtime.request_shutdown()
+        for handle in list(runtime._worker_handles.values()):
+            if handle.thread is not None:
+                handle.thread.join(timeout=1.0)
 
 
 def test_authorized_start_skips_derived_workers_when_collector_fails(
