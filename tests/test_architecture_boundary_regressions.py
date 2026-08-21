@@ -28,9 +28,23 @@ def test_overview_counts_standalone_excluded_without_showing_it_in_recent(temp_d
 
     assert payload["today_total_seconds"] == 300
     assert payload["project_distribution"] == {
-        "total_seconds": 0,
-        "segments": [],
+        "total_seconds": 300,
+        "segments": [
+            {
+                "key": "other",
+                "project_id": None,
+                "label": "其他",
+                "duration_seconds": 300,
+                "category_count": 1,
+                "is_uncategorized": False,
+                "is_other": True,
+            }
+        ],
     }
+    assert sum(
+        int(segment.get("duration_seconds") or 0)
+        for segment in payload["project_distribution"]["segments"]
+    ) == payload["today_total_seconds"]
     assert all(
         str(row.get("row_kind") or "") != "standalone_status"
         for row in payload.get("activities") or []
