@@ -166,9 +166,15 @@ def test_project_rules_panel_presentation_context_and_tab_state_are_single_owner
     assert 'classList.toggle("is-active"' in rule_type
     assert "folderGroup.hidden" in rule_type
     assert "keywordRow.hidden" in rule_type
-    assert "recursive.checked = true" in rule_type
+    assert "recursive.checked = rulesPanelFolderRecursiveDraft" in rule_type
     assert "folderRow" not in rule_type
     assert "recursiveRow" not in rule_type
+
+    keyboard = func_body(source, "handleRuleTypeKeydown")
+    for key in ("ArrowLeft", "ArrowRight", "Home", "End"):
+        assert key in keyboard
+    assert "setRuleType(targetType)" in keyboard
+    assert "target.focus()" in keyboard
 
 
 def test_project_rule_drawer_has_session_guard_and_shared_discard_reset():

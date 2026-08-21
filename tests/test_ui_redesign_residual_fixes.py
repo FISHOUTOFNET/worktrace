@@ -2,7 +2,7 @@
 
 Covers six fix areas:
   1. Project Rules catalog stays lightweight (no full-history projection).
-  2. Statistics summary and CSV export paths are split; default range is this month.
+  2. Statistics summary and CSV export paths are split; direct dates default to this week.
   3. Canonical project-scope policy keeps ``unclassified`` disjoint from excluded.
   4. Export ticket binds snapshot, date range, project scope, format and schema.
   5. Settings maintenance status maps deterministically to display text.
@@ -173,8 +173,10 @@ def test_statistics_html_uses_direct_dates_and_week_default():
     assert 'id="statistics-date-from"' in html
     assert 'id="statistics-date-to"' in html
     assert 'id="statistics-week-btn"' in html
-    assert "当前范围：本周" in html
-    assert "全部时间" in html
+    assert "当前范围：本周" not in html
+    assert "全部时间" not in html
+    assert html.count("YYYY/MM/DD") == 2
+    assert 'class="date-control statistics-date-control" type="date"' in html
     assert "自定义范围" not in html
 
 

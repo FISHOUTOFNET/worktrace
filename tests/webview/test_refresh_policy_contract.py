@@ -12,7 +12,7 @@ def test_statistics_background_refresh_is_single_owner_silent_and_incremental():
 
     assert 'preservePresentation: page === "statistics"' in init
     assert "if (!preservePresentation) setStatisticsLoading(true);" in statistics
-    assert "reconcileStatisticsPresentation(data.summary, filters);" in statistics
+    assert "reconcileStatisticsPresentation(data.summary);" in statistics
     assert "App.suspendStatisticsLiveTicker" in statistics
     assert "App.statisticsLiveTickerSuspended === true" in composition
     assert 'runtimeGeneration(previous, "report_structure")' in composition
@@ -24,16 +24,17 @@ def test_statistics_background_refresh_is_single_owner_silent_and_incremental():
     assert "getStatisticsExportSummary" not in composition
 
 
-def test_statistics_all_time_keeps_same_editable_dates_with_zero_placeholder():
+def test_statistics_all_time_keeps_native_dates_with_controlled_empty_presentation():
     root = Path(__file__).resolve().parents[2]
     statistics = (root / "worktrace" / "webview_ui" / "js" / "statistics.js").read_text(encoding="utf-8")
     styles = (root / "worktrace" / "webview_ui" / "styles.css").read_text(encoding="utf-8")
+    index = (root / "worktrace" / "webview_ui" / "index_fd_work_v5.html").read_text(encoding="utf-8")
 
-    assert 'element("statistics-date-inputs").hidden = false;' in statistics
-    assert 'element("statistics-all-time-label").hidden = true;' in statistics
-    assert 'input.placeholder = "0000/00/00";' in statistics
-    assert 'input.type = "text"' in statistics
-    assert 'input.type = "date"' in statistics
+    assert 'input.setAttribute("data-empty", String(!String(input.value || "")));' in statistics
+    assert 'input.type = "text"' not in statistics
+    assert 'input.type = "date"' not in statistics
+    assert index.count("YYYY/MM/DD") == 2
+    assert 'class="date-control statistics-date-control" type="date"' in index
     assert "--date-control-width: 116px" in styles
     assert "--statistics-date-width" not in styles
 
