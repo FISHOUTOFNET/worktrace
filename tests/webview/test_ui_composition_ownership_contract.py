@@ -62,6 +62,15 @@ def test_timeline_owns_structural_pending_and_live_suppression():
     assert "App.timeline.onRuntimeTransition" in composition
 
 
+def test_timeline_refresh_coordinator_forwards_refresh_options():
+    init = source("init_fd_work_v5.js")
+
+    timeline_refresher = init.split(
+        "        timeline: function (acceptedState, options) {", 1
+    )[1].split("        statistics: function", 1)[0]
+    assert "capability.onRefreshRequested(options || {})" in timeline_refresher
+
+
 def test_overview_owns_live_collection_suppression():
     composition = source("ui_composition.js")
     overview = source("overview.js")
