@@ -60,6 +60,7 @@ function harness(initialRuntime) {
   };
   let baseTimelineRefreshes = 0;
   let baseOverviewRenders = 0;
+  const overviewTransitions = [];
   let baseStatusRenders = 0;
   let rulesRequests = 0;
   let statisticsRequests = 0;
@@ -120,6 +121,9 @@ function harness(initialRuntime) {
       return Promise.resolve(null);
     },
     anySettingsOperationInProgress() { return false; },
+    overview: {
+      onRuntimeTransition(change) { overviewTransitions.push(change); },
+    },
     showOverview() { baseOverviewRenders += 1; },
     showStatus() { baseStatusRenders += 1; },
     showProjectRules() {},
@@ -188,6 +192,7 @@ function harness(initialRuntime) {
     counters: {
       timeline: () => baseTimelineRefreshes,
       overview: () => baseOverviewRenders,
+      overviewTransitions: () => overviewTransitions.slice(),
       status: () => baseStatusRenders,
       rules: () => rulesRequests,
       statistics: () => statisticsRequests,
@@ -293,17 +298,18 @@ test("Timeline consumes one live-only collection refresh but preserves structura
   assert.equal(counters.timeline(), 1);
 });
 
-test("Overview live-only reconciliation does not rebuild the collection surface", () => {
+test("Overview runtime reconciliation is dispatched as transition facts", () => {
   const { App, counters } = harness(runtime());
   App.currentPage = "overview";
 
   App.acceptRefreshStateRuntime({ nextRuntime: runtime({ live: "l2" }) });
-  App.showOverview({});
-  assert.equal(counters.overview(), 0);
-
   App.acceptRefreshStateRuntime({ nextRuntime: runtime({ structure: "s2", live: "l3" }) });
-  App.showOverview({});
-  assert.equal(counters.overview(), 1);
+
+  assert.equal(counters.overview(), 0);
+  assert.deepEqual(
+    counters.overviewTransitions().map((change) => [change.structureChanged, change.liveChanged]),
+    [[false, true], [true, true]]
+  );
 });
 
 test("Statistics local ticker patches numeric cells without calling full renderer", () => {

@@ -3,6 +3,10 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
+    if (typeof App.suppressNextOverviewCollectionRefresh !== "boolean") {
+        App.suppressNextOverviewCollectionRefresh = false;
+    }
+
     function renderKpi(element, durableSeconds, target, continuityKey) {
         var clock = target && App.validateLiveClock(target.live_clock);
         var live = !!(target && target.enabled === true && clock && clock.is_live === true
@@ -160,6 +164,11 @@
 
     function showOverview(bundle) {
         if (!bundle) return;
+        if (App.currentPage === "overview"
+            && App.suppressNextOverviewCollectionRefresh === true) {
+            App.suppressNextOverviewCollectionRefresh = false;
+            return;
+        }
         App.lastOverviewSnapshot = bundle;
         renderKpi(
             document.getElementById("kpi-total"),
@@ -197,9 +206,24 @@
     App.showRecent = function (payload) {
         renderRecent((payload && payload.recent) || []);
     };
+    function onOverviewRuntimeTransition(change) {
+        change = change || {};
+        if (change.source !== "refresh-state" || App.currentPage !== "overview") return;
+        App.suppressNextOverviewCollectionRefresh = change.structureChanged !== true
+            && change.liveChanged === true;
+    }
+
+    function onOverviewRefreshRequested(options) {
+        options = options || {};
+        if (options.automatic !== true) App.suppressNextOverviewCollectionRefresh = false;
+    }
+
     App.overview = Object.freeze({
+        onRefreshRequested: onOverviewRefreshRequested,
+        onRuntimeTransition: onOverviewRuntimeTransition,
         resetGeneration: function () {
             App.overviewRequestToken = (App.overviewRequestToken || 0) + 1;
+            App.suppressNextOverviewCollectionRefresh = false;
         }
     });
 })();

@@ -700,7 +700,11 @@
     }
 
     var ACTIVE_PAGE_REFRESHERS = Object.freeze({
-        overview: function () {
+        overview: function (_acceptedState, options) {
+            var capability = pageCapability("overview");
+            if (capability && typeof capability.onRefreshRequested === "function") {
+                capability.onRefreshRequested(options || {});
+            }
             return refreshOverview();
         },
         timeline: function (acceptedState) {

@@ -188,17 +188,6 @@
     }
     App.applyStatisticsLocalTicker = applyStatisticsLocalTicker;
 
-    var baseShowOverview = App.showOverview;
-    if (typeof baseShowOverview === "function") {
-        App.showOverview = function () {
-            if (App.currentPage === "overview" && App.suppressNextOverviewCollectionRefresh === true) {
-                App.suppressNextOverviewCollectionRefresh = false;
-                return;
-            }
-            return baseShowOverview.apply(App, arguments);
-        };
-    }
-
     function handleAcceptedRuntimeTransition(previous, accepted, source) {
         var current = App.liveRuntimeStore && App.liveRuntimeStore.get
             ? App.liveRuntimeStore.get()
@@ -248,8 +237,13 @@
             });
         }
 
-        if (page === "overview") {
-            App.suppressNextOverviewCollectionRefresh = !structureChanged && liveChanged;
+        if (page === "overview" && App.overview
+            && typeof App.overview.onRuntimeTransition === "function") {
+            App.overview.onRuntimeTransition({
+                source: source,
+                structureChanged: structureChanged,
+                liveChanged: liveChanged
+            });
         }
 
         // Statistics query ownership belongs to init_fd_work_v5.js. Composition
