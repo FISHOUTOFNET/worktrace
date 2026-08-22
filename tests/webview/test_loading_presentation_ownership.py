@@ -28,7 +28,7 @@ def test_page_loading_indicators_are_owned_by_their_content_regions():
 
 
 def test_content_loading_overlay_does_not_participate_in_normal_layout():
-    css = _resource("loading_presentation.css")
+    css = _resource("ui_components.css")
     overlay = re.search(r"\.content-loading-overlay\s*\{([^}]*)\}", css)
     rules_region = re.search(r"\.rules-scroll-region\s*\{([^}]*)\}", css)
 
