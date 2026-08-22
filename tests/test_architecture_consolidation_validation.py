@@ -14,6 +14,7 @@ from worktrace.services import (
     timeline_service,
     view_model_service,
 )
+from worktrace.services.page_read_context import current_page_read_context
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.serial]
 
@@ -25,6 +26,7 @@ RUNTIME_TOP_LEVEL_ALIASES = {
     "current_activity",
     "current_activity_display_span_id",
     "current_activity_elapsed_seconds",
+    "current_activity_revision",
     "current_resource_identity_hash",
     "display_span_id",
     "live_clock",
@@ -55,6 +57,77 @@ def test_page_and_heartbeat_use_one_revision_owner(temp_db):
     heartbeat = refresh_state_view_model_service.get_refresh_state_view_model(today)
     assert page["structure_revision"] == heartbeat["structure_revision"]
     assert page["page_revision"] == heartbeat["page_revision"]
+
+
+def test_runtime_attachment_stays_inside_verified_page_read_scope(
+    temp_db,
+    monkeypatch,
+):
+    report_date = timeline_service.get_default_report_date()
+    observed: list[tuple[str, bool]] = []
+
+    monkeypatch.setattr(
+        view_model_service,
+        "get_overview_view_model",
+        lambda _today=None: {"ok": True, "date": report_date, "today": report_date},
+    )
+    monkeypatch.setattr(
+        view_model_service,
+        "get_timeline_view_model",
+        lambda _date=None: {"ok": True, "date": report_date, "today": report_date},
+    )
+    monkeypatch.setattr(
+        view_model_service,
+        "get_session_activity_summary_view_model",
+        lambda **_kwargs: {"ok": True, "date": report_date, "today": report_date},
+    )
+    monkeypatch.setattr(
+        refresh_state_view_model_service,
+        "get_refresh_state_view_model",
+        lambda _date=None: {
+            "ok": True,
+            "report_date": report_date,
+            "today": report_date,
+        },
+    )
+
+    def fake_attach(payload, *, surface, **_kwargs):
+        observed.append((surface, current_page_read_context() is not None))
+        result = dict(payload)
+        result["runtime"] = {"schema_version": 2}
+        return result
+
+    monkeypatch.setattr(view_model_api, "attach_live_runtime_envelope", fake_attach)
+    runtime, collector_status = _runtime_context()
+
+    view_model_api.get_overview_view_model(
+        report_date,
+        runtime=runtime,
+        collector_status=collector_status,
+    )
+    view_model_api.get_timeline_view_model(
+        report_date,
+        runtime=runtime,
+        collector_status=collector_status,
+    )
+    view_model_api.get_session_activity_summary_view_model(
+        report_date=report_date,
+        projection_instance_key="session:1",
+        runtime=runtime,
+        collector_status=collector_status,
+    )
+    view_model_api.get_refresh_state_view_model(
+        report_date,
+        runtime=runtime,
+        collector_status=collector_status,
+    )
+
+    assert observed == [
+        ("overview", True),
+        ("timeline", True),
+        ("details", True),
+        ("refresh", True),
+    ]
 
 
 def test_session_summary_api_calls_keyword_only_service(monkeypatch):
