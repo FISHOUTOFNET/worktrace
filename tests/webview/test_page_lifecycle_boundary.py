@@ -43,6 +43,8 @@ def test_refresh_coordinator_uses_page_lifecycle_capabilities() -> None:
 def test_page_lifecycle_boundary_is_stateless_and_loaded_before_init() -> None:
     source = read_js("page_lifecycle.js")
     assert ALL_JS_FILES.index("page_lifecycle.js") < ALL_JS_FILES.index("init_fd_work_v5.js")
+    assert "App.timelineDate" in source
+    assert "App.statisticsSelection" in source
 
     for marker in (
         "pageRefreshDirty",

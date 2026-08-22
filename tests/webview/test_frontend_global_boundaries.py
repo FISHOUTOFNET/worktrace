@@ -178,7 +178,6 @@ def test_frontend_state_is_namespaced() -> None:
     source = read_all_js()
     code = "\n".join(line.split("//", 1)[0] for line in source.splitlines())
     state_names = (
-        "timelineDate",
         "timelineLoaded",
         "timelineLoading",
         "timelineRequestToken",
