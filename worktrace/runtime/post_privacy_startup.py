@@ -15,6 +15,14 @@ class PostPrivacyParticipant(Protocol):
 
 
 class PostPrivacyStartupCoordinator:
+    """Own the privacy-gated startup sequence without blocking first-window startup.
+
+    Participant pre-start preparation may need to happen before ``webview.start``
+    (FD Work uses this to reserve its hidden helper window), while collector and
+    worker readiness are not prerequisites for showing the main application shell.
+    These two phases are therefore explicit and independently idempotent.
+    """
+
     def __init__(
         self,
         app_control,
@@ -28,8 +36,38 @@ class PostPrivacyStartupCoordinator:
         self._participants = participants
         self._lock = threading.RLock()
         self._privacy_authorized_reader = privacy_authorized_reader
+        self._prepared = False
         self._started = False
         self._result: dict[str, Any] | None = None
+
+    def prepare_before_webview_start(self) -> dict[str, Any]:
+        """Prepare privacy-authorized participants without starting the runtime.
+
+        This method is deliberately bounded to participant composition work.  It
+        never waits for collector or background-worker readiness, so callers may
+        safely invoke it on the main startup path before creating the WebView.
+        """
+
+        with self._lock:
+            authorized = self._privacy_authorized()
+            if not authorized:
+                self._set_participants_authorized(False)
+                return {
+                    "ok": False,
+                    "authorized": False,
+                    "prepared": False,
+                    "error": "privacy_gate_required",
+                }
+            self._set_participants_authorized(True)
+            if not self._prepared:
+                self._prepare_participants(pre_start=True)
+                self._prepared = True
+            return {
+                "ok": True,
+                "authorized": True,
+                "prepared": True,
+                "error": None,
+            }
 
     def start_if_authorized(self, *, pre_start: bool = False) -> dict[str, Any]:
         with self._lock:
@@ -42,7 +80,9 @@ class PostPrivacyStartupCoordinator:
                 self._result = result
                 return result
             self._set_participants_authorized(True)
-            self._prepare_participants(pre_start=pre_start)
+            if not self._prepared:
+                self._prepare_participants(pre_start=pre_start)
+                self._prepared = True
             self._started = True
             self._result = result
             return dict(result)
@@ -56,7 +96,9 @@ class PostPrivacyStartupCoordinator:
                 self._set_participants_authorized(False)
                 return result
             self._set_participants_authorized(True)
-            self._prepare_participants(pre_start=False)
+            if not self._prepared:
+                self._prepare_participants(pre_start=False)
+                self._prepared = True
             self._started = True
             self._result = dict(result)
             return result
