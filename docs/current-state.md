@@ -5,18 +5,20 @@
 ## Product
 - Windows desktop application using Python, SQLite, pywebview and WebView2.
 - Local-only: no registration, cloud sync, administrator privilege, screenshots, screen recording, OCR or keyboard logging.
-- WebView is the only shipping UI. With a healthy tray host, window close hides the window while collection continues; only the tray Exit command ends the WebView loop and reaches `AppRuntime.shutdown()`.
+- WebView is the only shipping visual UI. An authorized `--background` cold start runs Collector/workers, tray, activation and update-shutdown without creating a WebView. After the first UI open, a healthy tray host makes window close hide the window while collection continues; tray Exit ends either the headless wait or WebView loop and reaches `AppRuntime.shutdown()`.
 - The privacy notice is fail-closed; sensitive workers and clipboard capture do not start before acceptance.
 - CSV export is the only current public export; Excel, PDF and timesheet-template export are unsupported in the shipping WebView.
 
 ## Composition and lifecycle
 ```text
-webview_main -> DesktopShellController -> AppRuntime
-             -> ApplicationServices -> WebViewBridge
+webview_main -> AppRuntime + one ApplicationServices graph
+             -> authorized background: DeferredUIGate + tray (no WebView)
+             -> first open/foreground: DesktopShellController + WebViewBridge
 ```
 - `AppRuntime` owns the single-instance lease, Collector and every background worker thread handle.
-- `DesktopShellController` owns visible/hidden/exiting window state. Its tray host and instance-activation listener send shell commands only and never manage the database, Collector or workers.
+- `DeferredUIGate` coalesces tray/activation open requests and wakes the main thread for the once-only initial UI bootstrap; exit can wake a process that has no window. After binding, `DesktopShellController` owns visible/hidden/exiting window state. Neither capability manages the database, Collector or workers.
 - `ApplicationServices` is explicit composition with no service locator. It injects core project callbacks and fixed lifecycle tuples; bridges call explicit capabilities.
+- Background composition builds `ApplicationServices` once with a late-bound FD Work interaction coordinator. The first UI binds the existing service graph to the real coordinator/window controller; it never creates another runtime or services graph.
 - Project Rules uses an external-identity port; Settings/Backup use a post-commit lifecycle hook. None imports or instantiates FD Work.
 - Privacy startup sees generic participants; a typed main-window sink owns JSON callback delivery and fails softly for stale/shutdown windows.
 - `RuntimeMaintenanceCoordinator` solely owns snapshot/replacement ordering and the stable fail-closed latch.

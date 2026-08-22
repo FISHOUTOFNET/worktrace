@@ -8,25 +8,21 @@ import time
 from hashlib import sha256
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from . import PRODUCT_DISPLAY_NAME, PRODUCT_NAME, config
 from .collector.single_instance import get_application_instance_coordinator
+from .desktop.deferred_ui import DeferredUIGate, InitialUIRequest
 from .desktop.install_bootstrap import consume_fd_work_install_intent
-from .desktop.shell import DesktopShellController
 from .desktop.update_shutdown import get_application_update_shutdown_coordinator
-from .desktop.windows_icons import WindowsWindowIconHost
 from .desktop.windows_tray import WindowsTrayHost
-from .desktop.windows_webview_power import WindowsWebView2PowerController
-from .integrations.fd_work.helper_bridge import FDWorkHelperBridge
-from .integrations.fd_work.interaction_coordinator import FDWorkInteractionCoordinator
-from .integrations.fd_work.main_window_sink import FDWorkMainWindowSink
-from .integrations.fd_work.page_adapter import FDWorkPageAdapter
-from .integrations.fd_work.window_controller import FDWorkWindowController
+from .integrations.fd_work.deferred_interaction import (
+    DeferredFDWorkInteractionCoordinator,
+)
 from .platforms.window_activation import grant_foreground_permission
 from .runtime.app_runtime import AppRuntime
 from .runtime.application_services import build_application_services
-from .webview_ui.bridge import WebViewBridge
 from .webview_ui.runtime_check import (
     detect_webview2_runtime,
     missing_runtime_message,
@@ -161,7 +157,7 @@ def _background_start_allowed(services, prestart_result: dict[str, Any]) -> bool
         return False
 
 
-def _bind_shell_events(window, shell: DesktopShellController) -> None:
+def _bind_shell_events(window, shell) -> None:
     events = getattr(window, "events", None)
     if events is None:
         return
@@ -175,28 +171,283 @@ _RENDERER_UNAVAILABLE_MESSAGE = (
 )
 
 
+def _load_ui_components() -> SimpleNamespace:
+    """Import renderer-owned composition only when a UI is actually requested."""
+
+    from .desktop.shell import DesktopShellController
+    from .desktop.windows_icons import WindowsWindowIconHost
+    from .desktop.windows_webview_power import WindowsWebView2PowerController
+    from .integrations.fd_work.helper_bridge import FDWorkHelperBridge
+    from .integrations.fd_work.interaction_coordinator import (
+        FDWorkInteractionCoordinator,
+    )
+    from .integrations.fd_work.main_window_sink import FDWorkMainWindowSink
+    from .integrations.fd_work.page_adapter import FDWorkPageAdapter
+    from .integrations.fd_work.window_controller import FDWorkWindowController
+    from .webview_ui.bridge import WebViewBridge
+
+    return SimpleNamespace(
+        DesktopShellController=DesktopShellController,
+        WindowsWindowIconHost=WindowsWindowIconHost,
+        WindowsWebView2PowerController=WindowsWebView2PowerController,
+        FDWorkHelperBridge=FDWorkHelperBridge,
+        FDWorkInteractionCoordinator=FDWorkInteractionCoordinator,
+        FDWorkMainWindowSink=FDWorkMainWindowSink,
+        FDWorkPageAdapter=FDWorkPageAdapter,
+        FDWorkWindowController=FDWorkWindowController,
+        WebViewBridge=WebViewBridge,
+    )
+
+
+def _prepare_webview(*, background: bool) -> Any | None:
+    if detect_webview2_runtime() == "missing":
+        _report_runtime_missing(background=background)
+        return None
+    try:
+        webview = _check_pywebview_available()
+    except RuntimeError as exc:
+        _report_startup_failure(str(exc), background=background)
+        return None
+    logging.info("pywebview_runtime version=%s", _pywebview_runtime_version())
+    return webview
+
+
+def _prepare_post_privacy_startup(app_control) -> tuple[dict[str, Any], bool]:
+    prestart_result: dict[str, Any] = {
+        "ok": False,
+        "authorized": False,
+    }
+    prepare_before_webview_start = getattr(
+        app_control,
+        "prepare_before_webview_start",
+        None,
+    )
+    deferred_runtime_start = callable(prepare_before_webview_start)
+    try:
+        if deferred_runtime_start:
+            prestart_result = dict(prepare_before_webview_start())
+        else:
+            # Compatibility path for injected legacy capabilities. Shipping uses
+            # PostPrivacyStartupCoordinator and therefore the split preparation.
+            prestart_result = dict(app_control.start_if_authorized(pre_start=True))
+    except Exception:
+        logging.exception("webview startup: pre-start preparation failed")
+    return prestart_result, deferred_runtime_start
+
+
+def _create_fd_work_interaction(webview, ui):
+    fd_work_page_adapter = ui.FDWorkPageAdapter()
+    fd_work_helper_bridge = ui.FDWorkHelperBridge(
+        action_result_sink=fd_work_page_adapter
+    )
+    fd_work_controller = ui.FDWorkWindowController(
+        webview,
+        page_adapter=fd_work_page_adapter,
+        helper_bridge=fd_work_helper_bridge,
+    )
+    fd_work_coordinator = ui.FDWorkInteractionCoordinator(
+        window_controller=fd_work_controller,
+        page_adapter=fd_work_page_adapter,
+    )
+    fd_work_helper_bridge.bind_coordinator(fd_work_coordinator)
+    return fd_work_controller, fd_work_coordinator
+
+
+def _run_webview_ui(
+    *,
+    webview,
+    ui,
+    runtime,
+    services,
+    paths,
+    startup_started_at: float,
+    background: bool,
+    runtime_started_before_renderer: bool,
+    deferred_runtime_start: bool,
+    tray,
+    exit_application,
+    shell_holder: dict[str, Any],
+    instance_coordinator,
+    update_shutdown,
+    update_shutdown_prepared: bool,
+    deferred_ui: DeferredUIGate | None,
+    deferred_fd_work: DeferredFDWorkInteractionCoordinator | None,
+    foreground_fd_work: tuple[Any, Any] | None,
+) -> int:
+    fd_work_main_sink = ui.FDWorkMainWindowSink(deliver_asynchronously=True)
+    fd_work_controller = None
+    fd_work_coordinator = None
+    shell = None
+    try:
+        if foreground_fd_work is None:
+            fd_work_controller, fd_work_coordinator = _create_fd_work_interaction(
+                webview,
+                ui,
+            )
+        else:
+            fd_work_controller, fd_work_coordinator = foreground_fd_work
+
+        bridge = ui.WebViewBridge(services)
+        index_path = resource_path("index_fd_work_v5.html")
+        window = webview.create_window(
+            title=PRODUCT_DISPLAY_NAME,
+            url=_versioned_resource_url(index_path),
+            js_api=bridge.shipping_api,
+            width=1080,
+            height=720,
+            min_size=(800, 540),
+            hidden=False,
+            focus=True,
+        )
+        logging.info(
+            "startup stage=main_window_created elapsed_ms=%s hidden=False",
+            int((time.monotonic() - startup_started_at) * 1000),
+        )
+        bridge.set_window(window)
+        fd_work_main_sink.bind_window(window)
+        services.fd_work.bind_status_callback(fd_work_main_sink.status_changed)
+        services.fd_work.bind_picker_result_callback(fd_work_main_sink.picker_result)
+
+        if deferred_fd_work is not None:
+            deferred_fd_work.bind(fd_work_coordinator)
+            # The privacy coordinator already completed its headless participant
+            # phase. Prepare only the newly-bound UI capability before start.
+            services.fd_work.prepare_window_before_start(
+                show_login_if_required=False
+            )
+
+        icon_path = desktop_resource_path("worktrace.ico")
+        window_icons = ui.WindowsWindowIconHost(
+            window_title=PRODUCT_DISPLAY_NAME,
+            icon_path=icon_path,
+        )
+        webview_power = (
+            ui.WindowsWebView2PowerController(window)
+            if sys.platform.startswith("win")
+            else None
+        )
+        shell = ui.DesktopShellController(
+            window=window,
+            tray=tray,
+            initial_hidden=False,
+            window_icons=window_icons,
+            webview_power=webview_power,
+            collection_active_provider=lambda: services.app_control.is_collection_active(),
+        )
+        shell_holder["shell"] = shell
+        fd_work_controller.bind_main_focus_callback(shell.show_window)
+        _bind_shell_events(window, shell)
+        if deferred_ui is not None:
+            deferred_ui.bind_shell(shell)
+        else:
+            instance_coordinator.bind_activation_handler(shell.show_window)
+            if update_shutdown_prepared:
+                update_shutdown.bind_shutdown_handler(exit_application)
+        shell.start()
+        webview_profile_path = paths.base_dir / "webview-profile"
+        webview_profile_path.mkdir(parents=True, exist_ok=True)
+
+        def handle_webview_initialized() -> None:
+            renderer = str(getattr(webview, "renderer", "") or "").lower()
+            safe_renderer = (
+                renderer
+                if renderer in {"edgechromium", "cef", "qt", "gtk", "mshtml"}
+                else "unknown"
+            )
+            logging.info(
+                "startup stage=renderer_initialized elapsed_ms=%s renderer=%s",
+                int((time.monotonic() - startup_started_at) * 1000),
+                safe_renderer,
+            )
+            if sys.platform.startswith("win") and renderer != "edgechromium":
+                fd_work_controller.mark_renderer_unavailable()
+                _show_blocking_startup_message(_RENDERER_UNAVAILABLE_MESSAGE)
+                return
+            fd_work_main_sink.mark_ready()
+            fd_work_controller.on_renderer_initialized(safe_renderer)
+            fd_work_main_sink.status_changed(services.fd_work.get_settings_status())
+
+            if runtime_started_before_renderer or not deferred_runtime_start:
+                return
+            runtime_start_started_at = time.monotonic()
+            try:
+                startup_result = dict(
+                    services.app_control.start_if_authorized(pre_start=False)
+                )
+                logging.info(
+                    "startup stage=runtime_ready elapsed_ms=%s runtime_elapsed_ms=%s ok=%s degraded=%s",
+                    int((time.monotonic() - startup_started_at) * 1000),
+                    int((time.monotonic() - runtime_start_started_at) * 1000),
+                    bool(startup_result.get("ok")),
+                    bool(startup_result.get("degraded")),
+                )
+                if not startup_result.get("ok"):
+                    logging.error(
+                        "collector startup rejected error=%s",
+                        startup_result.get("error")
+                        or startup_result.get("error_code")
+                        or "unknown",
+                    )
+                    if background:
+                        shell.show_window()
+                elif startup_result.get("degraded"):
+                    logging.warning(
+                        "collector started with background worker degradation"
+                    )
+            except Exception:
+                logging.exception(
+                    "webview startup: authorized runtime startup failed; user can retry"
+                )
+                if background:
+                    shell.show_window()
+
+        webview.start(
+            func=handle_webview_initialized,
+            gui="edgechromium",
+            http_server=True,
+            private_mode=False,
+            storage_path=str(webview_profile_path),
+        )
+        return 0
+    finally:
+        fd_work_main_sink.mark_unavailable()
+
+
+def _wait_after_failed_headless_ui(deferred_ui: DeferredUIGate) -> None:
+    while True:
+        request = deferred_ui.wait_for_initial_request()
+        if request is InitialUIRequest.EXIT:
+            return
+
+
 def main(*, background: bool = False) -> int:
     startup_started_at = time.monotonic()
     paths = config.resolve_paths()
     config.ensure_directories(paths)
     setup_logging(paths.log_path)
-    logging.info("webview ui startup")
+    logging.info("webview ui startup background=%s", background)
 
-    if detect_webview2_runtime() == "missing":
-        return _report_runtime_missing(background=background)
-    try:
-        webview = _check_pywebview_available()
-    except RuntimeError as exc:
-        return _report_startup_failure(str(exc), background=background)
-    logging.info("pywebview_runtime version=%s", _pywebview_runtime_version())
+    webview = None
+    ui = None
+    if not background:
+        webview = _prepare_webview(background=False)
+        if webview is None:
+            return 2
+        ui = _load_ui_components()
 
     runtime = AppRuntime(paths)
-    shell: DesktopShellController | None = None
-    fd_work_controller: FDWorkWindowController | None = None
     services = None
+    shell_holder: dict[str, Any] = {}
+    tray = None
+    fd_work_controller = None
+    deferred_fd_work = None
+    foreground_fd_work = None
     instance_coordinator = get_application_instance_coordinator()
     update_shutdown = get_application_update_shutdown_coordinator()
     update_shutdown_prepared = False
+    exit_lock = threading.Lock()
+    exit_requested = False
+    deferred_ui: DeferredUIGate | None = None
 
     try:
         try:
@@ -241,28 +492,24 @@ def main(*, background: bool = False) -> int:
                 logging.exception("update shutdown listener startup failed")
                 update_shutdown_prepared = False
 
-        fd_work_main_sink = FDWorkMainWindowSink(deliver_asynchronously=True)
-        fd_work_page_adapter = FDWorkPageAdapter()
-        fd_work_helper_bridge = FDWorkHelperBridge(
-            action_result_sink=fd_work_page_adapter
-        )
-        fd_work_controller = FDWorkWindowController(
-            webview,
-            page_adapter=fd_work_page_adapter,
-            helper_bridge=fd_work_helper_bridge,
-        )
-        fd_work_coordinator = FDWorkInteractionCoordinator(
-            window_controller=fd_work_controller,
-            page_adapter=fd_work_page_adapter,
-        )
-        fd_work_helper_bridge.bind_coordinator(fd_work_coordinator)
-        services = build_application_services(
-            runtime,
-            fd_work_interaction_coordinator=fd_work_coordinator,
-            paths=paths,
-        )
-        services.fd_work.bind_status_callback(fd_work_main_sink.status_changed)
-        services.fd_work.bind_picker_result_callback(fd_work_main_sink.picker_result)
+        if background:
+            deferred_fd_work = DeferredFDWorkInteractionCoordinator()
+            services = build_application_services(
+                runtime,
+                fd_work_interaction_coordinator=deferred_fd_work,
+                paths=paths,
+            )
+        else:
+            fd_work_controller, fd_work_coordinator = _create_fd_work_interaction(
+                webview,
+                ui,
+            )
+            foreground_fd_work = (fd_work_controller, fd_work_coordinator)
+            services = build_application_services(
+                runtime,
+                fd_work_interaction_coordinator=fd_work_coordinator,
+                paths=paths,
+            )
         if consume_fd_work_install_intent(services.fd_work):
             logging.info("FD Work enabled from installer bootstrap")
         logging.info(
@@ -271,27 +518,9 @@ def main(*, background: bool = False) -> int:
         )
 
         app_control = services.app_control
-        prestart_result: dict[str, Any] = {
-            "ok": False,
-            "authorized": False,
-        }
-        prepare_before_webview_start = getattr(
-            app_control,
-            "prepare_before_webview_start",
-            None,
+        prestart_result, deferred_runtime_start = _prepare_post_privacy_startup(
+            app_control
         )
-        deferred_runtime_start = callable(prepare_before_webview_start)
-        try:
-            if deferred_runtime_start:
-                prestart_result = dict(prepare_before_webview_start())
-            else:
-                # Compatibility path for tests or injected legacy capabilities.
-                # Shipping PostPrivacyStartupCoordinator always exposes the split
-                # pre-start method, so collector/worker readiness is not awaited
-                # on the first-window critical path.
-                prestart_result = dict(app_control.start_if_authorized(pre_start=True))
-        except Exception:
-            logging.exception("webview startup: pre-start preparation failed")
         logging.info(
             "startup stage=prestart_ready elapsed_ms=%s authorized=%s deferred_runtime=%s",
             int((time.monotonic() - startup_started_at) * 1000),
@@ -299,148 +528,147 @@ def main(*, background: bool = False) -> int:
             deferred_runtime_start,
         )
 
-        bridge = WebViewBridge(services)
-        index_path = resource_path("index_fd_work_v5.html")
-        initial_hidden = background and _background_start_allowed(
-            services,
-            prestart_result,
-        )
-        try:
-            window = webview.create_window(
-                title=PRODUCT_DISPLAY_NAME,
-                url=_versioned_resource_url(index_path),
-                js_api=bridge.shipping_api,
-                width=1080,
-                height=720,
-                min_size=(800, 540),
-                hidden=initial_hidden,
-                focus=not initial_hidden,
-            )
-            logging.info(
-                "startup stage=main_window_created elapsed_ms=%s hidden=%s",
-                int((time.monotonic() - startup_started_at) * 1000),
-                initial_hidden,
-            )
-            bridge.set_window(window)
-            fd_work_main_sink.bind_window(window)
-            shell_holder: dict[str, DesktopShellController] = {}
-            exit_lock = threading.Lock()
-            exit_requested = False
-
-            def exit_application() -> None:
-                nonlocal exit_requested
-                with exit_lock:
-                    if exit_requested:
-                        return
-                    exit_requested = True
-                logging.info("application exit requested")
-                try:
-                    services.fd_work.shutdown()
-                finally:
-                    shell_holder["shell"].exit_application()
-
-            icon_path = desktop_resource_path("worktrace.ico")
-            tray = WindowsTrayHost(
-                icon_path=icon_path,
-                on_open=lambda: shell_holder["shell"].show_window(),
-                on_exit=exit_application,
-                on_session_end=exit_application,
-            )
-            window_icons = WindowsWindowIconHost(
-                window_title=PRODUCT_DISPLAY_NAME,
-                icon_path=icon_path,
-            )
-            webview_power = (
-                WindowsWebView2PowerController(window)
-                if sys.platform.startswith("win")
-                else None
-            )
-            shell = DesktopShellController(
-                window=window,
-                tray=tray,
-                initial_hidden=initial_hidden,
-                window_icons=window_icons,
-                webview_power=webview_power,
-                collection_active_provider=lambda: app_control.is_collection_active(),
-            )
-            shell_holder["shell"] = shell
-            fd_work_controller.bind_main_focus_callback(shell.show_window)
-            _bind_shell_events(window, shell)
-            instance_coordinator.bind_activation_handler(shell.show_window)
-            if update_shutdown_prepared:
-                update_shutdown.bind_shutdown_handler(exit_application)
-            shell.start()
-            webview_profile_path = paths.base_dir / "webview-profile"
-            webview_profile_path.mkdir(parents=True, exist_ok=True)
-
-            def handle_webview_initialized() -> None:
-                renderer = str(getattr(webview, "renderer", "") or "").lower()
-                safe_renderer = (
-                    renderer
-                    if renderer in {"edgechromium", "cef", "qt", "gtk", "mshtml"}
-                    else "unknown"
-                )
-                logging.info(
-                    "startup stage=renderer_initialized elapsed_ms=%s renderer=%s",
-                    int((time.monotonic() - startup_started_at) * 1000),
-                    safe_renderer,
-                )
-                if sys.platform.startswith("win") and renderer != "edgechromium":
-                    fd_work_controller.mark_renderer_unavailable()
-                    _show_blocking_startup_message(_RENDERER_UNAVAILABLE_MESSAGE)
-                    return
-                fd_work_main_sink.mark_ready()
-                fd_work_controller.on_renderer_initialized(safe_renderer)
-                fd_work_main_sink.status_changed(services.fd_work.get_settings_status())
-
-                if not deferred_runtime_start:
-                    return
+        runtime_started_before_renderer = not deferred_runtime_start
+        headless_allowed = False
+        if background and _background_start_allowed(services, prestart_result):
+            if deferred_runtime_start:
                 runtime_start_started_at = time.monotonic()
                 try:
-                    startup_result = dict(
+                    runtime_start_result = dict(
                         app_control.start_if_authorized(pre_start=False)
                     )
-                    logging.info(
-                        "startup stage=runtime_ready elapsed_ms=%s runtime_elapsed_ms=%s ok=%s degraded=%s",
-                        int((time.monotonic() - startup_started_at) * 1000),
-                        int((time.monotonic() - runtime_start_started_at) * 1000),
-                        bool(startup_result.get("ok")),
-                        bool(startup_result.get("degraded")),
-                    )
-                    if not startup_result.get("ok"):
-                        logging.error(
-                            "collector startup rejected error=%s",
-                            startup_result.get("error")
-                            or startup_result.get("error_code")
-                            or "unknown",
-                        )
-                        if background:
-                            shell.show_window()
-                    elif startup_result.get("degraded"):
-                        logging.warning(
-                            "collector started with background worker degradation"
-                        )
                 except Exception:
-                    logging.exception(
-                        "webview startup: authorized runtime startup failed; user can retry"
-                    )
-                    if background:
-                        shell.show_window()
+                    logging.exception("headless authorized runtime startup failed")
+                    runtime_start_result = {"ok": False}
+                logging.info(
+                    "startup stage=headless_runtime_ready elapsed_ms=%s runtime_elapsed_ms=%s ok=%s degraded=%s",
+                    int((time.monotonic() - startup_started_at) * 1000),
+                    int((time.monotonic() - runtime_start_started_at) * 1000),
+                    bool(runtime_start_result.get("ok")),
+                    bool(runtime_start_result.get("degraded")),
+                )
+                runtime_started_before_renderer = runtime_start_result.get("ok") is True
+                headless_allowed = runtime_started_before_renderer
+            else:
+                headless_allowed = prestart_result.get("ok") is True
 
-            webview.start(
-                func=handle_webview_initialized,
-                gui="edgechromium",
-                http_server=True,
-                private_mode=False,
-                storage_path=str(webview_profile_path),
+        if headless_allowed:
+            deferred_ui = DeferredUIGate()
+
+        def open_application() -> bool:
+            if deferred_ui is not None:
+                return deferred_ui.request_open()
+            shell = shell_holder.get("shell")
+            return bool(shell and shell.show_window())
+
+        def exit_application() -> None:
+            nonlocal exit_requested
+            with exit_lock:
+                if exit_requested:
+                    return
+                exit_requested = True
+            logging.info("application exit requested")
+            services.fd_work.shutdown()
+            if deferred_ui is not None:
+                deferred_ui.request_exit()
+                return
+            shell = shell_holder.get("shell")
+            if shell is not None:
+                shell.exit_application()
+
+        icon_path = desktop_resource_path("worktrace.ico")
+        tray = WindowsTrayHost(
+            icon_path=icon_path,
+            on_open=open_application,
+            on_exit=exit_application,
+            on_session_end=exit_application,
+        )
+
+        if deferred_ui is not None:
+            instance_coordinator.bind_activation_handler(deferred_ui.request_open)
+            if update_shutdown_prepared:
+                update_shutdown.bind_shutdown_handler(exit_application)
+            tray_available = tray.start()
+            if tray_available:
+                tray.set_collection_active(app_control.is_collection_active())
+            else:
+                logging.error("headless tray unavailable; opening visible UI")
+                deferred_ui.request_open()
+            logging.info(
+                "startup stage=headless_waiting elapsed_ms=%s tray=%s",
+                int((time.monotonic() - startup_started_at) * 1000),
+                tray_available,
             )
-        except Exception:
-            logging.exception("webview start failed")
-            return _report_startup_failure(
-                missing_runtime_message(),
-                background=background,
-            )
-        return 0
+            while True:
+                request = deferred_ui.wait_for_initial_request()
+                if request is InitialUIRequest.EXIT:
+                    return 0
+                if request is not InitialUIRequest.OPEN:
+                    continue
+                webview = _prepare_webview(background=True)
+                if webview is None:
+                    deferred_ui.mark_initial_open_failed()
+                    continue
+                try:
+                    ui = _load_ui_components()
+                    return _run_webview_ui(
+                        webview=webview,
+                        ui=ui,
+                        runtime=runtime,
+                        services=services,
+                        paths=paths,
+                        startup_started_at=startup_started_at,
+                        background=True,
+                        runtime_started_before_renderer=True,
+                        deferred_runtime_start=deferred_runtime_start,
+                        tray=tray,
+                        exit_application=exit_application,
+                        shell_holder=shell_holder,
+                        instance_coordinator=instance_coordinator,
+                        update_shutdown=update_shutdown,
+                        update_shutdown_prepared=update_shutdown_prepared,
+                        deferred_ui=deferred_ui,
+                        deferred_fd_work=deferred_fd_work,
+                        foreground_fd_work=None,
+                    )
+                except Exception:
+                    logging.exception("deferred webview bootstrap failed")
+                    # A failed first composition is not retried after FD Work may
+                    # have bound. Terminalize that interaction graph while the
+                    # independent runtime and collector remain alive.
+                    deferred_fd_work.shutdown()
+                    _report_startup_failure(
+                        f"{PRODUCT_NAME} 界面启动失败；后台记录仍在继续。",
+                        background=True,
+                    )
+                    _wait_after_failed_headless_ui(deferred_ui)
+                    return 2
+
+        if webview is None:
+            webview = _prepare_webview(background=background)
+            if webview is None:
+                return 2
+            ui = _load_ui_components()
+        return _run_webview_ui(
+            webview=webview,
+            ui=ui,
+            runtime=runtime,
+            services=services,
+            paths=paths,
+            startup_started_at=startup_started_at,
+            background=background,
+            runtime_started_before_renderer=runtime_started_before_renderer,
+            deferred_runtime_start=deferred_runtime_start,
+            tray=tray,
+            exit_application=exit_application,
+            shell_holder=shell_holder,
+            instance_coordinator=instance_coordinator,
+            update_shutdown=update_shutdown,
+            update_shutdown_prepared=update_shutdown_prepared,
+            deferred_ui=None,
+            deferred_fd_work=deferred_fd_work,
+            foreground_fd_work=foreground_fd_work,
+        )
     except Exception:
         logging.exception("webview composition failed")
         return _report_startup_failure(
@@ -450,14 +678,15 @@ def main(*, background: bool = False) -> int:
     finally:
         instance_coordinator.stop_activation_listener()
         update_shutdown.stop_listener()
-        if "fd_work_main_sink" in locals():
-            fd_work_main_sink.mark_unavailable()
         if services is not None:
             services.fd_work.shutdown()
         elif fd_work_controller is not None:
             fd_work_controller.shutdown()
+        shell = shell_holder.get("shell")
         if shell is not None:
             shell.stop()
+        elif tray is not None:
+            tray.stop()
         runtime.shutdown()
         update_shutdown.close()
 

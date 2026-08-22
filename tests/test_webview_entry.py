@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -252,6 +253,9 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
             order.append("evaluate_js")
             evaluate_js_calls.append(script)
 
+        def destroy(self):
+            order.append("window_destroy")
+
     fake_window = _FakeWindow()
     start_calls = {"count": 0, "kwargs": {}}
     create_window_kwargs = {}
@@ -313,11 +317,6 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
             self.shutdown_calls += 1
 
     fake_fd_work_controller = _FakeFDWorkController()
-    monkeypatch.setattr(
-        webview_main,
-        "FDWorkWindowController",
-        lambda *_args, **_kwargs: fake_fd_work_controller,
-    )
 
     shutdown_calls = {"count": 0}
 
@@ -338,14 +337,31 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
     class _FakeAppControl:
         start_result = {"ok": True}
 
+        def __init__(self):
+            self.prepared = False
+
+        def prepare_before_webview_start(self):
+            result = dict(self.start_result)
+            if (
+                result.get("ok") is True
+                and fake_services.fd_work.get_settings_status().get("enabled") is True
+            ):
+                fake_services.fd_work.prepare_window_before_start(True)
+                self.prepared = True
+            return result
+
         def start_collection_after_privacy_gate(self):
             gate_calls["count"] += 1
             return dict(self.start_result)
+
+        def is_collection_active(self):
+            return gate_calls["count"] > 0
 
         def start_if_authorized(self, *, pre_start=False):
             result = self.start_collection_after_privacy_gate()
             if (
                 result.get("ok") is True
+                and not self.prepared
                 and fake_services.fd_work.get_settings_status().get("enabled") is True
             ):
                 if pre_start:
@@ -436,10 +452,26 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
         def set_window(self, window):
             assert window is fake_window
 
-    monkeypatch.setattr(webview_main, "WebViewBridge", _FakeBridge)
+    ui_components = webview_main._load_ui_components()
+    ui_components.FDWorkWindowController = (
+        lambda *_args, **_kwargs: fake_fd_work_controller
+    )
+    ui_components.WebViewBridge = _FakeBridge
+    monkeypatch.setattr(
+        webview_main,
+        "_load_ui_components",
+        lambda: ui_components,
+    )
 
     class _FakeTray:
+        def __init__(self, **kwargs):
+            self.on_open = kwargs["on_open"]
+            self.on_exit = kwargs["on_exit"]
+            self.on_session_end = kwargs["on_session_end"]
+            self.started = threading.Event()
+
         def start(self):
+            self.started.set()
             return True
 
         def stop(self):
@@ -448,11 +480,22 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
         def show_background_notice(self):
             return None
 
-    monkeypatch.setattr(
-        webview_main,
-        "WindowsTrayHost",
-        lambda **_kwargs: _FakeTray(),
+        def set_collection_active(self, _active):
+            return None
+
+    fake_tray = _FakeTray(
+        on_open=lambda: None,
+        on_exit=lambda: None,
+        on_session_end=lambda: None,
     )
+
+    def build_tray(**kwargs):
+        fake_tray.on_open = kwargs["on_open"]
+        fake_tray.on_exit = kwargs["on_exit"]
+        fake_tray.on_session_end = kwargs["on_session_end"]
+        return fake_tray
+
+    monkeypatch.setattr(webview_main, "WindowsTrayHost", build_tray)
 
     class _FakeInstanceCoordinator:
         def __init__(self):
@@ -485,6 +528,29 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
         lambda: instance_coordinator,
     )
 
+    class _FakeUpdateShutdown:
+        def prepare(self):
+            order.append("prepare_update_shutdown")
+
+        def start_listener(self):
+            order.append("start_update_shutdown")
+
+        def bind_shutdown_handler(self, callback):
+            assert callable(callback)
+            order.append("bind_update_shutdown")
+
+        def stop_listener(self):
+            order.append("stop_update_shutdown")
+
+        def close(self):
+            order.append("close_update_shutdown")
+
+    monkeypatch.setattr(
+        webview_main,
+        "get_application_update_shutdown_coordinator",
+        _FakeUpdateShutdown,
+    )
+
     return {
         "order": order,
         "gate_calls": gate_calls,
@@ -499,6 +565,7 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
         "evaluate_js_calls": evaluate_js_calls,
         "instance_coordinator": instance_coordinator,
         "webview": _FakeWebview,
+        "tray": fake_tray,
     }
 
 
@@ -550,10 +617,9 @@ def test_prestart_fd_work_status_does_not_evaluate_main_window_js(
     }
     assert webview_main.main() == 0
 
-    assert mocks["evaluate_js_calls"]
-    assert mocks["order"].index("webview_start") < mocks["order"].index(
-        "evaluate_js"
-    )
+    prestart_order = mocks["order"][: mocks["order"].index("webview_start")]
+    assert "fd_work_prepare_window" in prestart_order
+    assert "evaluate_js" not in prestart_order
 
 
 def test_disabled_fd_work_does_not_prepare_auxiliary_window_before_start(
@@ -704,16 +770,27 @@ def test_activation_prepare_failure_cleans_runtime_without_initializing(
     assert mocks["shutdown_calls"]["count"] == 1
 
 
-def test_background_start_hides_only_when_privacy_and_recovery_are_ready(
+def test_background_start_creates_no_window_until_first_open(
     monkeypatch,
     tmp_path,
 ):
     mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
     import worktrace.webview_main as webview_main
 
-    assert webview_main.main(background=True) == 0
-    assert mocks["create_window_kwargs"]["hidden"] is True
-    assert mocks["create_window_kwargs"]["focus"] is False
+    result = []
+    thread = threading.Thread(
+        target=lambda: result.append(webview_main.main(background=True)),
+        daemon=True,
+    )
+    thread.start()
+    assert mocks["tray"].started.wait(2.0)
+    assert mocks["create_window_kwargs"] == {}
+
+    mocks["tray"].on_open()
+    thread.join(5.0)
+    assert result == [0]
+    assert mocks["create_window_kwargs"]["hidden"] is False
+    assert mocks["create_window_kwargs"]["focus"] is True
 
 
 def test_background_start_forces_visible_window_when_privacy_is_unaccepted(

@@ -9,15 +9,20 @@ notes are subordinate to this document and to
 
 ```text
 worktrace.webview_main
-  -> DesktopShellController / WindowsTrayHost
   -> AppRuntime
   -> ApplicationServices
-  -> WebViewBridge
+  -> authorized background: DeferredUIGate / WindowsTrayHost
+  -> first open or foreground: DesktopShellController / WebViewBridge
   -> explicit bridge-facing APIs and services
 ```
 
 `webview_main` resolves paths, configures logging, creates `AppRuntime`, builds
-`ApplicationServices`, exposes the bridge and guarantees runtime shutdown.
+`ApplicationServices` exactly once, exposes the bridge when a UI exists and
+guarantees runtime shutdown. An authorized, recovery-safe `--background` start
+starts the runtime before any WebView check/import/window creation, then lets the
+main thread wait on `DeferredUIGate`. Tray Open and named activation coalesce into
+one initial UI bootstrap; update/session/tray Exit also wakes a windowless process.
+The first UI reuses the same runtime and services object identities.
 `ApplicationServices` is a lightweight explicit composition object, not a DI
 framework. Production code must not add a global container, module-level runtime
 locator, `get_runtime()`/`set_runtime()`, string service lookup or dynamic
@@ -37,6 +42,7 @@ state or database facts.
 
 | Responsibility | Sole owner |
 | --- | --- |
+| Pre-window open/exit coalescing and initial UI claim | `DeferredUIGate` |
 | Window/tray visible-hidden-exiting state | `DesktopShellController` |
 | Notification-area icon lifetime | `WindowsTrayHost` |
 | Current-user login registration | `WindowsStartupRegistration` / HKCU Run |
@@ -59,6 +65,7 @@ state or database facts.
 | External project identity use-case boundary | `ProjectIdentityIntegrationCapability` |
 | Post-commit external-state invalidation | `ApplicationDataLifecycle` fixed participant tuple |
 | FD Work plugin/privacy/token/binding policy | `FDWorkIntegrationService` |
+| Pre-UI FD Work late binding | `DeferredFDWorkInteractionCoordinator` |
 | FD Work interaction owner and operation lifetime | `FDWorkInteractionCoordinator` |
 | FD Work helper lifetime/page phase/window mutations | `FDWorkWindowController` |
 | FD Work URL/selectors/picker/fill DOM contract | `FDWorkPageAdapter` / adapter v5 |
@@ -78,12 +85,15 @@ tracked by name in `WorkerHandle` mappings. Production code must not reintroduce
 `_index_thread`, `_history_thread`, `_inference_thread` or similar parallel
 members.
 
-The desktop shell is outside `AppRuntime`. A close request may become a hide
-transition only while the tray icon is available. Tray Open and named-Event
-activation call the idempotent shell show command. Tray Exit sets EXITING,
-removes the icon and destroys the WebView window; the existing composition-root
-`finally` remains the only caller of `AppRuntime.shutdown()`. The tray thread
-never calls Runtime, database or Collector APIs.
+The desktop shell is outside `AppRuntime`. Before the first background UI,
+`DeferredUIGate` owns only open/exit request state; tray and activation callbacks
+never construct UI themselves, so `webview.start()` remains on the main thread.
+After binding, a close request may become a hide transition only while the tray
+icon is available, and subsequent Open/activation calls use the idempotent shell
+show command. Tray Exit either wakes the headless wait or sets EXITING, removes
+the icon and destroys the WebView window. The composition-root `finally` remains
+the only caller of `AppRuntime.shutdown()`. The tray thread never calls Runtime,
+database or Collector APIs.
 
 A worker is READY only after the worker itself has completed required
 initialization, schema/database access and recovery/validation and reports ready

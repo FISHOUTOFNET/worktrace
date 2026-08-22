@@ -73,3 +73,28 @@ def test_helper_bridge_binds_only_the_page_adapter_action_result_sink():
     )
 
     assert "action_result_sink=fd_work_page_adapter" in webview_main
+
+
+def test_deferred_ui_modules_remain_statically_discoverable_for_packaging():
+    webview_main = (ROOT / "worktrace" / "webview_main.py").read_text(
+        encoding="utf-8"
+    )
+    loader_start = webview_main.index("def _load_ui_components()")
+    loader_end = webview_main.index("def _prepare_webview", loader_start)
+    loader = webview_main[loader_start:loader_end]
+
+    for module in (
+        ".desktop.shell",
+        ".desktop.windows_icons",
+        ".desktop.windows_webview_power",
+        ".integrations.fd_work.helper_bridge",
+        ".integrations.fd_work.interaction_coordinator",
+        ".integrations.fd_work.main_window_sink",
+        ".integrations.fd_work.page_adapter",
+        ".integrations.fd_work.window_controller",
+        ".webview_ui.bridge",
+    ):
+        assert f"from {module} import" in loader
+    assert "collect_all('webview')" in (ROOT / "WorkTrace.spec").read_text(
+        encoding="utf-8"
+    )

@@ -230,9 +230,12 @@ def test_application_consumes_privacy_intent_only_for_normal_startup() -> None:
 
 def test_composition_root_consumes_intent_before_authorized_startup() -> None:
     source = (ROOT / "worktrace" / "webview_main.py").read_text(encoding="utf-8")
-    build_index = source.index("services = build_application_services(")
-    consume_index = source.index("consume_fd_work_install_intent(services.fd_work)")
-    startup_index = source.index("app_control.start_if_authorized(pre_start=True)")
+    main_source = source[source.index("def main(*, background: bool = False)") :]
+    build_index = main_source.index("services = build_application_services(")
+    consume_index = main_source.index(
+        "consume_fd_work_install_intent(services.fd_work)"
+    )
+    startup_index = main_source.index("_prepare_post_privacy_startup(")
 
     assert build_index < consume_index < startup_index
 

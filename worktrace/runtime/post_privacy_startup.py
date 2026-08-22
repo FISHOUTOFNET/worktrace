@@ -18,8 +18,9 @@ class PostPrivacyStartupCoordinator:
     """Own the privacy-gated startup sequence without blocking first-window startup.
 
     Participant pre-start preparation may need to happen before ``webview.start``
-    (FD Work uses this to reserve its hidden helper window), while collector and
-    worker readiness are not prerequisites for showing the main application shell.
+    once a UI exists, while collector and worker readiness are not prerequisites
+    for showing the main application shell. Background startup may instead use a
+    deferred participant that performs no renderer work until the first UI request.
     These two phases are therefore explicit and independently idempotent.
     """
 
