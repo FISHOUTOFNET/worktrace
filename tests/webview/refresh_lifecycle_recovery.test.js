@@ -100,6 +100,13 @@ function harness() {
     "utf8"
   );
   vm.runInNewContext(source, context, { filename: "init_fd_work_v5.js" });
+  app.rules = Object.assign({}, app.rules, {
+    onRefreshRequested() {
+      return typeof app.loadProjectRules === "function"
+        ? app.loadProjectRules()
+        : Promise.resolve(null);
+    },
+  });
   return { app, timers };
 }
 

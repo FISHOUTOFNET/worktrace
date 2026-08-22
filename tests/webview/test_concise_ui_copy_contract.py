@@ -93,7 +93,8 @@ def test_fd_work_status_owner_notifies_host_instead_of_pages() -> None:
 
     composition = read_js("ui_composition.js")
     assert "App.fdWork.bindStatusHost" in composition
-    assert "App.renderFDWorkToggle" in composition
+    assert "App.settings.onFDWorkStatusChanged" in composition
+    assert "App.renderFDWorkToggle" not in composition
     assert "App.updateFDWorkEntryButton" in composition
     assert "App.projectIdentity.syncStatus" in composition
 

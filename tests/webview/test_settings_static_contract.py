@@ -232,7 +232,9 @@ def test_settings_operation_state_has_one_cross_operation_guard() -> None:
 def test_settings_loading_and_clipboard_controls_have_separate_semantics() -> None:
     source = _settings_source()
     load_body = func_body(source, "loadSettingsPrivacyStatus")
-    assert "App.settingsLoading" in load_body
+    assert "var showLoading" in load_body
+    assert "if (showLoading) setSettingsLoading(true)" in load_body
+    assert "App.settingsLoadPromise" in load_body
     assert "App.settingsRequestToken" in load_body
     assert "App.bridge.getSettingsPrivacyStatus()" in load_body
     assert "renderSettingsStatus" in load_body
