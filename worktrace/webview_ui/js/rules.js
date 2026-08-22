@@ -170,7 +170,9 @@
             return Promise.resolve(null);
         }
         App.rulesRefreshPending = true;
-        if (change.source !== "refresh-state" || App.currentPage !== "rules") {
+        if (change.source !== "refresh-state"
+            || App.currentPage !== "rules"
+            || change.classificationChanged !== true) {
             return Promise.resolve(null);
         }
         return refreshProjectRulesSilently();
