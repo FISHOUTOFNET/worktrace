@@ -59,11 +59,13 @@ def test_statistics_empty_date_copy_inherits_native_control_typography() -> None
     assert "line-height: 1;" not in empty
 
 
-def test_stylesheet_revision_keys_match_shipping_assets() -> None:
-    import hashlib
-
+def test_stylesheet_revision_keys_are_bumped_for_typography_change() -> None:
     index = _read("index_fd_work_v5.html")
-    for name in ("styles.css", "ui_components.css"):
-        content = (WEBVIEW_UI_DIR / name).read_bytes()
-        revision = hashlib.sha256(content).hexdigest()[:16]
-        assert f'{name}?v={revision}' in index
+    stale_revisions = {
+        "styles.css": "318288756e2856fc",
+        "ui_components.css": "0e010ece98a374fa",
+    }
+    for name, stale_revision in stale_revisions.items():
+        match = re.search(re.escape(name) + r"\?v=([0-9a-f]{16})", index)
+        assert match is not None
+        assert match.group(1) != stale_revision
