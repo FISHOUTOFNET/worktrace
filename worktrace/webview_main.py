@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import sys
 import threading
+import time
 from hashlib import sha256
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
@@ -135,7 +136,7 @@ def _report_startup_failure(message: str, *, background: bool) -> int:
     return 2
 
 
-def _background_start_allowed(services, startup_result: dict[str, Any]) -> bool:
+def _background_start_allowed(services, prestart_result: dict[str, Any]) -> bool:
     try:
         notice_result = services.settings.get_first_run_notice_for_webview()
         notice = notice_result.get("notice") if notice_result.get("ok") else None
@@ -149,7 +150,11 @@ def _background_start_allowed(services, startup_result: dict[str, Any]) -> bool:
             return False
         if status.get("maintenance_restored") is False:
             return False
-        return startup_result.get("ok") is True
+        authorized = prestart_result.get(
+            "authorized",
+            prestart_result.get("ok"),
+        )
+        return authorized is True
     except Exception:
         logging.exception("background startup eligibility check failed")
         return False
@@ -170,6 +175,7 @@ _RENDERER_UNAVAILABLE_MESSAGE = (
 
 
 def main(*, background: bool = False) -> int:
+    startup_started_at = time.monotonic()
     paths = config.resolve_paths()
     config.ensure_directories(paths)
     setup_logging(paths.log_path)
@@ -213,6 +219,10 @@ def main(*, background: bool = False) -> int:
                 f"{PRODUCT_NAME} 初始化失败，请打开应用处理后重试。",
                 background=background,
             )
+        logging.info(
+            "startup stage=runtime_initialized elapsed_ms=%s",
+            int((time.monotonic() - startup_started_at) * 1000),
+        )
         if initialized is False:
             return _report_already_running(instance_coordinator)
         try:
@@ -254,27 +264,45 @@ def main(*, background: bool = False) -> int:
         services.fd_work.bind_picker_result_callback(fd_work_main_sink.picker_result)
         if consume_fd_work_install_intent(services.fd_work):
             logging.info("FD Work enabled from installer bootstrap")
+        logging.info(
+            "startup stage=services_ready elapsed_ms=%s",
+            int((time.monotonic() - startup_started_at) * 1000),
+        )
+
         app_control = services.app_control
-        startup_result: dict[str, Any] = {"ok": False}
+        prestart_result: dict[str, Any] = {
+            "ok": False,
+            "authorized": False,
+        }
+        prepare_before_webview_start = getattr(
+            app_control,
+            "prepare_before_webview_start",
+            None,
+        )
+        deferred_runtime_start = callable(prepare_before_webview_start)
         try:
-            startup_result = app_control.start_if_authorized(pre_start=True)
-            if not startup_result.get("ok"):
-                logging.error(
-                    "collector startup rejected error=%s",
-                    startup_result.get("error", "unknown"),
-                )
-            elif startup_result.get("degraded"):
-                logging.warning("collector started with background worker degradation")
+            if deferred_runtime_start:
+                prestart_result = dict(prepare_before_webview_start())
+            else:
+                # Compatibility path for tests or injected legacy capabilities.
+                # Shipping PostPrivacyStartupCoordinator always exposes the split
+                # pre-start method, so collector/worker readiness is not awaited
+                # on the first-window critical path.
+                prestart_result = dict(app_control.start_if_authorized(pre_start=True))
         except Exception:
-            logging.exception(
-                "webview startup: authorized startup failed; user can retry"
-            )
+            logging.exception("webview startup: pre-start preparation failed")
+        logging.info(
+            "startup stage=prestart_ready elapsed_ms=%s authorized=%s deferred_runtime=%s",
+            int((time.monotonic() - startup_started_at) * 1000),
+            bool(prestart_result.get("authorized", prestart_result.get("ok"))),
+            deferred_runtime_start,
+        )
 
         bridge = WebViewBridge(services)
         index_path = resource_path("index_fd_work_v5.html")
         initial_hidden = background and _background_start_allowed(
             services,
-            startup_result,
+            prestart_result,
         )
         try:
             window = webview.create_window(
@@ -286,6 +314,11 @@ def main(*, background: bool = False) -> int:
                 min_size=(800, 540),
                 hidden=initial_hidden,
                 focus=not initial_hidden,
+            )
+            logging.info(
+                "startup stage=main_window_created elapsed_ms=%s hidden=%s",
+                int((time.monotonic() - startup_started_at) * 1000),
+                initial_hidden,
             )
             bridge.set_window(window)
             fd_work_main_sink.bind_window(window)
@@ -340,7 +373,11 @@ def main(*, background: bool = False) -> int:
                     if renderer in {"edgechromium", "cef", "qt", "gtk", "mshtml"}
                     else "unknown"
                 )
-                logging.info("webview renderer initialized renderer=%s", safe_renderer)
+                logging.info(
+                    "startup stage=renderer_initialized elapsed_ms=%s renderer=%s",
+                    int((time.monotonic() - startup_started_at) * 1000),
+                    safe_renderer,
+                )
                 if sys.platform.startswith("win") and renderer != "edgechromium":
                     fd_work_controller.mark_renderer_unavailable()
                     _show_blocking_startup_message(_RENDERER_UNAVAILABLE_MESSAGE)
@@ -348,6 +385,40 @@ def main(*, background: bool = False) -> int:
                 fd_work_main_sink.mark_ready()
                 fd_work_controller.on_renderer_initialized(safe_renderer)
                 fd_work_main_sink.status_changed(services.fd_work.get_settings_status())
+
+                if not deferred_runtime_start:
+                    return
+                runtime_start_started_at = time.monotonic()
+                try:
+                    startup_result = dict(
+                        app_control.start_if_authorized(pre_start=False)
+                    )
+                    logging.info(
+                        "startup stage=runtime_ready elapsed_ms=%s runtime_elapsed_ms=%s ok=%s degraded=%s",
+                        int((time.monotonic() - startup_started_at) * 1000),
+                        int((time.monotonic() - runtime_start_started_at) * 1000),
+                        bool(startup_result.get("ok")),
+                        bool(startup_result.get("degraded")),
+                    )
+                    if not startup_result.get("ok"):
+                        logging.error(
+                            "collector startup rejected error=%s",
+                            startup_result.get("error")
+                            or startup_result.get("error_code")
+                            or "unknown",
+                        )
+                        if background:
+                            shell.show_window()
+                    elif startup_result.get("degraded"):
+                        logging.warning(
+                            "collector started with background worker degradation"
+                        )
+                except Exception:
+                    logging.exception(
+                        "webview startup: authorized runtime startup failed; user can retry"
+                    )
+                    if background:
+                        shell.show_window()
 
             webview.start(
                 func=handle_webview_initialized,
