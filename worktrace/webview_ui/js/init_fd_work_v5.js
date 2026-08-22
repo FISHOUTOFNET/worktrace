@@ -728,9 +728,10 @@
                 )
                 : Promise.resolve();
         },
-        rules: function () {
-            return typeof App.loadProjectRules === "function"
-                ? App.loadProjectRules()
+        rules: function (_acceptedState, options) {
+            var capability = pageCapability("rules");
+            return capability && typeof capability.onRefreshRequested === "function"
+                ? capability.onRefreshRequested(options || {})
                 : Promise.resolve();
         },
         settings: function () {

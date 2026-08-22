@@ -160,6 +160,33 @@
     };
     App.clearRulesError = function () { App.showRulesError(""); };
 
+    function refreshProjectRulesSilently() {
+        return loadProjectRules({ showLoading: false });
+    }
+
+    function onRulesDataChanged(change) {
+        change = change || {};
+        if (change.structureChanged !== true && change.classificationChanged !== true) {
+            return Promise.resolve(null);
+        }
+        App.rulesRefreshPending = true;
+        if (change.source !== "refresh-state" || App.currentPage !== "rules") {
+            return Promise.resolve(null);
+        }
+        return refreshProjectRulesSilently();
+    }
+
+    function onRulesPageEntered() {
+        if (!App.rulesLoaded) return loadProjectRules({ showLoading: true });
+        if (App.rulesRefreshPending !== true) return Promise.resolve(null);
+        return refreshProjectRulesSilently();
+    }
+
+    function onRulesRefreshRequested() {
+        if (!App.rulesLoaded) return loadProjectRules({ showLoading: true });
+        return refreshProjectRulesSilently();
+    }
+
     function resetRulesGeneration() {
         App.rulesLoaded = false;
         App.rulesRefreshPending = false;
@@ -170,5 +197,10 @@
             App.resetRulesTransientUi({ restoreFocus: false });
         }
     }
-    App.rules = Object.freeze({ resetGeneration: resetRulesGeneration });
+    App.rules = Object.freeze({
+        onDataChanged: onRulesDataChanged,
+        onPageEntered: onRulesPageEntered,
+        onRefreshRequested: onRulesRefreshRequested,
+        resetGeneration: resetRulesGeneration
+    });
 })();

@@ -188,37 +188,6 @@
     }
     App.applyStatisticsLocalTicker = applyStatisticsLocalTicker;
 
-    function backgroundRulesRefresh() {
-        if (!App.bridge || typeof App.bridge.getProjectRules !== "function") return Promise.resolve(null);
-        if (App.rulesLoading) return App.rulesLoadPromise || Promise.resolve(null);
-        if (App.rulesBackgroundRefreshPromise) return App.rulesBackgroundRefreshPromise;
-        var token = App.requestCoordinator.beginLatest("rules", "background");
-        var request = App.bridge.getProjectRules().then(function (result) {
-            if (!App.requestCoordinator.isCurrent(token)) return null;
-            var data = App.handleResult(result, function (message) {
-                if (typeof App.showRulesError === "function") App.showRulesError(message);
-            });
-            if (!data) return null;
-            if (typeof App.showProjectRules === "function") App.showProjectRules(data);
-            App.rulesLoaded = true;
-            App.rulesRefreshPending = false;
-            if (typeof App.clearRulesError === "function") App.clearRulesError();
-            return data;
-        }).catch(function () {
-            if (App.requestCoordinator.isCurrent(token) && typeof App.showRulesError === "function") {
-                App.showRulesError("加载项目规则失败");
-            }
-            return null;
-        }).finally(function () {
-            if (App.rulesBackgroundRefreshPromise === request) {
-                App.rulesBackgroundRefreshPromise = null;
-            }
-        });
-        App.rulesBackgroundRefreshPromise = request;
-        return request;
-    }
-    App.backgroundRulesRefresh = backgroundRulesRefresh;
-
     function backgroundSettingsRefresh() {
         if (!App.bridge || typeof App.bridge.getSettingsPrivacyStatus !== "function") {
             return Promise.resolve(null);
@@ -260,9 +229,8 @@
 
     function refreshComposedPage(page) {
         page = String(page || App.currentPage || "");
-        if (page === "rules" && typeof App.loadProjectRules === "function") {
-            if (!App.rulesLoaded) return App.loadProjectRules();
-            return backgroundRulesRefresh();
+        if (page === "rules" && App.rules && typeof App.rules.onPageEntered === "function") {
+            return App.rules.onPageEntered();
         }
         if (page === "settings" && typeof App.loadSettingsPrivacyStatus === "function") {
             if (App.settingsLoading) return App.settingsLoadPromise || Promise.resolve(null);
@@ -337,7 +305,13 @@
 
         // Project-rule presentation includes activity-backed last_used_at, so it
         // depends on report structure as well as on the classification catalog.
-        if (rulesDataChanged) App.rulesRefreshPending = true;
+        if (rulesDataChanged && App.rules && typeof App.rules.onDataChanged === "function") {
+            App.rules.onDataChanged({
+                source: source,
+                structureChanged: structureChanged,
+                classificationChanged: classificationChanged
+            });
+        }
         if (settingsChanged) App.settingsRefreshPending = true;
 
         // A page payload is itself the authoritative refresh for the active page.
@@ -363,8 +337,6 @@
             && typeof App._timelineEditingActive === "function"
             && App._timelineEditingActive()) {
             App.timelineStructuralRefreshPending = true;
-        } else if (page === "rules" && rulesDataChanged) {
-            refreshComposedPage("rules");
         } else if (page === "settings" && settingsChanged) {
             refreshComposedPage("settings");
         }
@@ -401,7 +373,7 @@
     if (typeof baseRefreshAll === "function") {
         App.refreshAll = function () {
             var page = String(App.currentPage || "");
-            if (page === "rules" || page === "settings") {
+            if (page === "settings") {
                 return refreshComposedPage(page);
             }
             // A user-initiated refresh must never inherit a one-shot suppression
@@ -443,8 +415,9 @@
         var navPage = event && event.type === "click" ? navPageFromTarget(event.target) : "";
         window.setTimeout(function () {
             if (navPage && App.currentPage === navPage) {
-                if (navPage === "rules" && App.rulesRefreshPending === true) {
-                    refreshComposedPage("rules");
+                if (navPage === "rules" && App.rules
+                    && typeof App.rules.onPageEntered === "function") {
+                    App.rules.onPageEntered();
                 } else if (navPage === "settings") {
                     refreshComposedPage("settings");
                 }

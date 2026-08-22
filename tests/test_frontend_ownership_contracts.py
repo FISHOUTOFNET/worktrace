@@ -95,7 +95,9 @@ def test_active_page_registry_keeps_fetches_at_one_dispatch_boundary():
     assert "refreshOverview()" in registry
     assert "App.loadTimelineReport(" in registry
     assert "App.loadStatisticsExportSummary(" in registry
-    assert "App.loadProjectRules()" in registry
+    assert 'pageCapability("rules")' in registry
+    assert "capability.onRefreshRequested(options || {})" in registry
+    assert "App.loadProjectRules()" not in registry
     assert "App.loadSettingsPrivacyStatus()" in registry
 
 
