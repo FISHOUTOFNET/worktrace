@@ -80,6 +80,7 @@
     var AUTOMATIC_PAGE_REFRESH_RETRY_MS = 5000;
     var automaticPageRefreshTimer = null;
     var automaticPageRefreshKey = "";
+    var automaticPageRefreshDueAtEpochMs = 0;
     var PAGE_REFRESH_POLICIES = Object.freeze({
         overview: Object.freeze({
             entryGenerations: Object.freeze(["report_structure"]),
@@ -272,6 +273,7 @@
         }
         automaticPageRefreshTimer = null;
         automaticPageRefreshKey = "";
+        automaticPageRefreshDueAtEpochMs = 0;
     }
     App.clearScheduledAutomaticPageRefresh = clearScheduledAutomaticPageRefresh;
 
@@ -280,11 +282,20 @@
         var scopeKey = automaticRefreshScopeKey(page);
         var delay = nonNegativeInt(delayMs, AUTOMATIC_PAGE_REFRESH_DELAY_MS);
         if (delay <= 0) delay = AUTOMATIC_PAGE_REFRESH_DELAY_MS;
+        var requestedDueAtEpochMs = Date.now() + delay;
+        if (automaticPageRefreshTimer !== null
+            && automaticPageRefreshKey === scopeKey
+            && automaticPageRefreshDueAtEpochMs > 0
+            && automaticPageRefreshDueAtEpochMs <= requestedDueAtEpochMs) {
+            return;
+        }
         clearScheduledAutomaticPageRefresh();
         automaticPageRefreshKey = scopeKey;
+        automaticPageRefreshDueAtEpochMs = requestedDueAtEpochMs;
         automaticPageRefreshTimer = window.setTimeout(function () {
             automaticPageRefreshTimer = null;
             automaticPageRefreshKey = "";
+            automaticPageRefreshDueAtEpochMs = 0;
             if (App.currentPage !== page || automaticRefreshScopeKey(page) !== scopeKey) return;
             if (!pageNeedsRefresh(page) || !automaticRefreshAllowedForPage(page)) return;
             refreshCurrentPageData(null, {
@@ -604,6 +615,14 @@
         return runtime.liveClock || null;
     };
 
+    function handlePageLocalTickResult(page, result) {
+        if (!result || result.refreshRequired !== true) return;
+        if (App.currentPage !== page) return;
+        if (!pageNeedsRefresh(page)) markPageDirty(page);
+        if (!automaticRefreshAllowedForPage(page)) return;
+        scheduleAutomaticPageRefresh();
+    }
+
     App.applyLocalTicker = function () {
         var runtime = liveRuntimeStore.get();
         var tickerPage = App.currentPage || "overview";
@@ -634,8 +653,12 @@
         var capability = pageCapability(tickerPage);
         if (capability && typeof capability.applyLocalTick === "function") {
             var pageTick = capability.applyLocalTick();
-            if (pageTick && typeof pageTick.catch === "function") {
-                pageTick.catch(function () {});
+            if (pageTick && typeof pageTick.then === "function") {
+                pageTick.then(function (result) {
+                    handlePageLocalTickResult(tickerPage, result);
+                }).catch(function () {});
+            } else {
+                handlePageLocalTickResult(tickerPage, pageTick);
             }
         }
     };
