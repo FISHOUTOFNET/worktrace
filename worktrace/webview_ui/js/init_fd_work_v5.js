@@ -631,6 +631,13 @@
             }
             App.renderLiveDurationTarget(target, clock, Date.now());
         }
+        var capability = pageCapability(tickerPage);
+        if (capability && typeof capability.applyLocalTick === "function") {
+            var pageTick = capability.applyLocalTick();
+            if (pageTick && typeof pageTick.catch === "function") {
+                pageTick.catch(function () {});
+            }
+        }
     };
 
     function invalidateProjectCatalog() {

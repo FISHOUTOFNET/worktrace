@@ -17,12 +17,17 @@ function harness() {
   let runtime = null;
   let baseRefreshCalls = 0;
   const document = {
+    activeElement: null,
     addEventListener(name, handler) { listeners[name] = handler; },
     getElementById() { return null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
   };
   const window = {
     document,
     setTimeout,
+    clearTimeout,
+    addEventListener() {},
     WorkTraceApp: {
       formatDuration,
       applyLocalTicker() {},
@@ -54,6 +59,13 @@ function harness() {
     clearTimeout,
   };
   vm.createContext(context);
+  ["rules.js", "settings.js", "timeline.js", "statistics.js"].forEach((name) => {
+    vm.runInContext(
+      fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", name), "utf8"),
+      context,
+      { filename: name }
+    );
+  });
   vm.runInContext(
     fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/ui_composition.js"), "utf8"),
     context,
@@ -136,7 +148,7 @@ test("statistics live math adds only post-sample delta and recomputes every shar
   assert.equal(base.by_file[0].duration_seconds, 80);
 });
 
-test("manual statistics refresh stays owned by the central coordinator", async () => {
+test("composition leaves manual refresh owned by the central coordinator", async () => {
   const { App, baseRefreshCalls } = harness();
   let rules = 0;
   let statistics = 0;
@@ -152,8 +164,8 @@ test("manual statistics refresh stays owned by the central coordinator", async (
   App.currentPage = "settings";
   await App.refreshAll();
 
-  assert.deepEqual([rules, statistics, settings], [1, 0, 1]);
-  assert.equal(baseRefreshCalls(), 1);
+  assert.deepEqual([rules, statistics, settings], [0, 0, 0]);
+  assert.equal(baseRefreshCalls(), 3);
 });
 
 test("loaded settings refresh in the background on every page entry", async () => {
@@ -193,12 +205,12 @@ test("timeline structural refresh is held while editing and drains when clean", 
   App.currentPage = "timeline";
   App.timelineStructuralRefreshPending = true;
   App._timelineEditingActive = () => editing;
-  App.refreshTimeline = () => { refreshes += 1; return Promise.resolve(); };
+  App.loadTimelineReport = () => { refreshes += 1; return Promise.resolve(); };
 
-  assert.equal(await App.drainTimelineStructuralRefresh(), false);
+  assert.equal(await App.timeline.applyLocalTick(), false);
   assert.equal(refreshes, 0);
   editing = false;
-  assert.equal(await App.drainTimelineStructuralRefresh(), true);
+  assert.equal(await App.timeline.applyLocalTick(), true);
   assert.equal(refreshes, 1);
   assert.equal(App.timelineStructuralRefreshPending, false);
 });
@@ -212,7 +224,7 @@ test("page payload structure changes invalidate project last-used presentation",
   App.acceptPagePayloadRuntime({ runtime: runtimeState("structure-2", 2) });
 
   assert.equal(App.rulesRefreshPending, true);
-  assert.equal(App.timelineStructuralRefreshPending, undefined);
+  assert.equal(App.timelineStructuralRefreshPending, false);
 });
 
 test("statistics report boundary freezes the old live target without issuing a second fetch", () => {

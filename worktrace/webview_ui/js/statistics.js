@@ -663,5 +663,12 @@
         setStatisticsLoading(false);
         setStatisticsExportStatus("", "");
     }
-    App.statistics = Object.freeze({ resetGeneration: resetStatisticsGeneration });
+    App.statistics = Object.freeze({
+        applyLocalTick: function () {
+            if (typeof App.applyStatisticsLocalTicker === "function") {
+                return App.applyStatisticsLocalTicker();
+            }
+        },
+        resetGeneration: resetStatisticsGeneration
+    });
 })();

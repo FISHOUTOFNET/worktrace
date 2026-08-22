@@ -272,18 +272,6 @@
     wrapRuntimeAcceptance("acceptRefreshStateRuntime", "refresh-state");
     wrapRuntimeAcceptance("acceptPagePayloadRuntime", "page-payload");
 
-    var baseApplyLocalTicker = App.applyLocalTicker;
-    if (typeof baseApplyLocalTicker === "function") {
-        App.applyLocalTicker = function () {
-            baseApplyLocalTicker.apply(App, arguments);
-            applyStatisticsLocalTicker();
-            if (App.currentPage === "timeline" && App.timeline
-                && typeof App.timeline.applyLocalTick === "function") {
-                App.timeline.applyLocalTick().catch(function () {});
-            }
-        };
-    }
-
     var baseShowStatus = App.showStatus;
     if (typeof baseShowStatus === "function") {
         App.showStatus = function (statusResult) {
