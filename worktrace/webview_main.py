@@ -17,6 +17,7 @@ from .desktop.shell import DesktopShellController
 from .desktop.update_shutdown import get_application_update_shutdown_coordinator
 from .desktop.windows_icons import WindowsWindowIconHost
 from .desktop.windows_tray import WindowsTrayHost
+from .desktop.windows_webview_power import WindowsWebView2PowerController
 from .integrations.fd_work.helper_bridge import FDWorkHelperBridge
 from .integrations.fd_work.interaction_coordinator import FDWorkInteractionCoordinator
 from .integrations.fd_work.main_window_sink import FDWorkMainWindowSink
@@ -349,11 +350,17 @@ def main(*, background: bool = False) -> int:
                 window_title=PRODUCT_DISPLAY_NAME,
                 icon_path=icon_path,
             )
+            webview_power = (
+                WindowsWebView2PowerController(window)
+                if sys.platform.startswith("win")
+                else None
+            )
             shell = DesktopShellController(
                 window=window,
                 tray=tray,
                 initial_hidden=initial_hidden,
                 window_icons=window_icons,
+                webview_power=webview_power,
                 collection_active_provider=lambda: app_control.is_collection_active(),
             )
             shell_holder["shell"] = shell
