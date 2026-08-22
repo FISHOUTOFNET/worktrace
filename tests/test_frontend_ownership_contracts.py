@@ -88,7 +88,7 @@ def test_active_page_registry_keeps_fetches_at_one_dispatch_boundary():
     registry = between(
         init,
         "    var ACTIVE_PAGE_REFRESHERS = Object.freeze({",
-        "    function refreshActivePage(acceptedState, options) {",
+        "    function refreshActivePage(acceptedState, options, expectedPage) {",
     )
     for page in ("overview", "timeline", "statistics", "rules", "settings"):
         assert f"{page}: function" in registry
