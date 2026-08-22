@@ -65,6 +65,33 @@ def test_unaccepted_privacy_never_authorizes_or_prepares_fd_work():
     assert fd_work.prepare_calls == []
 
 
+def test_pre_webview_phase_authorizes_without_preparing_participants():
+    app_control = _AppControl(True)
+    fd_work = _FDWork()
+    coordinator = PostPrivacyStartupCoordinator(
+        app_control, participants=(fd_work,), privacy_authorized_reader=lambda: True
+    )
+
+    prestart = coordinator.prepare_before_webview_start()
+
+    assert prestart == {
+        "ok": True,
+        "authorized": True,
+        "prepared": False,
+        "error": None,
+    }
+    assert app_control.calls == 0
+    assert fd_work.authorizations == [True]
+    assert fd_work.prepare_calls == []
+
+    started = coordinator.start_if_authorized(pre_start=False)
+
+    assert started["ok"] is True
+    assert app_control.calls == 1
+    assert fd_work.authorizations == [True, True]
+    assert fd_work.prepare_calls == [("runtime", False)]
+
+
 def test_authorized_start_is_idempotent_and_selects_prestart_or_runtime_path():
     app_control = _AppControl(True)
     fd_work = _FDWork()

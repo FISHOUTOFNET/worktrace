@@ -17,11 +17,11 @@ class PostPrivacyParticipant(Protocol):
 class PostPrivacyStartupCoordinator:
     """Own the privacy-gated startup sequence without blocking first-window startup.
 
-    Participant pre-start preparation may need to happen before ``webview.start``
-    once a UI exists, while collector and worker readiness are not prerequisites
-    for showing the main application shell. Background startup may instead use a
-    deferred participant that performs no renderer work until the first UI request.
-    These two phases are therefore explicit and independently idempotent.
+    The pre-WebView phase only propagates privacy authorization. Participant
+    preparation belongs to the runtime-start phase so renderer-backed plugins
+    cannot create auxiliary windows before the main application window. Headless
+    startup may still prepare participants through a deferred interaction that
+    owns no renderer until the first explicit UI request.
     """
 
     def __init__(
@@ -42,11 +42,11 @@ class PostPrivacyStartupCoordinator:
         self._result: dict[str, Any] | None = None
 
     def prepare_before_webview_start(self) -> dict[str, Any]:
-        """Prepare privacy-authorized participants without starting the runtime.
+        """Propagate privacy authorization without preparing participants.
 
-        This method is deliberately bounded to participant composition work.  It
-        never waits for collector or background-worker readiness, so callers may
-        safely invoke it on the main startup path before creating the WebView.
+        Renderer-backed participant preparation must never be a prerequisite for
+        creating the first application window. The subsequent runtime-start phase
+        remains the single idempotent owner of participant preparation.
         """
 
         with self._lock:
@@ -60,13 +60,10 @@ class PostPrivacyStartupCoordinator:
                     "error": "privacy_gate_required",
                 }
             self._set_participants_authorized(True)
-            if not self._prepared:
-                self._prepare_participants(pre_start=True)
-                self._prepared = True
             return {
                 "ok": True,
                 "authorized": True,
-                "prepared": True,
+                "prepared": self._prepared,
                 "error": None,
             }
 

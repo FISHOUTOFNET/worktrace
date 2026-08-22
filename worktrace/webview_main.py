@@ -157,12 +157,28 @@ def _background_start_allowed(services, prestart_result: dict[str, Any]) -> bool
         return False
 
 
-def _bind_shell_events(window, shell) -> None:
+def _bind_shell_events(
+    window,
+    shell,
+    *,
+    startup_started_at: float | None = None,
+) -> None:
     events = getattr(window, "events", None)
     if events is None:
         return
     events.closing += shell.handle_window_closing
-    events.loaded += shell.handle_window_loaded
+    if startup_started_at is None:
+        events.loaded += shell.handle_window_loaded
+        return
+
+    def handle_window_loaded() -> None:
+        logging.info(
+            "startup stage=main_window_loaded elapsed_ms=%s",
+            int((time.monotonic() - startup_started_at) * 1000),
+        )
+        shell.handle_window_loaded()
+
+    events.loaded += handle_window_loaded
 
 
 _RENDERER_UNAVAILABLE_MESSAGE = (
@@ -309,12 +325,9 @@ def _run_webview_ui(
         services.fd_work.bind_picker_result_callback(fd_work_main_sink.picker_result)
 
         if deferred_fd_work is not None:
+            # Binding is renderer-free. Any helper-window preparation must wait
+            # until webview.start has entered the GUI runtime.
             deferred_fd_work.bind(fd_work_coordinator)
-            # The privacy coordinator already completed its headless participant
-            # phase. Prepare only the newly-bound UI capability before start.
-            services.fd_work.prepare_window_before_start(
-                show_login_if_required=False
-            )
 
         icon_path = desktop_resource_path("worktrace.ico")
         window_icons = ui.WindowsWindowIconHost(
@@ -336,14 +349,17 @@ def _run_webview_ui(
         )
         shell_holder["shell"] = shell
         fd_work_controller.bind_main_focus_callback(shell.show_window)
-        _bind_shell_events(window, shell)
+        _bind_shell_events(
+            window,
+            shell,
+            startup_started_at=startup_started_at,
+        )
         if deferred_ui is not None:
             deferred_ui.bind_shell(shell)
         else:
             instance_coordinator.bind_activation_handler(shell.show_window)
             if update_shutdown_prepared:
                 update_shutdown.bind_shutdown_handler(exit_application)
-        shell.start()
         webview_profile_path = paths.base_dir / "webview-profile"
         webview_profile_path.mkdir(parents=True, exist_ok=True)
 
@@ -359,12 +375,38 @@ def _run_webview_ui(
                 int((time.monotonic() - startup_started_at) * 1000),
                 safe_renderer,
             )
+
+            # Tray readiness and icon projection are auxiliary shell work. Run
+            # them only after webview.start has entered the GUI runtime so a slow
+            # Explorer/pywin32 path cannot gate creation of the first window.
+            try:
+                tray_available = shell.start()
+            except Exception:
+                logging.exception("desktop shell startup failed")
+                tray_available = False
+            logging.info(
+                "startup stage=shell_ready elapsed_ms=%s tray=%s",
+                int((time.monotonic() - startup_started_at) * 1000),
+                tray_available,
+            )
+
             if sys.platform.startswith("win") and renderer != "edgechromium":
                 fd_work_controller.mark_renderer_unavailable()
                 _show_blocking_startup_message(_RENDERER_UNAVAILABLE_MESSAGE)
                 return
             fd_work_main_sink.mark_ready()
             fd_work_controller.on_renderer_initialized(safe_renderer)
+
+            # Headless startup may already have completed the privacy/runtime
+            # participant phase while the deferred interaction had no renderer.
+            # Once the real coordinator is bound, warm the helper only now.
+            if deferred_fd_work is not None and runtime_started_before_renderer:
+                try:
+                    services.fd_work.prepare_session(
+                        show_login_if_required=False
+                    )
+                except Exception:
+                    logging.exception("deferred FD Work renderer preparation failed")
             fd_work_main_sink.status_changed(services.fd_work.get_settings_status())
 
             if runtime_started_before_renderer or not deferred_runtime_start:
