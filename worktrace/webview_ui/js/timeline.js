@@ -3,6 +3,13 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
+    if (typeof App.timelineStructuralRefreshPending !== "boolean") {
+        App.timelineStructuralRefreshPending = false;
+    }
+    if (typeof App.suppressNextTimelineCollectionRefresh !== "boolean") {
+        App.suppressNextTimelineCollectionRefresh = false;
+    }
+
     function exactRowClock(row, semantic, reason) {
         var source = row && row.live_clock;
         if (source === null || source === undefined) return null;
@@ -2044,13 +2051,79 @@
         }
     }
     App.drainPendingContextChange = drainPendingContextChange;
-    App.refreshTimeline = function () {
+    function performTimelineRefresh(options) {
+        options = options || {};
         return App.loadTimelineReport(currentTimelineReportDate(), {
             showLoading: false,
             resetSelection: false,
-            errorMessage: "刷新失败"
+            errorMessage: "刷新失败",
+            rejectOnError: options.rejectOnError === true
         });
-    };
+    }
+
+    function timelineEditingActive() {
+        return typeof App._timelineEditingActive === "function"
+            && App._timelineEditingActive();
+    }
+
+    function drainTimelineStructuralRefresh() {
+        if (App.timelineStructuralRefreshPending !== true
+            || App.currentPage !== "timeline"
+            || timelineEditingActive()) {
+            return Promise.resolve(false);
+        }
+        App.timelineStructuralRefreshPending = false;
+        App.suppressNextTimelineCollectionRefresh = false;
+        return Promise.resolve(performTimelineRefresh({ rejectOnError: true })).then(function () {
+            return true;
+        }).catch(function (error) {
+            App.timelineStructuralRefreshPending = true;
+            throw error;
+        });
+    }
+
+    function refreshTimeline(options) {
+        options = options || {};
+        if (App.timelineStructuralRefreshPending === true && options.structuralDrain !== true) {
+            return drainTimelineStructuralRefresh();
+        }
+        if (options.forceCollectionRefresh !== true
+            && App.currentPage === "timeline"
+            && App.suppressNextTimelineCollectionRefresh === true) {
+            App.suppressNextTimelineCollectionRefresh = false;
+            return Promise.resolve(null);
+        }
+        App.suppressNextTimelineCollectionRefresh = false;
+        return performTimelineRefresh(options);
+    }
+    App.refreshTimeline = refreshTimeline;
+
+    function onTimelineRuntimeTransition(change) {
+        change = change || {};
+        if (change.source !== "refresh-state" || App.currentPage !== "timeline") {
+            return;
+        }
+        if (change.structureChanged === true) {
+            App.suppressNextTimelineCollectionRefresh = false;
+            if (timelineEditingActive()) App.timelineStructuralRefreshPending = true;
+            return;
+        }
+        if (change.liveChanged === true) App.suppressNextTimelineCollectionRefresh = true;
+    }
+
+    function onTimelineRefreshRequested(options) {
+        options = options || {};
+        if (options.automatic === true) return refreshTimeline();
+        App.suppressNextTimelineCollectionRefresh = false;
+        return refreshTimeline({ forceCollectionRefresh: true });
+    }
+
+    function applyTimelineLocalTick() {
+        if (App.currentPage !== "timeline" || App.timelineStructuralRefreshPending !== true) {
+            return Promise.resolve(false);
+        }
+        return drainTimelineStructuralRefresh();
+    }
     App.reloadTimelineAfterRuntimeRefresh = function (date) {
         return App.loadTimelineReport(date, {
             showLoading: true,
@@ -2122,10 +2195,17 @@
         App.lastSessionDetailsViewModel = null;
         App.lastSessionActivitySummaryViewModel = null;
         App.timelineRequestToken = (App.timelineRequestToken || 0) + 1;
+        App.timelineStructuralRefreshPending = false;
+        App.suppressNextTimelineCollectionRefresh = false;
         activeFDWorkFillTransaction = null;
         App.fdWorkOpenPromise = null;
         App.fdWorkStatusOverride = null;
         resetTimelineTransientUi();
     }
-    App.timeline = Object.freeze({ resetGeneration: resetTimelineGeneration });
+    App.timeline = Object.freeze({
+        applyLocalTick: applyTimelineLocalTick,
+        onRefreshRequested: onTimelineRefreshRequested,
+        onRuntimeTransition: onTimelineRuntimeTransition,
+        resetGeneration: resetTimelineGeneration
+    });
 })();

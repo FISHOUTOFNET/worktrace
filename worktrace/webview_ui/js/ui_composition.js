@@ -188,38 +188,6 @@
     }
     App.applyStatisticsLocalTicker = applyStatisticsLocalTicker;
 
-    function drainTimelineStructuralRefresh() {
-        if (!App.timelineStructuralRefreshPending || App.currentPage !== "timeline") {
-            return Promise.resolve(false);
-        }
-        if (typeof App._timelineEditingActive === "function" && App._timelineEditingActive()) {
-            return Promise.resolve(false);
-        }
-        if (typeof App.refreshTimeline !== "function") {
-            App.timelineStructuralRefreshPending = false;
-            return Promise.resolve(false);
-        }
-        App.timelineStructuralRefreshPending = false;
-        return Promise.resolve(App.refreshTimeline()).then(function () {
-            return true;
-        }).catch(function (error) {
-            App.timelineStructuralRefreshPending = true;
-            throw error;
-        });
-    }
-    App.drainTimelineStructuralRefresh = drainTimelineStructuralRefresh;
-
-    var baseRefreshTimeline = App.refreshTimeline;
-    if (typeof baseRefreshTimeline === "function") {
-        App.refreshTimeline = function () {
-            if (App.currentPage === "timeline" && App.suppressNextTimelineCollectionRefresh === true) {
-                App.suppressNextTimelineCollectionRefresh = false;
-                return Promise.resolve(null);
-            }
-            return baseRefreshTimeline.apply(App, arguments);
-        };
-    }
-
     var baseShowOverview = App.showOverview;
     if (typeof baseShowOverview === "function") {
         App.showOverview = function () {
@@ -271,9 +239,16 @@
         // reserved for heartbeat refresh-state transitions to avoid double fetches.
         if (source !== "refresh-state") return accepted;
 
-        if (page === "timeline") {
-            App.suppressNextTimelineCollectionRefresh = !structureChanged && liveChanged;
-        } else if (page === "overview") {
+        if (page === "timeline" && App.timeline
+            && typeof App.timeline.onRuntimeTransition === "function") {
+            App.timeline.onRuntimeTransition({
+                source: source,
+                structureChanged: structureChanged,
+                liveChanged: liveChanged
+            });
+        }
+
+        if (page === "overview") {
             App.suppressNextOverviewCollectionRefresh = !structureChanged && liveChanged;
         }
 
@@ -285,11 +260,6 @@
             App.suspendStatisticsLiveTicker();
         }
 
-        if (page === "timeline" && structureChanged
-            && typeof App._timelineEditingActive === "function"
-            && App._timelineEditingActive()) {
-            App.timelineStructuralRefreshPending = true;
-        }
         return accepted;
     }
 
@@ -313,8 +283,9 @@
         App.applyLocalTicker = function () {
             baseApplyLocalTicker.apply(App, arguments);
             applyStatisticsLocalTicker();
-            if (App.timelineStructuralRefreshPending) {
-                drainTimelineStructuralRefresh().catch(function () {});
+            if (App.currentPage === "timeline" && App.timeline
+                && typeof App.timeline.applyLocalTick === "function") {
+                App.timeline.applyLocalTick().catch(function () {});
             }
         };
     }
@@ -358,15 +329,10 @@
                     App.settings.onPageEntered();
                 }
             }
-            if (App.timelineStructuralRefreshPending) {
-                drainTimelineStructuralRefresh().catch(function () {});
-            }
         }, 0);
     }
     if (document && typeof document.addEventListener === "function") {
         document.addEventListener("click", afterUiInteraction);
-        document.addEventListener("change", afterUiInteraction);
-        document.addEventListener("focusout", afterUiInteraction);
     }
 
     if (App.fdWork && typeof App.fdWork.bindStatusHost === "function") {

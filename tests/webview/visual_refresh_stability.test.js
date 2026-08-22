@@ -52,8 +52,11 @@ function harness(initialRuntime) {
   const listeners = {};
   const elements = {};
   const document = {
+    activeElement: null,
     addEventListener(name, handler) { listeners[name] = handler; },
     getElementById(id) { return elements[id] || null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
   };
   let baseTimelineRefreshes = 0;
   let baseOverviewRenders = 0;
@@ -140,6 +143,8 @@ function harness(initialRuntime) {
   const window = {
     document,
     setTimeout,
+    clearTimeout,
+    addEventListener() {},
     WorkTraceApp: App,
   };
   const context = {
@@ -159,6 +164,17 @@ function harness(initialRuntime) {
     clearTimeout,
   };
   vm.createContext(context);
+  ["rules.js", "settings.js", "timeline.js"].forEach((name) => {
+    vm.runInContext(
+      fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", name), "utf8"),
+      context,
+      { filename: name }
+    );
+  });
+  App.loadTimelineReport = () => {
+    baseTimelineRefreshes += 1;
+    return Promise.resolve("timeline");
+  };
   vm.runInContext(
     fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/ui_composition.js"), "utf8"),
     context,

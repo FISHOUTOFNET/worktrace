@@ -714,7 +714,10 @@
                 refreshCurrentActivityFromState(acceptedState || App.lastRefreshState);
                 return Promise.resolve();
             }
-            return refreshTimeline();
+            var capability = pageCapability("timeline");
+            return capability && typeof capability.onRefreshRequested === "function"
+                ? capability.onRefreshRequested(options || {})
+                : refreshTimeline();
         },
         statistics: function (_acceptedState, options) {
             if (!pageHasLoadedData("statistics") && typeof App.initStatisticsDefaults === "function") {
