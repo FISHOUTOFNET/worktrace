@@ -26,7 +26,6 @@ RUNTIME_TOP_LEVEL_ALIASES = {
     "current_activity",
     "current_activity_display_span_id",
     "current_activity_elapsed_seconds",
-    "current_activity_revision",
     "current_resource_identity_hash",
     "display_span_id",
     "live_clock",
