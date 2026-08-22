@@ -71,13 +71,16 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
-exe = EXE(
+# Portable distribution remains a single executable for users who explicitly
+# need that form. The installed application is built from the same Analysis as
+# one-dir so normal launches do not pay the one-file extraction cost.
+portable_exe = EXE(
     pyz,
     a.scripts,
     a.binaries,
     a.datas,
     [],
-    name='Trace',
+    name='Trace-Portable',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -91,4 +94,34 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=str(brand_icon),
+)
+
+installed_exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name='Trace',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon=str(brand_icon),
+)
+
+installed_app = COLLECT(
+    installed_exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='Trace',
 )
