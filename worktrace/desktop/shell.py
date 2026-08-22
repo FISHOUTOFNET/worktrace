@@ -45,6 +45,11 @@ class WindowIconHost(Protocol):
     def stop(self) -> None: ...
 
 
+class WebViewPowerHost(Protocol):
+    def enter_hidden_mode(self) -> None: ...
+    def prepare_for_show(self) -> None: ...
+
+
 def _run_window_action_deferred(action: Callable[[], None]) -> None:
     threading.Thread(
         target=action,
@@ -66,12 +71,14 @@ class DesktopShellController:
             Callable[[Callable[[], None]], None] | None
         ) = None,
         window_icons: WindowIconHost | None = None,
+        webview_power: WebViewPowerHost | None = None,
         collection_active_provider: Callable[[], bool] | None = None,
         collection_icon_refresh_seconds: float = 1.0,
     ) -> None:
         self._window = window
         self._tray = tray
         self._window_icons = window_icons
+        self._webview_power = webview_power
         self._collection_active_provider = collection_active_provider
         self._collection_icon_refresh_seconds = max(
             0.25,
@@ -364,6 +371,7 @@ class DesktopShellController:
                 ):
                     return
             self._set_webview_visibility(False)
+            self._enter_webview_hidden_mode()
             if show_notice:
                 try:
                     self._tray.show_background_notice()
@@ -388,6 +396,7 @@ class DesktopShellController:
                 activation_requested = self._activation_requested
                 self._activation_requested = False
             self._make_window_activatable()
+            self._prepare_webview_for_show()
             try:
                 self._window.show()
             except Exception:
@@ -413,6 +422,7 @@ class DesktopShellController:
                 ):
                     return
             self._set_webview_visibility(False)
+            self._enter_webview_hidden_mode()
 
     def _set_webview_visibility(self, visible: bool) -> None:
         source = (
@@ -426,6 +436,24 @@ class DesktopShellController:
                 "desktop shell visibility notification deferred",
                 exc_info=True,
             )
+
+    def _enter_webview_hidden_mode(self) -> None:
+        power = self._webview_power
+        if power is None:
+            return
+        try:
+            power.enter_hidden_mode()
+        except Exception:
+            logger.debug("desktop shell WebView suspend failed", exc_info=True)
+
+    def _prepare_webview_for_show(self) -> None:
+        power = self._webview_power
+        if power is None:
+            return
+        try:
+            power.prepare_for_show()
+        except Exception:
+            logger.debug("desktop shell WebView resume failed", exc_info=True)
 
     def _make_window_activatable(self) -> None:
         make_window_activatable(
@@ -457,5 +485,6 @@ __all__ = [
     "DesktopShellController",
     "ShellState",
     "TrayHost",
+    "WebViewPowerHost",
     "WindowIconHost",
 ]
