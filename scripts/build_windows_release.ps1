@@ -75,7 +75,12 @@ $stagingRoot = Join-Path $repoRoot "build\release-staging"
 $stagingPath = Join-Path $stagingRoot ([guid]::NewGuid().ToString("N"))
 $stagingDistPath = Join-Path $stagingPath "dist"
 $stagingWorkPath = Join-Path $stagingPath "work"
-$stagedExePath = Join-Path $stagingDistPath "Trace.exe"
+$stagedPortableExePath = Join-Path $stagingDistPath "Trace-Portable.exe"
+$stagedInstalledDir = Join-Path $stagingDistPath "Trace"
+$stagedExePath = Join-Path $stagedInstalledDir "Trace.exe"
+# Legacy one-file staging shape was: Join-Path $stagingDistPath "Trace.exe".
+# The installed build now comes from the Trace\ directory while the portable
+# publication remains a single executable.
 
 New-Item -ItemType Directory -Force -Path $distPath | Out-Null
 
@@ -106,16 +111,21 @@ try {
         Pop-Location
     }
 
+    if (-not (Test-Path -LiteralPath $stagedPortableExePath)) {
+        throw "PyInstaller completed without generating the staged portable Trace executable"
+    }
     if (-not (Test-Path -LiteralPath $stagedExePath)) {
         throw "PyInstaller completed without generating the staged Trace.exe"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $stagedInstalledDir "_internal"))) {
+        throw "PyInstaller completed without generating the installed one-dir runtime"
     }
     if (-not (Test-Path -LiteralPath $brandIconPath)) {
         throw "PyInstaller completed without generating the canonical 有迹 icon."
     }
 
     # WorkTrace.spec is the sole producer of the canonical icon assets for a
-    # release build. Verify the executable before any downstream consumer uses
-    # that same ICO so stale or divergent icon resources cannot be published.
+    # release build. Verify both executable forms before downstream publication.
     & python `
         (Join-Path $repoRoot "scripts\verify_windows_exe_icon.py") `
         --exe $stagedExePath `
@@ -123,8 +133,17 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller generated Trace.exe without the canonical 有迹 icon."
     }
+    & python `
+        (Join-Path $repoRoot "scripts\verify_windows_exe_icon.py") `
+        --exe $stagedPortableExePath `
+        --ico $brandIconPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyInstaller generated the portable Trace executable without the canonical 有迹 icon."
+    }
 
-    Copy-Item -Force -LiteralPath $stagedExePath -Destination $portablePath
+    Copy-Item -Force -LiteralPath $stagedPortableExePath -Destination $portablePath
+    # Previous one-file-only flow used:
+    # Copy-Item -Force -LiteralPath $stagedExePath -Destination $portablePath
 
     $installerArgs = @{ ExePath = $stagedExePath; OutputPath = $setupPath }
     if ($ISCCPath) {
