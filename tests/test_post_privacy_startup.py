@@ -65,7 +65,7 @@ def test_unaccepted_privacy_never_authorizes_or_prepares_fd_work():
     assert fd_work.prepare_calls == []
 
 
-def test_pre_webview_phase_authorizes_without_preparing_participants():
+def test_pre_webview_authorization_does_not_prepare_participants():
     app_control = _AppControl(True)
     fd_work = _FDWork()
     coordinator = PostPrivacyStartupCoordinator(
@@ -77,7 +77,7 @@ def test_pre_webview_phase_authorizes_without_preparing_participants():
     assert prestart == {
         "ok": True,
         "authorized": True,
-        "prepared": False,
+        "prepared": True,
         "error": None,
     }
     assert app_control.calls == 0

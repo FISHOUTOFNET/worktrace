@@ -397,9 +397,9 @@ def _run_webview_ui(
             fd_work_main_sink.mark_ready()
             fd_work_controller.on_renderer_initialized(safe_renderer)
 
-            # Headless startup may already have completed the privacy/runtime
-            # participant phase while the deferred interaction had no renderer.
-            # Once the real coordinator is bound, warm the helper only now.
+            # Headless startup may already have completed participant preparation
+            # while the deferred interaction had no renderer. Once the real
+            # coordinator is bound, warm the helper only now.
             if deferred_fd_work is not None and runtime_started_before_renderer:
                 try:
                     services.fd_work.prepare_session(

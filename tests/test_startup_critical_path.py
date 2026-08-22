@@ -53,10 +53,10 @@ def test_pre_webview_prepare_never_starts_collector_or_workers():
     }
     assert app_control.start_calls == 0
     assert participant.authorizations == [True]
-    assert participant.prepare_calls == [True]
+    assert participant.prepare_calls == []
 
 
-def test_runtime_start_after_preparation_is_idempotent_and_does_not_reprepare():
+def test_runtime_start_after_authorization_prepares_once_and_is_idempotent():
     app_control = _AppControl()
     participant = _Participant()
     coordinator = PostPrivacyStartupCoordinator(
@@ -71,7 +71,7 @@ def test_runtime_start_after_preparation_is_idempotent_and_does_not_reprepare():
 
     assert first == second == {"ok": True, "degraded": False}
     assert app_control.start_calls == 1
-    assert participant.prepare_calls == [True]
+    assert participant.prepare_calls == [False]
 
 
 def test_unaccepted_privacy_preparation_remains_fail_closed_without_runtime_start():

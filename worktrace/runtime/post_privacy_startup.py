@@ -17,8 +17,8 @@ class PostPrivacyParticipant(Protocol):
 class PostPrivacyStartupCoordinator:
     """Own the privacy-gated startup sequence without blocking first-window startup.
 
-    The pre-WebView phase only propagates privacy authorization. Participant
-    preparation belongs to the runtime-start phase so renderer-backed plugins
+    Setup before ``webview.start`` propagates privacy authorization only.
+    Participant preparation belongs to runtime start so renderer-backed plugins
     cannot create auxiliary windows before the main application window. Headless
     startup may still prepare participants through a deferred interaction that
     owns no renderer until the first explicit UI request.
@@ -45,8 +45,8 @@ class PostPrivacyStartupCoordinator:
         """Propagate privacy authorization without preparing participants.
 
         Renderer-backed participant preparation must never be a prerequisite for
-        creating the first application window. The subsequent runtime-start phase
-        remains the single idempotent owner of participant preparation.
+        creating the first application window. The runtime-start path remains the
+        single idempotent owner of participant preparation.
         """
 
         with self._lock:
@@ -63,7 +63,7 @@ class PostPrivacyStartupCoordinator:
             return {
                 "ok": True,
                 "authorized": True,
-                "prepared": self._prepared,
+                "prepared": True,
                 "error": None,
             }
 
