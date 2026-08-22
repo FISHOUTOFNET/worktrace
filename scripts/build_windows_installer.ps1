@@ -22,13 +22,20 @@ if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
     throw "Invalid 有迹 application version '$version'; expected MAJOR.MINOR.PATCH."
 }
 
-if (-not $ExePath) { $ExePath = Join-Path $repoRoot "dist\Trace.exe" }
+if (-not $ExePath) {
+    $oneDirDefault = Join-Path $repoRoot "dist\Trace\Trace.exe"
+    # Compatibility for callers that still build the historical dist\Trace.exe.
+    $legacyDefault = Join-Path $repoRoot "dist\Trace.exe"
+    $ExePath = if (Test-Path -LiteralPath $oneDirDefault) { $oneDirDefault } else { $legacyDefault }
+}
 $useDefaultOutput = -not $OutputPath
 if ($useDefaultOutput) {
     $OutputPath = Join-Path $repoRoot "dist\Trace-Setup-$version.exe"
 }
 
 $exe = Resolve-Path -LiteralPath $ExePath
+$appSourceDir = Split-Path -Parent $exe
+$isOneDirSource = Test-Path -LiteralPath (Join-Path $appSourceDir "_internal")
 $installerSource = Resolve-Path -LiteralPath (Join-Path $repoRoot "installer\WorkTrace.iss")
 $target = [System.IO.Path]::GetFullPath($OutputPath)
 $distPath = Split-Path -Parent $target
@@ -110,7 +117,11 @@ if ($actualPreprocVersion -lt $minimumPreprocVersion) {
 Write-Host "Inno Setup compiler verified: PREPROCVER=$actualPreprocVersion (minimum $minimumInnoVersion, ISCC: $ISCCPath)"
 
 $name = [System.IO.Path]::GetFileNameWithoutExtension($target)
-& $ISCCPath "/Qp" "/DMyAppExe=$exe" "/DMyAppVersion=$version" "/DMyBrandIcon=$brandIcon" "/O$distPath" "/F$name" $installerSource
+if ($isOneDirSource) {
+    & $ISCCPath "/Qp" "/DMyAppExe=$exe" "/DMyAppSourceDir=$appSourceDir" "/DMyAppVersion=$version" "/DMyBrandIcon=$brandIcon" "/O$distPath" "/F$name" $installerSource
+} else {
+    & $ISCCPath "/Qp" "/DMyAppExe=$exe" "/DMyAppVersion=$version" "/DMyBrandIcon=$brandIcon" "/O$distPath" "/F$name" $installerSource
+}
 if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup compiler failed with exit code $LASTEXITCODE"
 }
