@@ -714,7 +714,7 @@
             }
             return refreshOverview();
         },
-        timeline: function (acceptedState) {
+        timeline: function (acceptedState, options) {
             if (!pageHasLoadedData("timeline")
                 && !pageIsLoading("timeline")
                 && typeof App.loadTimelineReport === "function") {
