@@ -65,6 +65,7 @@ function harness() {
 
   const App = context.window.WorkTraceApp;
   Object.assign(App, {
+    currentPage: "settings",
     settingsLoaded: false,
     settingsLoading: false,
     settingsRequestToken: 0,

@@ -98,7 +98,8 @@ def test_active_page_registry_keeps_fetches_at_one_dispatch_boundary():
     assert 'pageCapability("rules")' in registry
     assert "capability.onRefreshRequested(options || {})" in registry
     assert "App.loadProjectRules()" not in registry
-    assert "App.loadSettingsPrivacyStatus()" in registry
+    assert 'pageCapability("settings")' in registry
+    assert "App.loadSettingsPrivacyStatus()" not in registry
 
 
 def test_rules_read_does_not_invalidate_catalog_but_write_reload_does():

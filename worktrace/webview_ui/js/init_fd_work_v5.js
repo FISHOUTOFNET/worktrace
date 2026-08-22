@@ -734,9 +734,10 @@
                 ? capability.onRefreshRequested(options || {})
                 : Promise.resolve();
         },
-        settings: function () {
-            return typeof App.loadSettingsPrivacyStatus === "function"
-                ? App.loadSettingsPrivacyStatus()
+        settings: function (_acceptedState, options) {
+            var capability = pageCapability("settings");
+            return capability && typeof capability.onRefreshRequested === "function"
+                ? capability.onRefreshRequested(options || {})
                 : Promise.resolve();
         }
     });

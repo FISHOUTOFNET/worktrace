@@ -15,8 +15,8 @@
 
     function syncFDWorkConsumers(status) {
         clearSettledFDWorkAuthOverride(status || App.fdWorkStatus);
-        if (typeof App.renderFDWorkToggle === "function") {
-            App.renderFDWorkToggle(App.lastSettingsStatus || {});
+        if (App.settings && typeof App.settings.onFDWorkStatusChanged === "function") {
+            App.settings.onFDWorkStatusChanged(status || App.fdWorkStatus || null);
         }
         if (typeof App.updateFDWorkEntryButton === "function") {
             App.updateFDWorkEntryButton();
@@ -188,59 +188,6 @@
     }
     App.applyStatisticsLocalTicker = applyStatisticsLocalTicker;
 
-    function backgroundSettingsRefresh() {
-        if (!App.bridge || typeof App.bridge.getSettingsPrivacyStatus !== "function") {
-            return Promise.resolve(null);
-        }
-        if (App.settingsLoading) return App.settingsLoadPromise || Promise.resolve(null);
-        if (App.settingsBackgroundRefreshPromise) return App.settingsBackgroundRefreshPromise;
-        if (typeof App.anySettingsOperationInProgress === "function"
-            && App.anySettingsOperationInProgress()) {
-            App.settingsRefreshPending = true;
-            return Promise.resolve(null);
-        }
-        var token = ++App.settingsRequestToken;
-        var request = App.bridge.getSettingsPrivacyStatus().then(function (result) {
-            if (token !== App.settingsRequestToken) return null;
-            var data = App.handleResult(result, function (message) {
-                if (typeof App.showSettingsError === "function") App.showSettingsError(message);
-            });
-            if (!data || !data.status) return null;
-            App.settingsLoaded = true;
-            App.lastSettingsStatus = data.status;
-            if (typeof App.renderSettingsStatus === "function") App.renderSettingsStatus(data.status);
-            App.settingsRefreshPending = false;
-            if (typeof App.clearSettingsError === "function") App.clearSettingsError();
-            return data;
-        }).catch(function () {
-            if (token === App.settingsRequestToken && typeof App.showSettingsError === "function") {
-                App.showSettingsError("加载设置状态失败");
-            }
-            return null;
-        }).finally(function () {
-            if (App.settingsBackgroundRefreshPromise === request) {
-                App.settingsBackgroundRefreshPromise = null;
-            }
-        });
-        App.settingsBackgroundRefreshPromise = request;
-        return request;
-    }
-    App.backgroundSettingsRefresh = backgroundSettingsRefresh;
-
-    function refreshComposedPage(page) {
-        page = String(page || App.currentPage || "");
-        if (page === "rules" && App.rules && typeof App.rules.onPageEntered === "function") {
-            return App.rules.onPageEntered();
-        }
-        if (page === "settings" && typeof App.loadSettingsPrivacyStatus === "function") {
-            if (App.settingsLoading) return App.settingsLoadPromise || Promise.resolve(null);
-            if (!App.settingsLoaded) return App.loadSettingsPrivacyStatus();
-            return backgroundSettingsRefresh();
-        }
-        return Promise.resolve(null);
-    }
-    App.refreshComposedPage = refreshComposedPage;
-
     function drainTimelineStructuralRefresh() {
         if (!App.timelineStructuralRefreshPending || App.currentPage !== "timeline") {
             return Promise.resolve(false);
@@ -312,7 +259,12 @@
                 classificationChanged: classificationChanged
             });
         }
-        if (settingsChanged) App.settingsRefreshPending = true;
+        if (settingsChanged && App.settings && typeof App.settings.onDataChanged === "function") {
+            App.settings.onDataChanged({
+                source: source,
+                settingsChanged: true
+            });
+        }
 
         // A page payload is itself the authoritative refresh for the active page.
         // Cross-surface invalidation still applies, but current-page reconcile is
@@ -337,8 +289,6 @@
             && typeof App._timelineEditingActive === "function"
             && App._timelineEditingActive()) {
             App.timelineStructuralRefreshPending = true;
-        } else if (page === "settings" && settingsChanged) {
-            refreshComposedPage("settings");
         }
         return accepted;
     }
@@ -366,21 +316,6 @@
             if (App.timelineStructuralRefreshPending) {
                 drainTimelineStructuralRefresh().catch(function () {});
             }
-        };
-    }
-
-    var baseRefreshAll = App.refreshAll;
-    if (typeof baseRefreshAll === "function") {
-        App.refreshAll = function () {
-            var page = String(App.currentPage || "");
-            if (page === "settings") {
-                return refreshComposedPage(page);
-            }
-            // A user-initiated refresh must never inherit a one-shot suppression
-            // token from a preceding passive runtime transition.
-            if (page === "timeline") App.suppressNextTimelineCollectionRefresh = false;
-            if (page === "overview") App.suppressNextOverviewCollectionRefresh = false;
-            return baseRefreshAll.apply(App, arguments);
         };
     }
 
@@ -418,8 +353,9 @@
                 if (navPage === "rules" && App.rules
                     && typeof App.rules.onPageEntered === "function") {
                     App.rules.onPageEntered();
-                } else if (navPage === "settings") {
-                    refreshComposedPage("settings");
+                } else if (navPage === "settings" && App.settings
+                    && typeof App.settings.onPageEntered === "function") {
+                    App.settings.onPageEntered();
                 }
             }
             if (App.timelineStructuralRefreshPending) {

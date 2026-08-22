@@ -30,6 +30,22 @@
     App.showSettingsError = showSettingsError;
     App.clearSettingsError = function () { showSettingsError(""); };
 
+    if (typeof App.settingsRefreshPending !== "boolean") App.settingsRefreshPending = false;
+    if (!App.settingsLoadPromise) App.settingsLoadPromise = null;
+
+    function settingsRefreshBlocked() {
+        return !!(
+            App.settingsWriteInProgress
+            || App.launchAtLoginWriteInProgress
+            || App.fdWorkSettingsWriteInProgress
+            || App.settingsBackupExportInProgress
+            || App.settingsBackupManifestInProgress
+            || App.settingsBackupImportInProgress
+            || App.settingsClearAllInProgress
+            || App.recoveryInProgress
+        );
+    }
+
     function anySettingsOperationInProgress() {
         return !!(
             App.settingsLoading
@@ -471,7 +487,7 @@
             });
         }).then(function (ok) {
             App.recoveryInProgress = false;
-            setSettingsControlsDisabled(anySettingsOperationInProgress());
+            resumeSettingsAfterOperation();
             if (App.lastSettingsStatus) renderRecoveryCard(App.lastSettingsStatus);
             return ok;
         });
@@ -578,12 +594,19 @@
     }
     App.initSettingsCategories = initSettingsCategories;
 
-    function loadSettingsPrivacyStatus() {
-        if (App.settingsLoading) return Promise.resolve();
-        setSettingsLoading(true);
+    function loadSettingsPrivacyStatus(options) {
+        options = options || {};
+        var showLoading = options.showLoading === true
+            || (!App.settingsLoaded && options.showLoading !== false);
+        if (App.settingsLoadPromise) return App.settingsLoadPromise;
+        if (settingsRefreshBlocked()) {
+            App.settingsRefreshPending = true;
+            return Promise.resolve(null);
+        }
+        if (showLoading) setSettingsLoading(true);
         App.clearSettingsError();
         var token = ++App.settingsRequestToken;
-        return App.bridge.getSettingsPrivacyStatus().then(function (result) {
+        var request = App.bridge.getSettingsPrivacyStatus().then(function (result) {
             if (token !== App.settingsRequestToken) return;
             var data = App.handleResult(result, function (message) {
                 showSettingsError(message || ERROR_MESSAGE);
@@ -592,14 +615,60 @@
             App.settingsLoaded = true;
             App.lastSettingsStatus = data.status;
             renderSettingsStatus(data.status);
+            App.settingsRefreshPending = false;
             App.clearSettingsError();
         }).catch(function () {
             if (token === App.settingsRequestToken) showSettingsError(ERROR_MESSAGE);
-        }).then(function () {
-            if (token === App.settingsRequestToken) setSettingsLoading(false);
+        }).finally(function () {
+            if (App.settingsLoadPromise === request) App.settingsLoadPromise = null;
+            if (showLoading && token === App.settingsRequestToken) setSettingsLoading(false);
         });
+        App.settingsLoadPromise = request;
+        return request;
     }
     App.loadSettingsPrivacyStatus = loadSettingsPrivacyStatus;
+
+    function refreshSettingsSilently() {
+        return loadSettingsPrivacyStatus({ showLoading: false });
+    }
+
+    function drainSettingsRefresh() {
+        if (App.settingsRefreshPending !== true
+            || App.currentPage !== "settings"
+            || settingsRefreshBlocked()
+            || App.settingsLoading) {
+            return Promise.resolve(null);
+        }
+        return refreshSettingsSilently();
+    }
+
+    function onSettingsDataChanged(change) {
+        change = change || {};
+        if (change.settingsChanged !== true) return Promise.resolve(null);
+        App.settingsRefreshPending = true;
+        if (change.source !== "refresh-state" || App.currentPage !== "settings") {
+            return Promise.resolve(null);
+        }
+        return drainSettingsRefresh();
+    }
+
+    function onSettingsPageEntered() {
+        if (!App.settingsLoaded) return loadSettingsPrivacyStatus({ showLoading: true });
+        return refreshSettingsSilently();
+    }
+
+    function onSettingsRefreshRequested() {
+        return onSettingsPageEntered();
+    }
+
+    function onFDWorkStatusChanged() {
+        renderFDWorkToggle(App.lastSettingsStatus || {});
+    }
+
+    function resumeSettingsAfterOperation() {
+        setSettingsControlsDisabled(anySettingsOperationInProgress());
+        drainSettingsRefresh().catch(function () {});
+    }
 
     function setCaptureEnabled(enabled) {
         if (settingsToggleGenericBusy() || App.settingsWriteInProgress) {
@@ -625,7 +694,7 @@
             setCaptureToggleStatus(!enabled ? "开启" : "关闭");
         }).then(function () {
             App.settingsWriteInProgress = false;
-            setSettingsControlsDisabled(anySettingsOperationInProgress());
+            resumeSettingsAfterOperation();
         });
     }
     App.setCaptureEnabled = setCaptureEnabled;
@@ -665,7 +734,7 @@
             }
         }).then(function () {
             App.launchAtLoginWriteInProgress = false;
-            setSettingsControlsDisabled(anySettingsOperationInProgress());
+            resumeSettingsAfterOperation();
             if (App.lastSettingsStatus) {
                 renderLaunchAtLoginToggle(App.lastSettingsStatus);
             }
@@ -707,7 +776,7 @@
             return false;
         }).then(function (ok) {
             App.fdWorkSettingsWriteInProgress = false;
-            setSettingsControlsDisabled(anySettingsOperationInProgress());
+            resumeSettingsAfterOperation();
             if (App.lastSettingsStatus) renderFDWorkToggle(App.lastSettingsStatus);
             return ok;
         });
@@ -795,7 +864,7 @@
             if (passInput) passInput.value = "";
             if (confirmInput) confirmInput.value = "";
             App.settingsBackupExportInProgress = false;
-            setSettingsControlsDisabled(anySettingsOperationInProgress());
+            resumeSettingsAfterOperation();
         });
     }
     App.exportEncryptedBackup = exportEncryptedBackup;
@@ -821,7 +890,7 @@
             renderBackupManifest(null, "");
         }).then(function () {
             App.settingsBackupManifestInProgress = false;
-            setSettingsControlsDisabled(anySettingsOperationInProgress());
+            resumeSettingsAfterOperation();
         });
     }
     App.previewEncryptedBackupManifest = previewEncryptedBackupManifest;
@@ -870,7 +939,7 @@
             }).then(function () {
                 if (passInput) passInput.value = "";
                 App.settingsBackupImportInProgress = false;
-                setSettingsControlsDisabled(anySettingsOperationInProgress());
+                resumeSettingsAfterOperation();
             });
         });
     }
@@ -902,7 +971,7 @@
         }).then(function () {
             if (confirmInput) confirmInput.value = "";
             App.settingsClearAllInProgress = false;
-            setSettingsControlsDisabled(anySettingsOperationInProgress());
+            resumeSettingsAfterOperation();
         });
     }
     App.clearAllLocalData = clearAllLocalData;
@@ -1163,10 +1232,18 @@
 
     function resetSettingsGeneration() {
         App.settingsLoaded = false;
+        App.settingsRefreshPending = false;
+        App.settingsLoadPromise = null;
         App.firstRunNoticeLoaded = false;
         App.firstRunNoticeLoading = false;
         App.settingsRequestToken = (App.settingsRequestToken || 0) + 1;
         resetSettingsTransientUi({ restoreFocus: false });
     }
-    App.settings = Object.freeze({ resetGeneration: resetSettingsGeneration });
+    App.settings = Object.freeze({
+        onDataChanged: onSettingsDataChanged,
+        onFDWorkStatusChanged: onFDWorkStatusChanged,
+        onPageEntered: onSettingsPageEntered,
+        onRefreshRequested: onSettingsRefreshRequested,
+        resetGeneration: resetSettingsGeneration
+    });
 })();
