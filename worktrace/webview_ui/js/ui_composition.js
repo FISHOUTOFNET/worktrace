@@ -120,12 +120,14 @@
             });
         }
 
-        // Statistics query ownership belongs to init_fd_work_v5.js. Composition
-        // only freezes the old live target immediately at an activity boundary;
-        // the central generation coordinator performs the debounced silent sync.
-        if (page === "statistics" && reportStructureChanged
-            && typeof App.suspendStatisticsLiveTicker === "function") {
-            App.suspendStatisticsLiveTicker();
+        if (page === "statistics" && App.statistics
+            && typeof App.statistics.onRuntimeTransition === "function") {
+            App.statistics.onRuntimeTransition({
+                source: source,
+                structureChanged: structureChanged,
+                liveChanged: liveChanged,
+                reportStructureChanged: reportStructureChanged
+            });
         }
 
         return accepted;
