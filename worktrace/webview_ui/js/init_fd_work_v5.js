@@ -77,6 +77,7 @@
 
     var runtimeState = null;
     var AUTOMATIC_PAGE_REFRESH_DELAY_MS = 1500;
+    var AUTOMATIC_PAGE_REFRESH_RETRY_MS = 5000;
     var automaticPageRefreshTimer = null;
     var automaticPageRefreshKey = "";
     var PAGE_REFRESH_POLICIES = Object.freeze({
@@ -120,6 +121,13 @@
         rules: true,
         settings: true
     };
+    var pageRefreshEpoch = {
+        overview: 0,
+        timeline: 0,
+        statistics: 0,
+        rules: 0,
+        settings: 0
+    };
 
     function nonNegativeInt(value, fallback) {
         return typeof value === "number" && Number.isInteger(value) && value >= 0
@@ -157,12 +165,16 @@
         });
     }
 
+    function markPageDirty(page) {
+        if (!Object.prototype.hasOwnProperty.call(pageRefreshDirty, page)) return;
+        pageRefreshDirty[page] = true;
+        pageRefreshEpoch[page] = nonNegativeInt(pageRefreshEpoch[page], 0) + 1;
+    }
+
     function markPagesDirtyForGenerationChanges(changedKeys) {
         Object.keys(PAGE_REFRESH_POLICIES).forEach(function (page) {
             var policy = PAGE_REFRESH_POLICIES[page];
-            if (intersects(changedKeys, policy.entryGenerations)) {
-                pageRefreshDirty[page] = true;
-            }
+            if (intersects(changedKeys, policy.entryGenerations)) markPageDirty(page);
         });
     }
 
@@ -175,10 +187,26 @@
         return false;
     }
 
-    function markPageFresh(page) {
-        if (Object.prototype.hasOwnProperty.call(pageRefreshDirty, page)) {
-            pageRefreshDirty[page] = false;
+    function pageRefreshEvidence(page) {
+        if (page === "overview") return App.lastOverviewSnapshot || null;
+        if (page === "timeline") return App.lastTimelineData || null;
+        if (page === "statistics") return App.statisticsAcceptedPayload || null;
+        if (page === "rules") return App.lastProjectRulesData || null;
+        if (page === "settings") return App.lastSettingsStatus || null;
+        return null;
+    }
+
+    function markPageFresh(page, expectedEpoch) {
+        if (!Object.prototype.hasOwnProperty.call(pageRefreshDirty, page)) return false;
+        if (expectedEpoch === undefined || expectedEpoch === null) {
+            // Page-local helpers may confirm an already-fresh view, but only the
+            // coordinator that captured the dirty epoch may clear a dirty page.
+            if (pageRefreshDirty[page] !== false) return false;
+        } else if (nonNegativeInt(pageRefreshEpoch[page], 0) !== expectedEpoch) {
+            return false;
         }
+        pageRefreshDirty[page] = false;
+        return true;
     }
     App.markPageFresh = markPageFresh;
 
@@ -205,7 +233,19 @@
     }
 
     function automaticRefreshScopeKey(page) {
-        return page + "|" + (page === "timeline" ? String(App.timelineDate || "") : "");
+        if (page === "timeline") return page + "|" + String(App.timelineDate || "");
+        if (page === "statistics") {
+            var selection = App.statisticsSelection || {};
+            var filter = document.getElementById("statistics-project-filter");
+            return [
+                page,
+                selection.allTime === true ? "all" : "range",
+                String(selection.dateFrom || ""),
+                String(selection.dateTo || ""),
+                filter ? String(filter.value || "") : ""
+            ].join("|");
+        }
+        return page + "|";
     }
 
     function clearScheduledAutomaticPageRefresh() {
@@ -217,21 +257,23 @@
     }
     App.clearScheduledAutomaticPageRefresh = clearScheduledAutomaticPageRefresh;
 
-    function scheduleAutomaticPageRefresh() {
+    function scheduleAutomaticPageRefresh(delayMs) {
         var page = App.currentPage || "overview";
         var scopeKey = automaticRefreshScopeKey(page);
+        var delay = nonNegativeInt(delayMs, AUTOMATIC_PAGE_REFRESH_DELAY_MS);
+        if (delay <= 0) delay = AUTOMATIC_PAGE_REFRESH_DELAY_MS;
         clearScheduledAutomaticPageRefresh();
         automaticPageRefreshKey = scopeKey;
         automaticPageRefreshTimer = window.setTimeout(function () {
             automaticPageRefreshTimer = null;
             automaticPageRefreshKey = "";
             if (App.currentPage !== page || automaticRefreshScopeKey(page) !== scopeKey) return;
-            if (!pageNeedsRefresh(page)) return;
+            if (!pageNeedsRefresh(page) || !automaticRefreshAllowedForPage(page)) return;
             refreshCurrentPageData(null, {
                 automatic: true,
                 preservePresentation: page === "statistics"
             });
-        }, AUTOMATIC_PAGE_REFRESH_DELAY_MS);
+        }, delay);
     }
 
     function settingsRuntimeIdentity(runtime) {
@@ -415,6 +457,8 @@
         if (App.rules && App.rules.resetGeneration) App.rules.resetGeneration();
         if (App.settings && App.settings.resetGeneration) App.settings.resetGeneration();
         if (App.fdWork && App.fdWork.resetGeneration) App.fdWork.resetGeneration();
+        if (typeof App.setRulesLoading === "function") App.setRulesLoading(false);
+        if (typeof App.setSettingsLoading === "function") App.setSettingsLoading(false);
         App.lastRefreshState = null;
         App.activePageRefreshInFlight = false;
         App.activePageRefreshPromise = null;
@@ -424,7 +468,7 @@
         App.liveClockViolationKeys = {};
         clearScheduledAutomaticPageRefresh();
         Object.keys(pageRefreshDirty).forEach(function (page) {
-            pageRefreshDirty[page] = true;
+            markPageDirty(page);
         });
         liveRuntimeStore.reset();
         App._monotonicRenderState = {};
@@ -676,39 +720,60 @@
         }
     });
 
-    function refreshActivePage(acceptedState, options) {
-        var page = App.currentPage;
+    function refreshActivePage(acceptedState, options, expectedPage) {
+        var page = String(expectedPage || App.currentPage || "overview");
+        if (App.currentPage !== page) return Promise.resolve(null);
         var refresher = ACTIVE_PAGE_REFRESHERS[page];
-        if (typeof refresher !== "function") return Promise.resolve();
+        if (typeof refresher !== "function") return Promise.resolve(null);
+        var refreshEpoch = nonNegativeInt(pageRefreshEpoch[page], 0);
+        var beforeEvidence = pageRefreshEvidence(page);
         return Promise.resolve(refresher(acceptedState, options)).then(function (result) {
-            if (App.currentPage === page && pageHasLoadedData(page)) markPageFresh(page);
+            var accepted = App.currentPage === page
+                && pageHasLoadedData(page)
+                && pageRefreshEvidence(page) !== beforeEvidence;
+            if (accepted) markPageFresh(page, refreshEpoch);
             return result;
         });
     }
     App.refreshActivePage = refreshActivePage;
 
     function _runCurrentPageRefresh(state, options) {
+        options = options || {};
+        var refreshPage = App.currentPage || "overview";
+        var refreshScopeKey = automaticRefreshScopeKey(refreshPage);
         App.activePageRefreshInFlight = true;
         var statePromise = state && state.ok === true
             ? Promise.resolve(state)
             : App.bridge.getRefreshState(
-                App.currentPage === "timeline" ? App.timelineDate : null
+                refreshPage === "timeline" ? App.timelineDate : null
             ).then(function (result) {
                 return App.handleResult(result, function () { return null; });
             });
         return statePromise.then(function (acceptedState) {
+            if (App.currentPage !== refreshPage
+                || automaticRefreshScopeKey(refreshPage) !== refreshScopeKey) {
+                return [];
+            }
             if (acceptedState && acceptedState.ok === true) App.acceptRefreshStateRuntime(acceptedState);
             var promises = [
                 acceptedState && acceptedState.ok === true
                     ? refreshStatusFromRefreshState(acceptedState)
                     : refreshStatus(),
-                refreshActivePage(acceptedState, options)
+                refreshActivePage(acceptedState, options, refreshPage)
             ];
             return Promise.allSettled(promises);
         }).then(function (results) {
+            results = Array.isArray(results) ? results : [];
             App.lastFullRefreshAtEpochMs = Date.now();
             var anyError = results.some(function (item) { return item.status === "rejected"; });
             if (!anyError) App.clearError();
+            if (options.automatic === true
+                && App.currentPage === refreshPage
+                && automaticRefreshScopeKey(refreshPage) === refreshScopeKey
+                && pageNeedsRefresh(refreshPage)
+                && automaticRefreshAllowedForPage(refreshPage)) {
+                scheduleAutomaticPageRefresh(AUTOMATIC_PAGE_REFRESH_RETRY_MS);
+            }
             return results;
         });
     }
@@ -780,7 +845,7 @@
         liveRuntimeStore.setScope(pageId, pageId === "timeline" ? App.timelineDate : null);
         refreshCurrentActivityFromState(App.lastRefreshState, { forceRender: true });
         if (!pageNeedsRefresh(pageId)) return;
-        refreshActivePage(App.lastRefreshState, { navigation: true }).catch(function () {
+        refreshActivePage(App.lastRefreshState, { navigation: true }, pageId).catch(function () {
             App.showError("刷新失败");
         });
     }
@@ -955,9 +1020,7 @@
             if (App.liveClockContractRefreshRequested) {
                 App.liveClockContractRefreshRequested = false;
                 clearScheduledAutomaticPageRefresh();
-                if (Object.prototype.hasOwnProperty.call(pageRefreshDirty, App.currentPage)) {
-                    pageRefreshDirty[App.currentPage] = true;
-                }
+                markPageDirty(App.currentPage);
                 refreshCurrentPageData(state, { automatic: true });
                 return;
             }
