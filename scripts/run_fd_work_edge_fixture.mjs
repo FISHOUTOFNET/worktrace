@@ -158,9 +158,10 @@ function connectDevTools(webSocketUrl) {
   });
 }
 
-function commandClient(socket) {
+function devToolsClient(socket) {
   let nextId = 0;
   const pending = new Map();
+  const eventWaiters = new Map();
   socket.addEventListener("message", (event) => {
     let message;
     try {
@@ -169,23 +170,40 @@ function commandClient(socket) {
       return;
     }
     const request = pending.get(message.id);
-    if (!request) return;
-    pending.delete(message.id);
-    if (message.error) request.reject(new Error(`devtools_command_failed_${request.method}`));
-    else request.resolve(message.result || {});
+    if (request) {
+      pending.delete(message.id);
+      if (message.error) request.reject(new Error(`devtools_command_failed_${request.method}`));
+      else request.resolve(message.result || {});
+      return;
+    }
+    const waiters = eventWaiters.get(message.method);
+    if (!waiters || !waiters.length) return;
+    eventWaiters.delete(message.method);
+    waiters.forEach((resolveEvent) => resolveEvent(message.params || {}));
   });
-  return (method, params = {}) => new Promise((resolveCommand, rejectCommand) => {
-    const id = ++nextId;
-    pending.set(id, { method, resolve: resolveCommand, reject: rejectCommand });
-    socket.send(JSON.stringify({ id, method, params }));
-  });
+  return {
+    command(method, params = {}) {
+      return new Promise((resolveCommand, rejectCommand) => {
+        const id = ++nextId;
+        pending.set(id, { method, resolve: resolveCommand, reject: rejectCommand });
+        socket.send(JSON.stringify({ id, method, params }));
+      });
+    },
+    waitForEvent(method) {
+      return new Promise((resolveEvent) => {
+        const waiters = eventWaiters.get(method) || [];
+        waiters.push(resolveEvent);
+        eventWaiters.set(method, waiters);
+      });
+    },
+  };
 }
 
 async function readFixtureResult(profile) {
   const endpoint = await waitForDevToolsEndpoint(profile);
   const fixtureUrl = pathToFileURL(fixturePath).href;
   const targetResponse = await fetch(
-    `http://127.0.0.1:${endpoint.port}/json/new?${encodeURIComponent(fixtureUrl)}`,
+    `http://127.0.0.1:${endpoint.port}/json/new?${encodeURIComponent("about:blank")}`,
     { method: "PUT" }
   );
   if (!targetResponse.ok) throw new Error("devtools_target_failed");
@@ -193,9 +211,15 @@ async function readFixtureResult(profile) {
   if (!target.webSocketDebuggerUrl) throw new Error("devtools_target_missing");
   const socket = await connectDevTools(target.webSocketDebuggerUrl);
   try {
-    const command = commandClient(socket);
+    const client = devToolsClient(socket);
+    const command = client.command;
     await command("Runtime.enable");
+    await command("Page.enable");
     await command("Page.bringToFront");
+    const pageLoaded = client.waitForEvent("Page.loadEventFired");
+    const navigation = await command("Page.navigate", { url: fixtureUrl });
+    if (navigation.errorText) throw new Error("fixture_navigation_failed");
+    await pageLoaded;
     const evaluation = await command("Runtime.evaluate", {
       awaitPromise: true,
       returnByValue: true,
