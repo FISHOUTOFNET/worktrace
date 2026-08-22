@@ -220,9 +220,25 @@ th,
     overflow: hidden;
 }
 
-/* The visible scrollbar used to be compensated with a dedicated right inset.
-   With invisible scrollbars, Overview returns to each component's native
-   symmetric horizontal spacing instead of keeping that historical offset. */
+.content-loading-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 6;
+    display: grid;
+    place-items: center;
+    color: var(--color-text-secondary);
+    background: rgba(255, 255, 255, .78);
+    pointer-events: none;
+}
+.content-loading-overlay > span {
+    padding: 5px 9px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    box-shadow: 0 2px 8px rgba(24, 35, 43, .08);
+    font-size: var(--font-size-sm);
+}
+
 .overview-page {
     --overview-time-right-inset: 0px;
 }
@@ -236,7 +252,6 @@ th,
 .timeline-page > .page-header,
 .timeline-page > .timeline-toolbar,
 .timeline-page > .inline-alert,
-.timeline-page > .loading-state,
 .statistics-page > .page-header,
 .statistics-page > .statistics-toolbar,
 .statistics-page > .inline-alert,
@@ -245,26 +260,13 @@ th,
 .rules-page > .page-header,
 .rules-page > .rules-toolbar,
 .rules-page > .inline-alert,
-.rules-page > .loading-state,
 .settings-page > .page-header,
 .settings-page > .inline-alert,
 .settings-page > #settings-loading {
     flex: 0 0 auto;
 }
 
-/* Loading feedback must not resize an already rendered page. Timeline keeps
-   its skeleton as a zero-height overlay above the workspace, while Settings
-   can show its status text without pushing the settings grid down. */
-#timeline-loading {
-    position: relative;
-    z-index: 3;
-    flex: 0 0 0;
-    height: 0;
-    min-height: 0;
-    overflow: visible;
-    pointer-events: none;
-}
-
+/* Settings can show its status text without pushing the settings grid down. */
 #settings-loading {
     position: relative;
     z-index: 2;
@@ -355,6 +357,7 @@ th,
 }
 
 .rules-scroll-region {
+    position: relative;
     flex: 1 1 auto;
     min-height: 0;
     overflow: auto;
