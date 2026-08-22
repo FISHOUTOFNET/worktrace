@@ -1981,7 +1981,16 @@
             App.clearTimelineError();
         }
         var token = ++App.timelineRequestToken;
-        return App.bridge.getTimeline(date).then(function (result) {
+        var bridgeRequest = (
+            showLoading
+            && resetSelection === false
+            && rejectOnError === false
+        ) ? App.requestCoordinator.share(
+            "timeline-navigation",
+            String(date || ""),
+            function () { return App.bridge.getTimeline(date); }
+        ) : App.bridge.getTimeline(date);
+        return bridgeRequest.then(function (result) {
             if (token !== App.timelineRequestToken || App.timelineOwner !== timelineOwner) return;
             var data = App.handleResult(result, function (message) {
                 App.showTimelineError(message || errorMessage);

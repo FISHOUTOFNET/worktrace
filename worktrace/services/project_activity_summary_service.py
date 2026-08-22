@@ -78,6 +78,45 @@ def _observed_duration_seconds(row: dict) -> int:
     return 0
 
 
+def build_top_activity_labels(
+    rows: list[dict],
+    *,
+    limit: int = 3,
+) -> list[str]:
+    """Return top activity labels without constructing full mutation/detail DTOs."""
+    resolved_limit = max(0, int(limit))
+    if resolved_limit == 0:
+        return []
+
+    groups: dict[str, dict[str, Any]] = {}
+    for position, row in enumerate(rows):
+        key = activity_group_key(row)
+        group = groups.get(key)
+        if group is None:
+            group = {
+                "activity_name": _activity_display_name(row),
+                "duration_seconds": 0,
+                "first_position": position,
+            }
+            groups[key] = group
+        group["duration_seconds"] = (
+            int(group["duration_seconds"]) + _observed_duration_seconds(row)
+        )
+
+    ranked = sorted(
+        groups.values(),
+        key=lambda item: (
+            -int(item.get("duration_seconds") or 0),
+            int(item.get("first_position") or 0),
+        ),
+    )
+    return [
+        str(item.get("activity_name") or "").strip()
+        for item in ranked[:resolved_limit]
+        if str(item.get("activity_name") or "").strip()
+    ]
+
+
 def get_projection_session_activity_summary(
     projection_instance_key: str,
     report_date: str,
@@ -287,5 +326,6 @@ def _summary_id(
 __all__ = [
     "activity_group_key",
     "build_activity_summary_rows",
+    "build_top_activity_labels",
     "get_projection_session_activity_summary",
 ]

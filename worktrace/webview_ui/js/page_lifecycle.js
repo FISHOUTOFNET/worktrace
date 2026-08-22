@@ -23,7 +23,10 @@
 
     extendPage("timeline", {
         hasLoadedData: function () {
-            return App.timelineLoaded === true;
+            if (App.timelineLoaded !== true || !App.lastTimelineData) return false;
+            var requestedDate = String(App.timelineDate || "");
+            var loadedDate = String(App.lastTimelineData.date || "");
+            return !requestedDate || requestedDate === loadedDate;
         },
         isLoading: function () {
             return App.timelineLoading === true;

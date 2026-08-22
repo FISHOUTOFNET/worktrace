@@ -907,7 +907,14 @@
         );
         refreshCurrentActivityFromState(App.lastRefreshState, { forceRender: true });
         if (!pageNeedsRefresh(pageId)) return;
-        refreshActivePage(App.lastRefreshState, { navigation: true }, pageId).catch(function () {
+        refreshActivePage(
+            App.lastRefreshState,
+            {
+                navigation: true,
+                preservePresentation: pageId === "statistics"
+            },
+            pageId
+        ).catch(function () {
             App.showError("刷新失败");
         });
     }

@@ -252,18 +252,10 @@ def _top3_activity_summary_labels(
         if not bool(item.get("privacy_redacted"))
         and str(item.get("status") or STATUS_NORMAL) == STATUS_NORMAL
     ]
-    summaries = project_activity_summary_service.build_activity_summary_rows(
+    return project_activity_summary_service.build_top_activity_labels(
         displayable,
-        report_date="",
-        scope_key="",
-        projection_revision="",
+        limit=3,
     )
-    labels: list[str] = []
-    for summary in summaries[:3]:
-        label = str(summary.get("activity_name") or "").strip()
-        if label:
-            labels.append(label)
-    return labels
 
 
 # Compatibility name for older internal callers; the shared detail builder owns semantics.

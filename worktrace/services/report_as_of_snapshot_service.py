@@ -292,6 +292,12 @@ def build_statistics_as_of_snapshot(
     runtime_snapshot = context.runtime_sample.snapshot
     if not isinstance(runtime_snapshot, Mapping):
         return ReportAsOfSnapshot(base, None)
+    if snapshot_seconds_for_date_range(
+        runtime_snapshot,
+        start_date,
+        end_date,
+    ) <= 0:
+        return ReportAsOfSnapshot(base, None)
 
     open_activity_id = context.verified_open_activity_id
     if open_activity_id is None:
