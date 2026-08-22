@@ -144,14 +144,14 @@ def test_overview_time_axis_and_recent_columns_are_stable_and_local():
     duration_rule = _css_rule(css, ".recent-duration")
 
     assert "--overview-time-right-inset: 20px" in overview_rule
-    assert "--overview-record-time-size: 14px" in overview_rule
+    assert "--overview-record-time-size: 13px" in overview_rule
     assert "overflow: hidden" in overview_rule
     assert "display: flex" in active_rule
     assert "flex-direction: column" in active_rule
     assert "padding-right: var(--overview-time-right-inset)" in total_rule
     assert "var(--overview-time-right-inset)" in current_rule
     assert "min-width: 8ch" in primary_time_rule
-    assert "font-size: var(--font-size-2xl)" in primary_time_rule
+    assert "font-size: var(--font-size-xl)" in primary_time_rule
     assert "font-variant-numeric: tabular-nums" in primary_time_rule
     assert ".current-duration { font-size: var(--font-size-xl)" not in css
 
