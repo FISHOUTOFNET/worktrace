@@ -1,0 +1,104 @@
+name: Apply low coupling performance fix
+
+on:
+  push:
+    branches:
+      - codex/fd-work-entry
+    paths:
+      - .github/workflows/_apply_low_coupling_perf_fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/fd-work-entry
+          fetch-depth: 0
+
+      - name: Apply focused performance changes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement, found {count}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "worktrace/webview_ui/js/init_fd_work_v5.js",
+              '''        if (!pageNeedsRefresh(pageId)) return;\n        refreshActivePage(App.lastRefreshState, { navigation: true }, pageId).catch(function () {\n            App.showError("刷新失败");\n        });''',
+              '''        if (!pageNeedsRefresh(pageId)) return;\n        refreshActivePage(\n            App.lastRefreshState,\n            {\n                navigation: true,\n                preservePresentation: pageId === "statistics"\n            },\n            pageId\n        ).catch(function () {\n            App.showError("刷新失败");\n        });''',
+          )
+
+          replace_once(
+              "worktrace/webview_ui/js/page_lifecycle.js",
+              '''        hasLoadedData: function () {\n            return App.timelineLoaded === true;\n        },''',
+              '''        hasLoadedData: function () {\n            if (App.timelineLoaded !== true || !App.lastTimelineData) return false;\n            var requestedDate = String(App.timelineDate || "");\n            var loadedDate = String(App.lastTimelineData.date || "");\n            return !requestedDate || requestedDate === loadedDate;\n        },''',
+          )
+
+          replace_once(
+              "worktrace/webview_ui/js/timeline.js",
+              '''        var token = ++App.timelineRequestToken;\n        return App.bridge.getTimeline(date).then(function (result) {''',
+              '''        var token = ++App.timelineRequestToken;\n        var bridgeRequest = (\n            showLoading\n            && resetSelection === false\n            && rejectOnError === false\n        ) ? App.requestCoordinator.share(\n            "timeline-navigation",\n            String(date || ""),\n            function () { return App.bridge.getTimeline(date); }\n        ) : App.bridge.getTimeline(date);\n        return bridgeRequest.then(function (result) {''',
+          )
+
+          replace_once(
+              "worktrace/services/report_as_of_snapshot_service.py",
+              '''    runtime_snapshot = context.runtime_sample.snapshot\n    if not isinstance(runtime_snapshot, Mapping):\n        return ReportAsOfSnapshot(base, None)\n\n    open_activity_id = context.verified_open_activity_id''',
+              '''    runtime_snapshot = context.runtime_sample.snapshot\n    if not isinstance(runtime_snapshot, Mapping):\n        return ReportAsOfSnapshot(base, None)\n    if snapshot_seconds_for_date_range(\n        runtime_snapshot,\n        start_date,\n        end_date,\n    ) <= 0:\n        return ReportAsOfSnapshot(base, None)\n\n    open_activity_id = context.verified_open_activity_id''',
+          )
+
+          replace_once(
+              "worktrace/services/project_activity_summary_service.py",
+              '''def get_projection_session_activity_summary(\n    projection_instance_key: str,''',
+              '''def build_top_activity_labels(\n    rows: list[dict],\n    *,\n    limit: int = 3,\n) -> list[str]:\n    """Return top activity labels without constructing full mutation/detail DTOs."""\n    resolved_limit = max(0, int(limit))\n    if resolved_limit == 0:\n        return []\n\n    groups: dict[str, dict[str, Any]] = {}\n    for position, row in enumerate(rows):\n        key = activity_group_key(row)\n        group = groups.get(key)\n        if group is None:\n            group = {\n                "activity_name": _activity_display_name(row),\n                "duration_seconds": 0,\n                "first_position": position,\n            }\n            groups[key] = group\n        group["duration_seconds"] = (\n            int(group["duration_seconds"]) + _observed_duration_seconds(row)\n        )\n\n    ranked = sorted(\n        groups.values(),\n        key=lambda item: (\n            -int(item.get("duration_seconds") or 0),\n            int(item.get("first_position") or 0),\n        ),\n    )\n    return [\n        str(item.get("activity_name") or "").strip()\n        for item in ranked[:resolved_limit]\n        if str(item.get("activity_name") or "").strip()\n    ]\n\n\ndef get_projection_session_activity_summary(\n    projection_instance_key: str,''',
+          )
+
+          replace_once(
+              "worktrace/services/project_activity_summary_service.py",
+              '''__all__ = [\n    "activity_group_key",\n    "build_activity_summary_rows",\n    "get_projection_session_activity_summary",\n]''',
+              '''__all__ = [\n    "activity_group_key",\n    "build_activity_summary_rows",\n    "build_top_activity_labels",\n    "get_projection_session_activity_summary",\n]''',
+          )
+
+          replace_once(
+              "worktrace/services/view_model_service.py",
+              '''    summaries = project_activity_summary_service.build_activity_summary_rows(\n        displayable,\n        report_date="",\n        scope_key="",\n        projection_revision="",\n    )\n    labels: list[str] = []\n    for summary in summaries[:3]:\n        label = str(summary.get("activity_name") or "").strip()\n        if label:\n            labels.append(label)\n    return labels''',
+              '''    return project_activity_summary_service.build_top_activity_labels(\n        displayable,\n        limit=3,\n    )''',
+          )
+
+          Path("tests/test_low_coupling_performance_fixes.py").write_text('''from __future__ import annotations\n\nfrom pathlib import Path\n\nfrom worktrace.services import project_activity_summary_service\n\n\ndef test_lightweight_top_activity_labels_match_full_summary_ranking():\n    rows = [\n        {\n            "resource_identity_key": "file:a",\n            "resource_display_name": "A.docx",\n            "activity_display_name": "A.docx",\n            "app_name": "Word",\n            "duration_seconds": 40,\n        },\n        {\n            "resource_identity_key": "file:b",\n            "resource_display_name": "B.xlsx",\n            "activity_display_name": "B.xlsx",\n            "app_name": "Excel",\n            "duration_seconds": 60,\n        },\n        {\n            "resource_identity_key": "file:a",\n            "resource_display_name": "A.docx",\n            "activity_display_name": "A.docx",\n            "app_name": "Word",\n            "duration_seconds": 20,\n        },\n        {\n            "resource_identity_key": "file:c",\n            "resource_display_name": "C.pptx",\n            "activity_display_name": "C.pptx",\n            "app_name": "PowerPoint",\n            "duration_seconds": 15,\n        },\n        {\n            "resource_identity_key": "file:d",\n            "resource_display_name": "D.txt",\n            "activity_display_name": "D.txt",\n            "app_name": "Editor",\n            "duration_seconds": 5,\n        },\n    ]\n    full = project_activity_summary_service.build_activity_summary_rows(\n        rows,\n        report_date="2026-08-22",\n        scope_key="session",\n        projection_revision="revision",\n    )\n    expected = [str(item.get("activity_name") or "") for item in full[:3]]\n    assert project_activity_summary_service.build_top_activity_labels(rows, limit=3) == expected\n\n\ndef test_navigation_performance_fix_contracts_remain_local():\n    root = Path(__file__).resolve().parents[1]\n    init = (root / "worktrace/webview_ui/js/init_fd_work_v5.js").read_text(encoding="utf-8")\n    lifecycle = (root / "worktrace/webview_ui/js/page_lifecycle.js").read_text(encoding="utf-8")\n    timeline = (root / "worktrace/webview_ui/js/timeline.js").read_text(encoding="utf-8")\n    view_model = (root / "worktrace/services/view_model_service.py").read_text(encoding="utf-8")\n    report_as_of = (root / "worktrace/services/report_as_of_snapshot_service.py").read_text(encoding="utf-8")\n\n    assert 'preservePresentation: pageId === "statistics"' in init\n    assert '"timeline-navigation"' in timeline\n    assert 'App.requestCoordinator.share(' in timeline\n    assert 'var loadedDate = String(App.lastTimelineData.date || "");' in lifecycle\n    assert "build_top_activity_labels(" in view_model\n\n    statistics_overlay = report_as_of.split(\n        "def build_statistics_as_of_snapshot", 1\n    )[1]\n    before_open_activity = statistics_overlay.split(\n        "open_activity_id = context.verified_open_activity_id", 1\n    )[0]\n    assert "snapshot_seconds_for_date_range(" in before_open_activity\n    assert "start_date" in before_open_activity\n    assert "end_date" in before_open_activity\n''', encoding="utf-8")
+
+      - name: Validate syntax and patch shape
+        run: |
+          python -m compileall -q \
+            worktrace/services/report_as_of_snapshot_service.py \
+            worktrace/services/project_activity_summary_service.py \
+            worktrace/services/view_model_service.py \
+            tests/test_low_coupling_performance_fixes.py
+          node --check worktrace/webview_ui/js/init_fd_work_v5.js
+          node --check worktrace/webview_ui/js/page_lifecycle.js
+          node --check worktrace/webview_ui/js/timeline.js
+          git diff --check
+
+      - name: Commit focused fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            worktrace/webview_ui/js/init_fd_work_v5.js \
+            worktrace/webview_ui/js/page_lifecycle.js \
+            worktrace/webview_ui/js/timeline.js \
+            worktrace/services/report_as_of_snapshot_service.py \
+            worktrace/services/project_activity_summary_service.py \
+            worktrace/services/view_model_service.py \
+            tests/test_low_coupling_performance_fixes.py
+          git commit -m "perf: reduce timeline and statistics navigation latency"
+          git push origin HEAD:codex/fd-work-entry
