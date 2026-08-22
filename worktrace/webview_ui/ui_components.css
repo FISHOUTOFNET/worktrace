@@ -111,10 +111,13 @@ th,
     position: relative;
     width: var(--date-control-width);
     min-width: var(--date-control-width);
+    font: var(--font-size-md)/var(--line-height-normal) var(--font-sans);
+    font-weight: 400;
 }
 .statistics-date-control-shell .date-control {
     width: 100%;
     min-width: 100%;
+    font: inherit;
 }
 .statistics-date-empty-label {
     position: absolute;
@@ -124,8 +127,8 @@ th,
     top: 50%;
     transform: translateY(-50%);
     color: var(--color-text-tertiary);
+    font: inherit;
     font-variant-numeric: tabular-nums;
-    line-height: 1;
     pointer-events: none;
     white-space: nowrap;
 }
