@@ -25,7 +25,7 @@ function runtime({ structure = "s1", live = "l1", classification = 1, settings =
   };
 }
 
-function row(duration, percentage) {
+function row(duration, percentage, key) {
   const cells = [
     { textContent: "name" },
     { textContent: duration },
@@ -35,6 +35,7 @@ function row(duration, percentage) {
   const bar = { style: { width: "0%" } };
   return {
     children: cells,
+    getAttribute(name) { return name === "data-statistics-key" ? key : null; },
     querySelector(selector) { return selector === ".stats-share-bar i" ? bar : null; },
     bar,
   };
@@ -168,7 +169,7 @@ function harness(initialRuntime) {
     clearTimeout,
   };
   vm.createContext(context);
-  ["rules.js", "settings.js", "timeline.js"].forEach((name) => {
+  ["rules.js", "settings.js", "timeline.js", "statistics.js"].forEach((name) => {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", name), "utf8"),
       context,
@@ -318,10 +319,11 @@ test("Statistics local ticker patches numeric cells without calling full rendere
   let fullRenders = 0;
   App.showStatistics = () => { fullRenders += 1; };
 
-  const projectRow = row("00:00:10", "50%");
-  const appRow = row("00:00:10", "50%");
+  const projectRow = row("00:00:10", "50%", "P");
+  const appRow = row("00:00:10", "50%", "A");
   elements["stats-total"] = { textContent: "00:00:20" };
   elements["stats-by-project"] = { querySelectorAll() { return [projectRow]; } };
+  elements["stats-by-file"] = { querySelectorAll() { return []; } };
   elements["stats-by-app"] = { querySelectorAll() { return [appRow]; } };
 
   const sampledAt = Date.now() - 5000;
@@ -355,6 +357,48 @@ test("Statistics local ticker patches numeric cells without calling full rendere
   assert.notEqual(elements["stats-total"].textContent, "00:00:20");
   assert.notEqual(projectRow.children[1].textContent, "00:00:10");
   assert.notEqual(appRow.children[1].textContent, "00:00:10");
+});
+
+test("Statistics local ticker is a no-op when the accepted row shape no longer matches", () => {
+  const { App, elements } = harness(runtime());
+  App.currentPage = "statistics";
+  let fullRenders = 0;
+  App.showStatistics = () => { fullRenders += 1; };
+
+  const mismatchedRow = row("00:00:10", "50%", "stale-key");
+  elements["stats-total"] = { textContent: "00:00:20" };
+  elements["stats-by-project"] = { querySelectorAll() { return [mismatchedRow]; } };
+  elements["stats-by-file"] = { querySelectorAll() { return []; } };
+  elements["stats-by-app"] = { querySelectorAll() { return []; } };
+  App.statisticsAcceptedPayload = {
+    filters: { dateFrom: "2026-08-13", dateTo: "2026-08-13", projectId: "" },
+    summary: {
+      snapshot_revision: "r1",
+      total_duration_seconds: 20,
+      total_duration: "00:00:20",
+      by_project: [{ key: "current-key", duration_seconds: 10, duration: "00:00:10", percentage: 50 }],
+      by_file: [],
+      by_app: [],
+      by_status: [],
+    },
+    exportTicket: {
+      revision: "r1",
+      live_target: {
+        enabled: true,
+        ticking: true,
+        sampled_at_epoch_ms: Date.now() - 5000,
+        elapsed_seconds_at_sample: 0,
+        project_key: "current-key",
+      },
+    },
+  };
+
+  App.applyStatisticsLocalTicker();
+
+  assert.equal(fullRenders, 0);
+  assert.equal(elements["stats-total"].textContent, "00:00:20");
+  assert.equal(mismatchedRow.children[1].textContent, "00:00:10");
+  assert.equal(App.statisticsLastLiveRenderKey || "", "");
 });
 
 test("unchanged collector status is render-no-op", () => {

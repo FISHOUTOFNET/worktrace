@@ -4,6 +4,150 @@
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
     function element(id) { return document.getElementById(id); }
+
+    function nonNegativeInt(value) {
+        var parsed = parseInt(value, 10);
+        return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    }
+
+    function cloneGroups(groups) {
+        return (Array.isArray(groups) ? groups : []).map(function (group) {
+            return Object.assign({}, group || {});
+        });
+    }
+
+    function updateLiveGroup(groups, key, delta, totalSeconds) {
+        if (!key || !delta) return;
+        var target = null;
+        for (var i = 0; i < groups.length; i++) {
+            if (String(groups[i].key || "") === String(key)) {
+                target = groups[i];
+                break;
+            }
+        }
+        if (!target) return;
+        target.duration_seconds = nonNegativeInt(target.duration_seconds) + delta;
+        target.duration = App.formatDuration(target.duration_seconds);
+        for (var j = 0; j < groups.length; j++) {
+            var seconds = nonNegativeInt(groups[j].duration_seconds);
+            groups[j].percentage = totalSeconds > 0
+                ? Math.round(seconds / totalSeconds * 1000) / 10
+                : 0;
+        }
+    }
+
+    function liveTargetElapsedSeconds(target, nowMs) {
+        var sampledSeconds = nonNegativeInt(target && target.elapsed_seconds_at_sample);
+        if (!target || target.enabled !== true || target.ticking !== true) return sampledSeconds;
+        var sampledAt = nonNegativeInt(target.sampled_at_epoch_ms);
+        if (!sampledAt) return sampledSeconds;
+        return sampledSeconds + Math.max(0, Math.floor((nowMs - sampledAt) / 1000));
+    }
+
+    function statisticsLiveSummaryAtNow(baseSummary, nowMs, targetOverride) {
+        if (!baseSummary || typeof baseSummary !== "object") return baseSummary;
+        var target = targetOverride || baseSummary.live_target;
+        if (!target || target.enabled !== true) return baseSummary;
+        var sampledSeconds = nonNegativeInt(target.elapsed_seconds_at_sample);
+        var currentSeconds = liveTargetElapsedSeconds(target, nowMs);
+        var delta = Math.max(0, currentSeconds - sampledSeconds);
+        if (!delta) return baseSummary;
+
+        var summary = Object.assign({}, baseSummary);
+        summary.by_project = cloneGroups(baseSummary.by_project);
+        summary.by_file = cloneGroups(baseSummary.by_file);
+        summary.by_app = cloneGroups(baseSummary.by_app);
+        summary.by_status = cloneGroups(baseSummary.by_status);
+        summary.total_duration_seconds = nonNegativeInt(baseSummary.total_duration_seconds) + delta;
+        summary.total_duration = App.formatDuration(summary.total_duration_seconds);
+
+        if (target.contributes_project_duration === true) {
+            summary.project_duration_seconds = nonNegativeInt(baseSummary.project_duration_seconds) + delta;
+            summary.project_duration = App.formatDuration(summary.project_duration_seconds);
+        }
+
+        updateLiveGroup(summary.by_project, target.project_key, delta, summary.total_duration_seconds);
+        updateLiveGroup(summary.by_file, target.file_key, delta, summary.total_duration_seconds);
+        updateLiveGroup(summary.by_app, target.app_key, delta, summary.total_duration_seconds);
+        updateLiveGroup(summary.by_status, target.status_key, delta, summary.total_duration_seconds);
+
+        if (baseSummary.export_preview && typeof baseSummary.export_preview === "object") {
+            summary.export_preview = Object.assign({}, baseSummary.export_preview);
+            summary.export_preview.included_duration_seconds =
+                nonNegativeInt(baseSummary.export_preview.included_duration_seconds) + delta;
+            summary.export_preview.included_duration = App.formatDuration(
+                summary.export_preview.included_duration_seconds
+            );
+        }
+        summary._live_delta_seconds = delta;
+        return summary;
+    }
+    App.statisticsLiveSummaryAtNow = statisticsLiveSummaryAtNow;
+
+    function statisticsLiveGroupPatch(tbodyId, groups) {
+        var body = element(tbodyId);
+        if (!body || typeof body.querySelectorAll !== "function") return null;
+        var rows = body.querySelectorAll("tr");
+        groups = Array.isArray(groups) ? groups : [];
+        if (rows.length !== groups.length) return null;
+        var patch = [];
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            var group = groups[i] || {};
+            if (typeof row.getAttribute === "function"
+                && String(row.getAttribute("data-statistics-key") || "")
+                !== statisticsGroupKey(group, i)) {
+                return null;
+            }
+            var cells = row.children;
+            var bar = typeof row.querySelector === "function"
+                ? row.querySelector(".stats-share-bar i")
+                : null;
+            if (!cells || cells.length < 4 || !bar || !bar.style) return null;
+            patch.push({ cells: cells, bar: bar, group: group });
+        }
+        return patch;
+    }
+
+    function patchStatisticsLiveSummary(summary) {
+        if (!summary) return false;
+        var total = element("stats-total");
+        var projectPatch = statisticsLiveGroupPatch("stats-by-project", summary.by_project || []);
+        var filePatch = statisticsLiveGroupPatch("stats-by-file", summary.by_file || []);
+        var appPatch = statisticsLiveGroupPatch("stats-by-app", summary.by_app || []);
+        if (!total || !projectPatch || !filePatch || !appPatch) return false;
+        total.textContent = summary.total_duration || "00:00:00";
+        [projectPatch, filePatch, appPatch].forEach(function (groupPatch) {
+            groupPatch.forEach(function (entry) {
+                var group = entry.group;
+                var duration = group.duration || App.formatDuration(group.duration_seconds || 0);
+                var percentage = Math.max(0, Math.min(100, parseFloat(group.percentage) || 0));
+                entry.cells[1].textContent = duration;
+                entry.cells[3].textContent = String(group.percentage || 0) + "%";
+                entry.bar.style.width = percentage + "%";
+            });
+        });
+        return true;
+    }
+    App.patchStatisticsLiveSummary = patchStatisticsLiveSummary;
+
+    function applyStatisticsLocalTicker() {
+        if (App.currentPage !== "statistics" || App.statisticsLiveTickerSuspended === true) return;
+        var accepted = App.statisticsAcceptedPayload;
+        if (!accepted || !accepted.summary || !accepted.filters) return;
+        var liveTarget = accepted.exportTicket && accepted.exportTicket.live_target;
+        var summary = statisticsLiveSummaryAtNow(accepted.summary, Date.now(), liveTarget);
+        var delta = nonNegativeInt(summary && summary._live_delta_seconds);
+        var renderKey = [
+            String(accepted.summary.snapshot_revision
+                || accepted.exportTicket && accepted.exportTicket.revision || ""),
+            String(delta)
+        ].join("|");
+        if (App.statisticsLastLiveRenderKey === renderKey) return;
+        if (patchStatisticsLiveSummary(summary)) App.statisticsLastLiveRenderKey = renderKey;
+    }
+    App.applyStatisticsLocalTicker = applyStatisticsLocalTicker;
+
     function showStatisticsError(message) {
         var banner = element("statistics-error");
         if (!banner) return;
@@ -28,9 +172,7 @@
 
     function suspendStatisticsLiveTicker() {
         if (App.statisticsLiveTickerSuspended === true) return;
-        if (typeof App.applyStatisticsLocalTicker === "function") {
-            App.applyStatisticsLocalTicker();
-        }
+        applyStatisticsLocalTicker();
         App.statisticsLiveTickerSuspended = true;
     }
     App.suspendStatisticsLiveTicker = suspendStatisticsLiveTicker;
@@ -664,11 +806,7 @@
         setStatisticsExportStatus("", "");
     }
     App.statistics = Object.freeze({
-        applyLocalTick: function () {
-            if (typeof App.applyStatisticsLocalTicker === "function") {
-                return App.applyStatisticsLocalTicker();
-            }
-        },
+        applyLocalTick: applyStatisticsLocalTicker,
         resetGeneration: resetStatisticsGeneration
     });
 })();

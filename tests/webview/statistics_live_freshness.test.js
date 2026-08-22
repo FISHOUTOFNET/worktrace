@@ -14,12 +14,13 @@ function formatDuration(value) {
 
 function harness() {
   const listeners = {};
+  const elements = {};
   let runtime = null;
   let baseRefreshCalls = 0;
   const document = {
     activeElement: null,
     addEventListener(name, handler) { listeners[name] = handler; },
-    getElementById() { return null; },
+    getElementById(id) { return elements[id] || null; },
     querySelector() { return null; },
     querySelectorAll() { return []; },
   };
@@ -73,6 +74,7 @@ function harness() {
   );
   return {
     App: window.WorkTraceApp,
+    elements,
     listeners,
     setRuntime(value) { runtime = value; },
     baseRefreshCalls() { return baseRefreshCalls; },
@@ -258,7 +260,7 @@ test("live revision alone neither freezes nor refetches statistics", () => {
 });
 
 test("statistics local ticker stops while an activity-boundary sync is pending", () => {
-  const { App } = harness();
+  const { App, elements } = harness();
   App.currentPage = "statistics";
   App.statisticsAcceptedPayload = {
     summary: {
@@ -280,6 +282,10 @@ test("statistics local ticker stops while an activity-boundary sync is pending",
   };
   App.statisticsLastLiveRenderKey = "unchanged";
   App.statisticsLiveTickerSuspended = true;
+  elements["stats-total"] = { textContent: "" };
+  elements["stats-by-project"] = { querySelectorAll() { return []; } };
+  elements["stats-by-file"] = { querySelectorAll() { return []; } };
+  elements["stats-by-app"] = { querySelectorAll() { return []; } };
 
   App.applyStatisticsLocalTicker();
   assert.equal(App.statisticsLastLiveRenderKey, "unchanged");

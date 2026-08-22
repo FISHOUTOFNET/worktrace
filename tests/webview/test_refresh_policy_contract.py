@@ -14,7 +14,7 @@ def test_statistics_background_refresh_is_single_owner_silent_and_incremental():
     assert "if (!preservePresentation) setStatisticsLoading(true);" in statistics
     assert "reconcileStatisticsPresentation(data.summary);" in statistics
     assert "App.suspendStatisticsLiveTicker" in statistics
-    assert "App.statisticsLiveTickerSuspended === true" in composition
+    assert "App.statisticsLiveTickerSuspended === true" in statistics
     assert 'runtimeGeneration(previous, "report_structure")' in composition
 
     # init_fd_work_v5.js is the only periodic statistics refresh coordinator.
