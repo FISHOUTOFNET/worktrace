@@ -178,22 +178,57 @@
         });
     }
 
+    function pageCapability(page) {
+        var capability = App[page];
+        return capability && typeof capability === "object" ? capability : null;
+    }
+
     function pageHasLoadedData(page) {
-        if (page === "overview") return !!App.lastOverviewSnapshot;
-        if (page === "timeline") return App.timelineLoaded === true;
-        if (page === "statistics") return App.statisticsLoaded === true;
-        if (page === "rules") return App.rulesLoaded === true;
-        if (page === "settings") return App.settingsLoaded === true;
-        return false;
+        var capability = pageCapability(page);
+        return !!(
+            capability
+            && typeof capability.hasLoadedData === "function"
+            && capability.hasLoadedData()
+        );
     }
 
     function pageRefreshEvidence(page) {
-        if (page === "overview") return App.lastOverviewSnapshot || null;
-        if (page === "timeline") return App.lastTimelineData || null;
-        if (page === "statistics") return App.statisticsAcceptedPayload || null;
-        if (page === "rules") return App.lastProjectRulesData || null;
-        if (page === "settings") return App.lastSettingsStatus || null;
-        return null;
+        var capability = pageCapability(page);
+        return capability && typeof capability.refreshEvidence === "function"
+            ? capability.refreshEvidence()
+            : null;
+    }
+
+    function pageReportDate(page) {
+        var capability = pageCapability(page);
+        return capability && typeof capability.reportDate === "function"
+            ? capability.reportDate()
+            : null;
+    }
+
+    function pageIsLoading(page) {
+        var capability = pageCapability(page);
+        return !!(
+            capability
+            && typeof capability.isLoading === "function"
+            && capability.isLoading()
+        );
+    }
+
+    function pageIsEditing(page) {
+        var capability = pageCapability(page);
+        return !!(
+            capability
+            && typeof capability.isEditing === "function"
+            && capability.isEditing()
+        );
+    }
+
+    function updatePageCurrentActivity(page, activity) {
+        var capability = pageCapability(page);
+        if (capability && typeof capability.updateCurrentActivity === "function") {
+            capability.updateCurrentActivity(activity || {});
+        }
     }
 
     function markPageFresh(page, expectedEpoch) {
@@ -215,35 +250,18 @@
     }
     App.pageNeedsRefresh = pageNeedsRefresh;
 
-    function statisticsSelectionIncludesToday() {
-        var selection = App.statisticsSelection;
-        if (!selection || selection.allTime === true) return true;
-        var today = App.localTodayStr();
-        var from = String(selection.dateFrom || "");
-        var to = String(selection.dateTo || "");
-        return !!from && !!to && from <= today && to >= today;
-    }
-
     function automaticRefreshAllowedForPage(page) {
-        if (page === "timeline") {
-            return String(App.timelineDate || "") === App.localTodayStr();
+        var capability = pageCapability(page);
+        if (!capability || typeof capability.automaticRefreshAllowed !== "function") {
+            return true;
         }
-        if (page === "statistics") return statisticsSelectionIncludesToday();
-        return true;
+        return capability.automaticRefreshAllowed(App.localTodayStr());
     }
 
     function automaticRefreshScopeKey(page) {
-        if (page === "timeline") return page + "|" + String(App.timelineDate || "");
-        if (page === "statistics") {
-            var selection = App.statisticsSelection || {};
-            var filter = document.getElementById("statistics-project-filter");
-            return [
-                page,
-                selection.allTime === true ? "all" : "range",
-                String(selection.dateFrom || ""),
-                String(selection.dateTo || ""),
-                filter ? String(filter.value || "") : ""
-            ].join("|");
+        var capability = pageCapability(page);
+        if (capability && typeof capability.refreshScopeKey === "function") {
+            return String(capability.refreshScopeKey() || (page + "|"));
         }
         return page + "|";
     }
@@ -686,18 +704,20 @@
             return refreshOverview();
         },
         timeline: function (acceptedState) {
-            if (!App.timelineLoaded && !App.timelineLoading && typeof App.loadTimelineReport === "function") {
-                return App.loadTimelineReport(App.timelineDate, { showLoading: true });
+            if (!pageHasLoadedData("timeline")
+                && !pageIsLoading("timeline")
+                && typeof App.loadTimelineReport === "function") {
+                return App.loadTimelineReport(pageReportDate("timeline"), { showLoading: true });
             }
-            if (!App.timelineLoaded) return Promise.resolve();
-            if (typeof App._timelineEditingActive === "function" && App._timelineEditingActive()) {
+            if (!pageHasLoadedData("timeline")) return Promise.resolve();
+            if (pageIsEditing("timeline")) {
                 refreshCurrentActivityFromState(acceptedState || App.lastRefreshState);
                 return Promise.resolve();
             }
             return refreshTimeline();
         },
         statistics: function (_acceptedState, options) {
-            if (!App.statisticsLoaded && typeof App.initStatisticsDefaults === "function") {
+            if (!pageHasLoadedData("statistics") && typeof App.initStatisticsDefaults === "function") {
                 App.initStatisticsDefaults();
             }
             return typeof App.loadStatisticsExportSummary === "function"
@@ -745,7 +765,7 @@
         var statePromise = state && state.ok === true
             ? Promise.resolve(state)
             : App.bridge.getRefreshState(
-                refreshPage === "timeline" ? App.timelineDate : null
+                refreshPage === "timeline" ? pageReportDate("timeline") : null
             ).then(function (result) {
                 return App.handleResult(result, function () { return null; });
             });
@@ -842,7 +862,10 @@
         }
         if (pageTarget) pageTarget.classList.add("active");
         App.currentPage = pageId;
-        liveRuntimeStore.setScope(pageId, pageId === "timeline" ? App.timelineDate : null);
+        liveRuntimeStore.setScope(
+            pageId,
+            pageId === "timeline" ? pageReportDate("timeline") : null
+        );
         refreshCurrentActivityFromState(App.lastRefreshState, { forceRender: true });
         if (!pageNeedsRefresh(pageId)) return;
         refreshActivePage(App.lastRefreshState, { navigation: true }, pageId).catch(function () {
@@ -934,13 +957,10 @@
 
     function updateCurrentActivityCacheFromRuntime(runtime) {
         if (!runtime) return;
-        if (App.currentPage === "overview") {
-            if (!App.lastOverviewSnapshot) App.lastOverviewSnapshot = {};
-            App.lastOverviewSnapshot.current_activity = runtime.currentActivity || {};
-        } else if (App.currentPage === "timeline") {
-            if (!App.lastTimelineData) App.lastTimelineData = {};
-            App.lastTimelineData.current_activity = runtime.currentActivity || {};
-        }
+        updatePageCurrentActivity(
+            App.currentPage || "overview",
+            runtime.currentActivity || {}
+        );
     }
 
     function currentActivityRenderIdentity(runtime) {
@@ -981,8 +1001,14 @@
             return App.activePageRefreshPromise || Promise.resolve();
         }
         App.refreshCheckInFlight = true;
-        var token = App.requestCoordinator.beginLatest("heartbeat", App.currentPage + "|" + (App.timelineDate || ""));
-        return App.bridge.getRefreshState(App.currentPage === "timeline" ? App.timelineDate : null).then(function (result) {
+        var timelineDate = pageReportDate("timeline");
+        var token = App.requestCoordinator.beginLatest(
+            "heartbeat",
+            App.currentPage + "|" + (timelineDate || "")
+        );
+        return App.bridge.getRefreshState(
+            App.currentPage === "timeline" ? timelineDate : null
+        ).then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return;
             var state = App.handleResult(result, function () { return null; });
             if (!state) return;
@@ -1112,7 +1138,7 @@
         App.startupAfterPrivacyPromise = Promise.resolve()
             .then(function () {
                 return App.bridge.getRefreshState(
-                    App.currentPage === "timeline" ? App.timelineDate : null
+                    App.currentPage === "timeline" ? pageReportDate("timeline") : null
                 );
             })
             .then(function (result) {
