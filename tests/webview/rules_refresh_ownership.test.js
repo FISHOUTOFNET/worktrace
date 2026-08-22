@@ -76,6 +76,24 @@ test("Rules ignores live-only changes and silently reconciles relevant visible c
   assert.equal(App.rulesRefreshPending, false);
 });
 
+test("Rules keeps visible structure-only changes pending until re-entry", async () => {
+  const { App, loadingStates, requests } = harness();
+  App.currentPage = "rules";
+  App.rulesLoaded = true;
+
+  await App.rules.onDataChanged({
+    source: "refresh-state",
+    structureChanged: true,
+  });
+  assert.equal(requests(), 0);
+  assert.equal(App.rulesRefreshPending, true);
+
+  await App.rules.onPageEntered();
+  assert.equal(requests(), 1);
+  assert.deepEqual(loadingStates, []);
+  assert.equal(App.rulesRefreshPending, false);
+});
+
 test("Rules defers hidden invalidation and silently refreshes on re-entry", async () => {
   const { App, loadingStates, requests } = harness();
   App.rulesLoaded = true;
