@@ -176,12 +176,14 @@ def test_rules_keep_search_and_sort_fixed_while_list_region_scrolls():
     index = _resource("index_fd_work_v5.html")
 
     scroll_region = _rule(final, ".rules-scroll-region")
+    assert "position: relative" in scroll_region
     assert "flex: 1 1 auto" in scroll_region
     assert "min-height: 0" in scroll_region
     assert "overflow: auto" in scroll_region
 
-    wrapper = '<div class="rules-scroll-region"><div id="rules-list" class="rules-list"></div><div id="rules-empty" class="empty-state" hidden><strong>暂无项目</strong></div></div>'
-    assert wrapper in index
+    rules_page = index[index.index('id="page-rules"') : index.index('id="page-settings"')]
+    assert rules_page.index('class="rules-scroll-region"') < rules_page.index('id="rules-loading"')
+    assert rules_page.index('id="rules-loading"') < rules_page.index('id="rules-list"')
 
 
 def test_settings_keep_title_and_categories_fixed_while_content_scrolls():
@@ -234,16 +236,32 @@ def test_timeline_conditional_actions_keep_stable_nonempty_operation_slots():
     )
 
 
-def test_loading_feedback_does_not_resize_rendered_timeline_or_settings():
+def test_loading_feedback_stays_inside_content_without_resizing_pages():
+    base = _resource("styles.css")
     final = _resource("ui_components.css")
+    index = _resource("index_fd_work_v5.html")
 
-    timeline_loading = _rule(final, "#timeline-loading")
+    overlay = _rule(final, ".content-loading-overlay")
+    timeline_workspace = _rule(base, ".timeline-workspace")
+    rules_region = _rule(final, ".rules-scroll-region")
     settings_loading = _rule(final, "#settings-loading")
 
-    assert "flex: 0 0 0" in timeline_loading
-    assert "height: 0" in timeline_loading
-    assert "min-height: 0" in timeline_loading
-    assert "overflow: visible" in timeline_loading
+    assert "position: absolute" in overlay
+    assert "inset: 0" in overlay
+    assert "display: grid" in overlay
+    assert "pointer-events: none" in overlay
+    assert "position: relative" in timeline_workspace
+    assert "position: relative" in rules_region
+
+    timeline_page = index[index.index('id="page-timeline"') : index.index('id="page-statistics"')]
+    assert timeline_page.index('class="timeline-workspace"') < timeline_page.index('id="timeline-loading"')
+    assert timeline_page.index('id="timeline-loading"') < timeline_page.index('id="timeline-sessions-list"')
+    assert 'id="timeline-loading" class="content-loading-overlay"' in timeline_page
+    assert 'class="skeleton"' not in timeline_page
+
+    rules_page = index[index.index('id="page-rules"') : index.index('id="page-settings"')]
+    assert 'id="rules-loading" class="content-loading-overlay"' in rules_page
+    assert 'class="skeleton"' not in rules_page
 
     assert "height: 0" in settings_loading
     assert "min-height: 0" in settings_loading
