@@ -90,6 +90,11 @@ function harness() {
     if (timer) timer.cancelled = true;
   };
 
+  const lifecycleSource = fs.readFileSync(
+    path.join(__dirname, "../../worktrace/webview_ui/js/page_lifecycle.js"),
+    "utf8"
+  );
+  vm.runInNewContext(lifecycleSource, context, { filename: "page_lifecycle.js" });
   const source = fs.readFileSync(
     path.join(__dirname, "../../worktrace/webview_ui/js/init_fd_work_v5.js"),
     "utf8"
