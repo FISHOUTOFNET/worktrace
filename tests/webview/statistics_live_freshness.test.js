@@ -233,16 +233,15 @@ test("statistics report boundary freezes the old live target without issuing a s
   const { App, setRuntime } = harness();
   setRuntime(runtimeState("structure-1", 1, "live-1"));
   App.currentPage = "statistics";
-  let suspended = 0;
+  App.statisticsLiveTickerSuspended = false;
   let statisticsFetches = 0;
-  App.suspendStatisticsLiveTicker = () => { suspended += 1; };
   App.bridge = {
     getStatisticsExportSummary() { statisticsFetches += 1; return Promise.resolve({}); },
   };
 
   App.acceptRefreshStateRuntime({ runtime: runtimeState("structure-2", 2, "live-2") });
 
-  assert.equal(suspended, 1);
+  assert.equal(App.statisticsLiveTickerSuspended, true);
   assert.equal(statisticsFetches, 0);
   assert.equal(App.backgroundStatisticsRefresh, undefined);
 });
@@ -251,12 +250,11 @@ test("live revision alone neither freezes nor refetches statistics", () => {
   const { App, setRuntime } = harness();
   setRuntime(runtimeState("structure-1", 1, "live-1"));
   App.currentPage = "statistics";
-  let suspended = 0;
-  App.suspendStatisticsLiveTicker = () => { suspended += 1; };
+  App.statisticsLiveTickerSuspended = false;
 
   App.acceptRefreshStateRuntime({ runtime: runtimeState("structure-1", 1, "live-2") });
 
-  assert.equal(suspended, 0);
+  assert.equal(App.statisticsLiveTickerSuspended, false);
 });
 
 test("statistics local ticker stops while an activity-boundary sync is pending", () => {
