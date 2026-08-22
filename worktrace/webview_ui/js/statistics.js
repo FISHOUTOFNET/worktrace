@@ -132,9 +132,9 @@
     App.patchStatisticsLiveSummary = patchStatisticsLiveSummary;
 
     function applyStatisticsLocalTicker() {
-        if (App.currentPage !== "statistics" || App.statisticsLiveTickerSuspended === true) return;
+        if (App.currentPage !== "statistics" || App.statisticsLiveTickerSuspended === true) return null;
         var accepted = App.statisticsAcceptedPayload;
-        if (!accepted || !accepted.summary || !accepted.filters) return;
+        if (!accepted || !accepted.summary || !accepted.filters) return null;
         var liveTarget = accepted.exportTicket && accepted.exportTicket.live_target;
         var summary = statisticsLiveSummaryAtNow(accepted.summary, Date.now(), liveTarget);
         var delta = nonNegativeInt(summary && summary._live_delta_seconds);
@@ -143,8 +143,18 @@
                 || accepted.exportTicket && accepted.exportTicket.revision || ""),
             String(delta)
         ].join("|");
-        if (App.statisticsLastLiveRenderKey === renderKey) return;
-        if (patchStatisticsLiveSummary(summary)) App.statisticsLastLiveRenderKey = renderKey;
+        if (App.statisticsLastLiveRenderKey === renderKey) return null;
+        if (patchStatisticsLiveSummary(summary)) {
+            App.statisticsLastLiveRenderKey = renderKey;
+            return null;
+        }
+        if (liveTarget && liveTarget.enabled === true && delta > 0) {
+            return {
+                refreshRequired: true,
+                reason: "statistics_live_projection_mismatch"
+            };
+        }
+        return null;
     }
     App.applyStatisticsLocalTicker = applyStatisticsLocalTicker;
 
@@ -182,6 +192,12 @@
         App.statisticsLastLiveRenderKey = "";
     }
     App.resumeStatisticsLiveTicker = resumeStatisticsLiveTicker;
+
+    function onStatisticsRuntimeTransition(change) {
+        change = change || {};
+        if (change.source !== "refresh-state" || change.reportStructureChanged !== true) return;
+        suspendStatisticsLiveTicker();
+    }
 
     function validateStatisticsDateRange(dateFrom, dateTo) {
         if (!dateFrom || !dateTo) return "请选择完整日期范围";
@@ -807,6 +823,7 @@
     }
     App.statistics = Object.freeze({
         applyLocalTick: applyStatisticsLocalTicker,
+        onRuntimeTransition: onStatisticsRuntimeTransition,
         resetGeneration: resetStatisticsGeneration
     });
 })();
