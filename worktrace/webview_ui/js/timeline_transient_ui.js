@@ -3,6 +3,15 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
+    function focusTransientTarget(target) {
+        if (!target || typeof target.focus !== "function") return;
+        if (typeof App.focusWithoutTransientUi === "function") {
+            App.focusWithoutTransientUi(target);
+            return;
+        }
+        target.focus();
+    }
+
     function openTimelineDrawer(focusTarget) {
         if (!window.matchMedia || !window.matchMedia("(max-width: 959px)").matches) return;
         var pane = document.getElementById("timeline-details-pane");
@@ -12,7 +21,7 @@
         pane.classList.add("drawer-open");
         if (backdrop) { backdrop.hidden = false; backdrop.classList.add("open"); }
         var target = focusTarget || document.getElementById("timeline-details-close");
-        if (target && target.focus) target.focus();
+        focusTransientTarget(target);
     }
     App.openTimelineDrawer = openTimelineDrawer;
 
@@ -24,7 +33,7 @@
         if (backdrop) { backdrop.classList.remove("open"); backdrop.hidden = true; }
         var restore = App.timelineDrawerRestoreFocus;
         App.timelineDrawerRestoreFocus = null;
-        if (options.restoreFocus !== false && restore && restore.focus) restore.focus();
+        if (options.restoreFocus !== false) focusTransientTarget(restore);
     }
     App.closeTimelineDrawer = closeTimelineDrawer;
 
@@ -34,7 +43,7 @@
         var button = document.getElementById("timeline-advanced-toggle");
         if (menu) menu.hidden = true;
         if (button) button.setAttribute("aria-expanded", "false");
-        if (options.restoreFocus !== false && button && button.focus) button.focus();
+        if (options.restoreFocus !== false) focusTransientTarget(button);
     }
     App.closeTimelineAdvancedMenu = closeTimelineAdvancedMenu;
 
@@ -54,7 +63,7 @@
         menu.hidden = false;
         button.setAttribute("aria-expanded", "true");
         var first = menu.querySelector("button:not([hidden]):not([disabled])");
-        if (first) first.focus();
+        if (first) focusTransientTarget(first);
     };
 
     App.initTimelineAccessibility = function () {
@@ -100,4 +109,13 @@
         }
     }
     App.resetTimelineTransientUi = resetTimelineTransientUi;
+
+    App.timelineTransientUi = Object.freeze({
+        onShellHidden: function () {
+            // Shell hide dismisses only presentation-only context menus. The
+            // responsive drawer and editor draft are user work and must survive.
+            dismissTimelineContextTransientUi();
+        },
+        onShellVisible: function () {}
+    });
 })();
