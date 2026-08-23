@@ -227,7 +227,7 @@
         if (sessionView && sessionView.state === "auth_required") {
             connectionReason = "填入前将先登录 FD Work。";
         } else if (sessionView && sessionView.state === "retryable") {
-            connectionReason = "填入前将先重新连接 FD Work。";
+            connectionReason = sessionView.statusText + "；填入前将先重新连接 FD Work。";
         }
         return {
             enabled: true,
