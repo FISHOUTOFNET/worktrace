@@ -20,3 +20,29 @@ jobs:
       revision: ${{ github.event.pull_request.head.sha || github.sha }}
       run_node_tests: true
       run_build_smoke: ${{ github.event_name == 'pull_request' }}
+
+  timeline-asset-revisions:
+    name: Synchronize timeline asset revisions
+    if: github.event_name == 'pull_request' && github.head_ref == 'codex/timeline-js-governance'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Normalize and synchronize revisions
+        shell: bash
+        run: |
+          if ! grep -q '?v=governance' worktrace/webview_ui/index_fd_work_v5.html; then
+            echo 'No placeholder revisions remain'
+            exit 0
+          fi
+          sed -i 's/?v=governance//g' worktrace/webview_ui/index_fd_work_v5.html
+          python scripts/sync_webview_asset_revisions.py --write
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add worktrace/webview_ui/index_fd_work_v5.html
+          git commit -m "chore: sync timeline asset revisions"
+          git push origin HEAD:${{ github.head_ref }}
