@@ -100,7 +100,7 @@ def test_fd_work_status_owner_notifies_host_instead_of_pages() -> None:
 
 
 def test_settings_presentation_does_not_coordinate_timeline_or_restore_prefixes() -> None:
-    source = read_js("settings.js")
+    source = read_js("settings_presentation.js")
     fd_work_toggle = func_body(source, "renderFDWorkToggle")
     status = func_body(source, "renderSettingsStatus")
 

@@ -115,7 +115,6 @@ function configureReadySession(App, element) {
   App.timelineCompositionActive = false;
   App.mutationState = "idle";
   App.fdWorkOpenPromise = null;
-  App.lastSettingsStatus = { fd_work: { supported: true, enabled: true } };
   const project = element("edit-project-select");
   project.value = "17";
   project.options = [{ textContent: "CASE-001" }];

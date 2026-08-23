@@ -7,8 +7,10 @@ JS = ROOT / "worktrace" / "webview_ui" / "js"
 
 def test_settings_uses_single_client_generation_reset():
     source = (JS / "settings.js").read_text(encoding="utf-8")
+    backup = (JS / "settings_backup_recovery.js").read_text(encoding="utf-8")
     assert "resetFrontendAfterLocalDataReplacement" not in source
-    assert source.count('App.resetClientGeneration("database_replacement")') == 2
+    assert source.count('App.resetClientGeneration("database_replacement")') == 1
+    assert backup.count("deps.afterDataReplacement()") == 2
     assert "database_clear" not in source
     assert "secure_import" not in source
     assert "clear_all_local_data" not in source
@@ -64,5 +66,5 @@ def test_first_run_notice_failure_remains_retryable():
     end = source.index("App.loadFirstRunNotice = loadFirstRunNotice", start)
     body = source[start:end]
     failure_check = body.index("if (!result || result.ok === false)")
-    loaded_assignment = body.index("App.firstRunNoticeLoaded = true")
+    loaded_assignment = body.index("privacyNoticeLoaded = true")
     assert failure_check < loaded_assignment

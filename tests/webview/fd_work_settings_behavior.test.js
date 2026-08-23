@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { loadSettingsModules } = require("./settings_test_helpers");
 
 function harness() {
   const elements = new Map();
@@ -26,16 +27,6 @@ function harness() {
   vm.createContext(context);
   const App = context.window.WorkTraceApp;
   Object.assign(App, {
-    settingsLoaded: true,
-    settingsLoading: false,
-    settingsWriteInProgress: false,
-    launchAtLoginWriteInProgress: false,
-    fdWorkSettingsWriteInProgress: false,
-    settingsBackupExportInProgress: false,
-    settingsBackupManifestInProgress: false,
-    settingsBackupImportInProgress: false,
-    settingsClearAllInProgress: false,
-    recoveryInProgress: false,
     handleResult(result, onError) {
       if (!result || result.ok === false) { onError((result && result.error) || "failed"); return null; }
       return result;
@@ -47,11 +38,7 @@ function harness() {
     context,
     { filename: "fd_work_v5.js" },
   );
-  vm.runInContext(
-    fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/settings.js"), "utf8"),
-    context,
-    { filename: "settings.js" },
-  );
+  loadSettingsModules(context);
   return { App, element };
 }
 
@@ -64,7 +51,9 @@ test("FD Work settings status renders disabled by default", () => {
 
 test("FD Work settings write failure restores authoritative backend state", async () => {
   const { App, element } = harness();
-  App.lastSettingsStatus = { fd_work: { supported: true, enabled: false } };
+  let acceptedStatuses = 0;
+  App.receiveFDWorkStatus = () => { acceptedStatuses += 1; };
+  App.renderSettingsStatus({ fd_work: { supported: true, enabled: false } });
   element("settings-fd-work-toggle").checked = true;
   App.bridge = {
     setFDWorkEnabled: () => Promise.resolve({
@@ -79,6 +68,7 @@ test("FD Work settings write failure restores authoritative backend state", asyn
   assert.equal(element("settings-fd-work-toggle").checked, false);
   assert.equal(element("settings-fd-work-toggle-status").textContent, "关闭");
   assert.match(element("settings-error").textContent, /write failed/);
+  assert.equal(acceptedStatuses, 1, "authoritative failure status is accepted once");
 });
 
 test("FD Work startup timeout has a stable settings message and reconnect action", () => {

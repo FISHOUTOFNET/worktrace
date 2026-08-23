@@ -721,8 +721,8 @@
         bind("toggle-pause-btn", "click", togglePause);
         bind("refresh-btn", "click", App.refreshAll);
         if (App.pageLifecycle) App.pageLifecycle.bindEvents();
-        bind("first-run-notice-accept-btn", "click", App.acceptFirstRunNotice);
-        bind("first-run-notice-retry-btn", "click", App.retryFirstRunNotice);
+        bind("first-run-notice-accept-btn", "click", App.settings.privacy.accept);
+        bind("first-run-notice-retry-btn", "click", App.settings.privacy.retry);
     }
     App.initButtons = initButtons;
 
@@ -908,31 +908,11 @@
     }
     App.continueStartupAfterPrivacyGate = continueStartupAfterPrivacyGate;
 
-    // Retry for privacy notice load failure; cannot bypass authorization.
-    function retryFirstRunNotice() {
-        if (App.firstRunNoticeLoading) return Promise.resolve(false);
-        App.firstRunNoticeLoaded = false;
-        return App.loadFirstRunNotice({ force: true }).then(function () {
-            if (App.privacyGateState === "accepted_ready") {
-                return continueStartupAfterPrivacyGate();
-            }
-            // acceptance_required: the gate is shown again by loadFirstRunNotice.
-            // load_failed: the blocking error is shown again. Either way, do
-            // not continue startup.
-            return false;
-        });
-    }
-    App.retryFirstRunNotice = retryFirstRunNotice;
-
     function init() {
         initNav();
         initButtons();
-        App.loadFirstRunNotice().then(function () {
-            // Only accepted_ready continues startup; other states stay fail-closed.
-            if (App.privacyGateState === "accepted_ready") {
-                return continueStartupAfterPrivacyGate();
-            }
-            return null;
+        App.settings.privacy.load().then(function (ready) {
+            return ready ? continueStartupAfterPrivacyGate() : null;
         });
     }
     App.init = init;

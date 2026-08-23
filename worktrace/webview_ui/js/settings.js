@@ -1,642 +1,120 @@
-// WorkTrace WebView frontend — Settings and Privacy capabilities.
+// WorkTrace WebView frontend — Settings page coordinator.
 (function () {
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
+    var presentation = App.settingsPresentation;
+    var transientUi = App.settingsTransientUi;
 
     var ERROR_MESSAGE = "加载设置状态失败";
-    var WRITE_ERROR_MESSAGE = "设置剪贴板记录失败";
-    var LAUNCH_AT_LOGIN_ERROR_MESSAGE = "设置登录启动失败";
-    var BACKUP_EXPORT_ERROR_MESSAGE = "导出加密备份失败";
-    var BACKUP_MANIFEST_ERROR_MESSAGE = "读取备份清单失败";
-    var BACKUP_IMPORT_ERROR_MESSAGE = "导入加密备份失败";
-    var CLEAR_ALL_ERROR_MESSAGE = "清空本地数据失败";
     var FIRST_RUN_NOTICE_LOAD_ERROR = "隐私说明加载失败。为保护隐私，有迹暂不会启动记录。请点击“重新加载”重试。";
     var FIRST_RUN_NOTICE_ACCEPT_ERROR = "确认隐私说明失败";
-    var IMPORT_CONFIRM_LITERAL = "导入并替换";
-    var CLEAR_CONFIRM_LITERAL = "清空本地数据";
-    var settingsPrivacyNoticeViewToken = 0;
-    var settingsPrivacyNoticeReturnFocus = null;
-    var privacyNoticeViewLifecycleBound = false;
-    var settingsBackupManifestViewToken = 0;
 
-    function element(id) { return document.getElementById(id); }
+    var settingsSnapshot = null;
+    var settingsLoaded = false;
+    var settingsLoading = false;
+    var settingsRequestToken = 0;
+    var settingsLoadPromise = null;
+    var settingsRefreshPending = false;
 
-    function showSettingsError(message) {
-        var banner = element("settings-error");
-        if (!banner) return;
-        banner.hidden = !message;
-        banner.textContent = message || ERROR_MESSAGE;
-    }
-    App.showSettingsError = showSettingsError;
-    App.clearSettingsError = function () { showSettingsError(""); };
+    var privacyGateState = "loading";
+    var privacyNoticeLoaded = false;
+    var privacyNoticeLoading = false;
+    var privacyNoticeAccepting = false;
+    var privacyNoticeRequestToken = 0;
 
-    if (typeof App.settingsRefreshPending !== "boolean") App.settingsRefreshPending = false;
-    if (!App.settingsLoadPromise) App.settingsLoadPromise = null;
-
-    function settingsRefreshBlocked() {
-        return !!(
-            App.settingsWriteInProgress
-            || App.launchAtLoginWriteInProgress
-            || App.fdWorkSettingsWriteInProgress
-            || App.settingsBackupExportInProgress
-            || App.settingsBackupManifestInProgress
-            || App.settingsBackupImportInProgress
-            || App.settingsClearAllInProgress
-            || App.recoveryInProgress
-        );
+    function settingsViewState(fdWorkStatus) {
+        return {
+            fdWorkStatus: fdWorkStatus || App.fdWorkStatus
+                || settingsSnapshot && settingsSnapshot.fd_work || null,
+            blockingOperation: operations ? operations.hasBlockingOperation() : false,
+            loaded: settingsLoaded,
+            loading: settingsLoading,
+            operation: operations ? operations.operationName() : "",
+            operations: operations ? operations.operationNames() : []
+        };
     }
 
-    function anySettingsOperationInProgress() {
-        return !!(
-            App.settingsLoading
-            || App.settingsWriteInProgress
-            || App.launchAtLoginWriteInProgress
-            || App.fdWorkSettingsWriteInProgress
-            || App.settingsBackupExportInProgress
-            || App.settingsBackupManifestInProgress
-            || App.settingsBackupImportInProgress
-            || App.settingsClearAllInProgress
-            || App.recoveryInProgress
-        );
-    }
-    App.anySettingsOperationInProgress = anySettingsOperationInProgress;
-
-    function setDisabled(id, disabled) {
-        var target = element(id);
-        if (target) target.disabled = !!disabled;
+    function syncSettingsPresentation() {
+        presentation.setSettingsLoading(settingsLoading);
+        presentation.setSettingsControlsState(settingsSnapshot, settingsViewState());
     }
 
-    function preservePasswordSelection(input, action) {
-        if (!input) return;
-        var start = input.selectionStart;
-        var end = input.selectionEnd;
-        var direction = input.selectionDirection;
-        action();
-        if (
-            typeof input.setSelectionRange === "function"
-            && typeof start === "number"
-            && typeof end === "number"
-        ) {
-            try { input.setSelectionRange(start, end, direction || "none"); } catch (error) {}
+    function renderSettingsSnapshot() {
+        if (settingsSnapshot) {
+            presentation.renderSettingsStatus(settingsSnapshot, settingsViewState());
+        } else {
+            syncSettingsPresentation();
         }
     }
 
-    function setPasswordFieldVisible(button, visible) {
-        if (!button) return false;
-        var input = element(button.dataset ? button.dataset.passwordInput : "");
-        var allowed = !!visible && !button.disabled && !!input && !input.disabled;
-        if (input) {
-            preservePasswordSelection(input, function () {
-                input.type = allowed ? "text" : "password";
-            });
-        }
-        button.setAttribute("aria-pressed", allowed ? "true" : "false");
-        return allowed;
-    }
-    App.setPasswordFieldVisible = setPasswordFieldVisible;
-
-    function hideAllPasswordFields() {
-        if (typeof document.querySelectorAll !== "function") return;
-        var buttons = document.querySelectorAll(".password-reveal-button");
-        for (var index = 0; index < buttons.length; index++) {
-            setPasswordFieldVisible(buttons[index], false);
-        }
-    }
-    App.hideAllPasswordFields = hideAllPasswordFields;
-
-    function initPasswordRevealControls() {
-        if (App.passwordRevealControlsBound) return;
-        App.passwordRevealControlsBound = true;
-        if (typeof document.querySelectorAll !== "function") return;
-        var buttons = document.querySelectorAll(".password-reveal-button");
-        Array.prototype.forEach.call(buttons, function (button) {
-            button.addEventListener("pointerdown", function (event) {
-                if (!setPasswordFieldVisible(button, true)) return;
-                event.preventDefault();
-                if (typeof button.setPointerCapture === "function") {
-                    try { button.setPointerCapture(event.pointerId); } catch (error) {}
-                }
-            });
-            ["pointerup", "pointercancel", "pointerleave", "lostpointercapture", "blur"]
-                .forEach(function (eventName) {
-                    button.addEventListener(eventName, function () {
-                        setPasswordFieldVisible(button, false);
-                    });
-                });
-            button.addEventListener("keydown", function (event) {
-                if (event.key === " " || event.key === "Enter") {
-                    event.preventDefault();
-                    setPasswordFieldVisible(button, true);
-                } else if (event.key === "Escape") {
-                    setPasswordFieldVisible(button, false);
-                }
-            });
-            button.addEventListener("keyup", function (event) {
-                if (event.key === " " || event.key === "Enter") {
-                    event.preventDefault();
-                    setPasswordFieldVisible(button, false);
-                }
-            });
-            button.addEventListener("click", function (event) {
-                event.preventDefault();
-                setPasswordFieldVisible(button, false);
-            });
-        });
-        if (typeof window.addEventListener === "function") {
-            window.addEventListener("blur", hideAllPasswordFields);
-            window.addEventListener("pagehide", hideAllPasswordFields);
-        }
-    }
-    App.initPasswordRevealControls = initPasswordRevealControls;
-
-    function setSettingsBackupControlsDisabled(disabled) {
-        [
-            "settings-backup-export-btn",
-            "settings-backup-manifest-btn",
-            "settings-backup-passphrase",
-            "settings-backup-passphrase-reveal",
-            "settings-backup-passphrase-confirm",
-            "settings-backup-passphrase-confirm-reveal",
-            "settings-backup-import-passphrase",
-            "settings-backup-import-passphrase-reveal",
-            "settings-backup-import-btn"
-        ].forEach(function (id) { setDisabled(id, disabled); });
-        if (disabled) hideAllPasswordFields();
-    }
-    App.setSettingsBackupControlsDisabled = setSettingsBackupControlsDisabled;
-
-    function setSettingsDangerControlsDisabled(disabled) {
-        setDisabled("settings-clear-confirm", disabled);
-        setDisabled("settings-clear-local-data-btn", disabled);
-    }
-    App.setSettingsDangerControlsDisabled = setSettingsDangerControlsDisabled;
-
-    function syncRecoveryButtonState(status) {
-        var button = element("settings-recovery-btn");
-        if (!button) return;
-        var authoritative = status || App.lastSettingsStatus || {};
-        button.disabled = anySettingsOperationInProgress()
-            || authoritative.recovery_blocked !== true;
-    }
-    App.syncRecoveryButtonState = syncRecoveryButtonState;
-
-    function settingsToggleGenericBusy() {
-        return !!(
-            App.settingsLoading
-            || App.fdWorkSettingsWriteInProgress
-            || App.settingsBackupExportInProgress
-            || App.settingsBackupManifestInProgress
-            || App.settingsBackupImportInProgress
-            || App.settingsClearAllInProgress
-            || App.recoveryInProgress
-        );
-    }
-
-    function setSettingsControlsDisabled(disabled) {
-        var toggle = element("settings-clipboard-toggle");
-        var genericBusy = settingsToggleGenericBusy();
-        if (toggle) {
-            toggle.disabled = genericBusy
-                || App.settingsWriteInProgress
-                || !App.settingsLoaded;
-        }
-        var launchToggle = element("settings-launch-at-login-toggle");
-        var launchStatus = App.lastSettingsStatus
-            && App.lastSettingsStatus.launch_at_login;
-        if (launchToggle) {
-            launchToggle.disabled = genericBusy
-                || App.launchAtLoginWriteInProgress
-                || !App.settingsLoaded
-                || !(launchStatus && launchStatus.supported === true);
-        }
-        var fdWorkToggle = element("settings-fd-work-toggle");
-        var fdWorkStatus = App.lastSettingsStatus && App.lastSettingsStatus.fd_work;
-        if (fdWorkToggle) {
-            fdWorkToggle.disabled = genericBusy
-                || App.fdWorkSettingsWriteInProgress
-                || !App.settingsLoaded
-                || !(fdWorkStatus && fdWorkStatus.supported === true);
-        }
-        setSettingsBackupControlsDisabled(disabled);
-        setSettingsDangerControlsDisabled(disabled);
-        syncRecoveryButtonState();
-    }
-    App.setSettingsControlsDisabled = setSettingsControlsDisabled;
-
-    function setSettingsLoading(loading) {
-        App.settingsLoading = !!loading;
-        var loadingEl = element("settings-loading");
-        if (loadingEl) loadingEl.hidden = !loading;
-        setSettingsControlsDisabled(anySettingsOperationInProgress());
-    }
-    App.setSettingsLoading = setSettingsLoading;
-
-    function boolLabel(value) { return value ? "是" : "否"; }
-
-    function setLineText(key, text) {
-        var target = document.querySelector('#settings-status [data-settings-key="' + key + '"]');
-        if (target) target.textContent = text;
-    }
-
-    function renderLocalDataPath(status) {
-        var target = element("settings-local-data-path");
-        if (!target) return;
-        var path = String(status && status.local_data_path || "").trim();
-        target.textContent = path || "未加载";
-        target.title = path;
-    }
-    App.renderLocalDataPath = renderLocalDataPath;
-
-    function setCaptureToggleStatus(text) {
-        var target = element("settings-clipboard-toggle-status");
-        if (target) target.textContent = text;
-    }
-    App.setCaptureToggleStatus = setCaptureToggleStatus;
-
-    function renderCaptureToggle(status) {
-        var toggle = element("settings-clipboard-toggle");
-        if (!toggle) return;
-        var enabled = !!(status && status.clipboard_capture_enabled);
-        toggle.checked = enabled;
-        toggle.disabled = settingsToggleGenericBusy()
-            || App.settingsWriteInProgress
-            || !App.settingsLoaded;
-        setCaptureToggleStatus(enabled ? "开启" : "关闭");
-    }
-    App.renderCaptureToggle = renderCaptureToggle;
-
-    function setLaunchAtLoginToggleStatus(text) {
-        var target = element("settings-launch-at-login-toggle-status");
-        if (target) target.textContent = text;
-    }
-    App.setLaunchAtLoginToggleStatus = setLaunchAtLoginToggleStatus;
-
-    function renderLaunchAtLoginToggle(status) {
-        var toggle = element("settings-launch-at-login-toggle");
-        if (!toggle) return;
-        var launch = status && status.launch_at_login || {};
-        var supported = launch.supported === true;
-        toggle.checked = supported && launch.enabled === true;
-        toggle.disabled = !supported
-            || settingsToggleGenericBusy()
-            || App.launchAtLoginWriteInProgress
-            || !App.settingsLoaded;
-        setLaunchAtLoginToggleStatus(
-            supported ? (toggle.checked ? "开启" : "关闭") : "仅安装版可用"
-        );
-    }
-    App.renderLaunchAtLoginToggle = renderLaunchAtLoginToggle;
-
-    function renderFDWorkToggle(status) {
-        var toggle = element("settings-fd-work-toggle");
-        var target = element("settings-fd-work-toggle-status");
-        var reconnect = element("settings-fd-work-reconnect");
-        if (!toggle) return;
-        var fdWork = App.fdWorkStatus || status && status.fd_work || {};
-        var supported = fdWork.supported === true;
-        toggle.checked = supported && fdWork.enabled === true;
-        toggle.disabled = !supported
-            || settingsToggleGenericBusy()
-            || App.fdWorkSettingsWriteInProgress
-            || !App.settingsLoaded;
-        var statusText = typeof App.fdWorkStatusText === "function"
-            ? App.fdWorkStatusText(fdWork)
-            : (toggle.checked ? "开启" : "关闭");
-        if (statusText === "插件关闭") statusText = "关闭";
-        if (target) target.textContent = supported ? statusText : "当前不可用";
-        if (reconnect) {
-            var recoverable = supported && fdWork.enabled === true
-                && (fdWork.session_state === "probing"
-                    || fdWork.session_state === "login_required"
-                    || fdWork.session_state === "error");
-            reconnect.hidden = !recoverable;
-            reconnect.disabled = !recoverable || settingsToggleGenericBusy();
-            reconnect.textContent = fdWork.session_state === "error"
-                ? "重新连接" : "登录 FD Work";
-        }
-    }
-    App.renderFDWorkToggle = renderFDWorkToggle;
-
-    function reconnectFDWork() {
-        if (!App.bridge || typeof App.bridge.showFDWorkLogin !== "function") {
-            return Promise.resolve(false);
-        }
-        return App.bridge.showFDWorkLogin().then(function (result) {
-            if (result && result.capability_status && App.receiveFDWorkStatus) {
-                App.receiveFDWorkStatus(result.capability_status);
-            }
-            if (!result || result.ok !== true) {
-                showSettingsError(result && result.message || "打开 FD Work 失败");
-                return false;
-            }
-            App.clearSettingsError();
-            return true;
-        }).catch(function () {
-            showSettingsError("打开 FD Work 失败");
-            return false;
-        });
-    }
-    App.reconnectFDWork = reconnectFDWork;
-
-    function renderSettingsStatus(status) {
-        if (!status) return;
-        if (status.fd_work && App.receiveFDWorkStatus) {
+    function acceptSettingsSnapshot(status) {
+        if (!status || typeof status !== "object") return false;
+        settingsSnapshot = status;
+        settingsLoaded = true;
+        if (status.fd_work && typeof App.receiveFDWorkStatus === "function") {
             App.receiveFDWorkStatus(status.fd_work);
         }
-        renderCaptureToggle(status);
-        renderLaunchAtLoginToggle(status);
-        renderFDWorkToggle(status);
-        renderLocalDataPath(status);
-        setLineText(
-            "export_path_configured",
-            status.export_path_configured ? "已配置" : "未配置"
-        );
-        setLineText(
-            "maintenance_in_progress",
-            "数据库维护进行中：" + boolLabel(!!status.maintenance_in_progress)
-        );
-        setLineText(
-            "maintenance_restored",
-            "维护恢复完成：" + boolLabel(!!status.maintenance_restored)
-        );
-        setLineText(
-            "recovery_blocked",
-            "维护恢复阻断：" + boolLabel(!!status.recovery_blocked)
-        );
-        setLineText(
-            "blocked_reason",
-            "阻断原因：" + (status.blocked_reason ? String(status.blocked_reason) : "无")
-        );
-        setLineText(
-            "collector_running",
-            "采集器运行中：" + boolLabel(!!status.collector_running)
-        );
-        setLineText(
-            "collector_status",
-            "采集器状态：" + String(status.collector_status || "stopped")
-        );
-        setLineText(
-            "user_paused",
-            "用户暂停：" + boolLabel(!!status.user_paused)
-        );
-        renderRecoveryCard(status);
-        var health = element("settings-health-summary");
-        if (health) {
-            var badgeText = "正常";
-            var detail = "采集和本地存储可用";
-            if (status.recovery_blocked) {
-                badgeText = "需恢复";
-                detail = "请在高级设置中尝试恢复";
-            } else if (status.maintenance_in_progress) {
-                badgeText = "维护中";
-                detail = "维护期间其他数据操作暂时不可用";
-            } else if (!status.collector_running && !status.user_paused) {
-                badgeText = "异常";
-                detail = "请重启应用后再次检查";
-            }
-            var strong = health.querySelector("strong");
-            var small = health.querySelector("small");
-            var badge = health.querySelector(".badge");
-            if (strong) strong.textContent = "系统状态";
-            if (small) small.textContent = detail;
-            if (badge) badge.textContent = badgeText;
-        }
-        if (status.storage_model === "local_only") {
-            setLineText("storage_model", "本地优先：所有数据仅存储在本机，不上传任何远端服务器。");
-        }
-        var accepted = !!(
-            status.first_run_notice
-            && typeof status.first_run_notice === "object"
-            && status.first_run_notice.accepted
-        );
-        var noticeStatus = element("settings-privacy-notice-status");
-        if (noticeStatus) noticeStatus.textContent = accepted ? "已确认" : "未确认";
-        var statusEl = element("settings-status");
-        if (statusEl) statusEl.hidden = false;
-    }
-    App.renderSettingsStatus = renderSettingsStatus;
-
-    function setRecoveryStatus(message) {
-        var statusEl = element("settings-recovery-status");
-        if (!statusEl) return;
-        statusEl.hidden = !message;
-        statusEl.textContent = message || "";
+        presentation.renderSettingsStatus(settingsSnapshot, settingsViewState());
+        presentation.clearSettingsError();
+        return true;
     }
 
-    function renderRecoveryCard(status) {
-        var card = element("settings-recovery-card");
-        var reason = element("settings-recovery-reason");
-        if (!card) return;
-        var blocked = !!status.recovery_blocked;
-        var inProgress = !!status.maintenance_in_progress;
-        card.hidden = !blocked && !inProgress;
-        if (reason) {
-            reason.textContent = "阻断原因："
-                + (status.blocked_reason ? String(status.blocked_reason) : (inProgress ? "维护进行中" : "无"));
-        }
-        syncRecoveryButtonState(status);
-    }
-    App.renderRecoveryCard = renderRecoveryCard;
-
-    function recoverDatabaseMaintenance() {
-        if (anySettingsOperationInProgress()) return Promise.resolve(false);
-        App.recoveryInProgress = true;
-        setSettingsControlsDisabled(anySettingsOperationInProgress());
-        var button = element("settings-recovery-btn");
-        if (button) button.disabled = true;
-        setRecoveryStatus("正在尝试恢复，请勿关闭应用……");
-        App.clearGlobalAlert();
-        return App.bridge.recoverDatabaseMaintenance().then(function (result) {
-            if (!result || result.ok === false) {
-                var message = App.extractBridgeError(
-                    result,
-                    "数据库维护恢复失败，请稍后重试或联系支持。"
-                );
-                setRecoveryStatus(message);
-                if (App.showGlobalAlert) App.showGlobalAlert(message);
-                var maintenance = result && result.maintenance;
-                if (maintenance) {
-                    App.lastSettingsStatus = maintenance;
-                    return false;
-                }
-                if (typeof App.loadSettingsPrivacyStatus === "function") {
-                    return App.loadSettingsPrivacyStatus().then(function () { return false; });
-                }
-                return false;
-            }
-            setRecoveryStatus("恢复已提交，正在重新加载状态……");
-            return Promise.all([
-                App.loadSettingsPrivacyStatus(),
-                App.refreshAll ? App.refreshAll() : Promise.resolve()
-            ]).then(function () {
-                setRecoveryStatus("数据库维护恢复已完成，状态已刷新。");
-                if (App.showToast) App.showToast("数据库维护恢复已完成");
-                return true;
-            });
-        }).catch(function () {
-            var message = "恢复结果未知，正在重新读取状态……";
-            setRecoveryStatus(message);
-            if (App.showGlobalAlert) App.showGlobalAlert(message);
-            if (typeof App.loadSettingsPrivacyStatus !== "function") {
-                return false;
-            }
-            return App.loadSettingsPrivacyStatus().then(function () {
-                return false;
-            }, function () {
-                return false;
-            });
-        }).then(function (ok) {
-            App.recoveryInProgress = false;
-            resumeSettingsAfterOperation();
-            if (App.lastSettingsStatus) renderRecoveryCard(App.lastSettingsStatus);
-            return ok;
-        });
-    }
-    App.recoverDatabaseMaintenance = recoverDatabaseMaintenance;
-
-    function settingsPrivacyNoticeViewOpen() {
-        var overlay = element("first-run-notice-overlay");
-        return !!(
-            App.firstRunNoticeViewingFromSettings === true
-            && overlay
-            && overlay.hidden === false
-        );
+    function requestSettingsRefresh() {
+        settingsRefreshPending = true;
     }
 
-    function restoreSettingsPrivacyNoticeFocus(target) {
-        if (!target || typeof target.focus !== "function") return;
-        var root = document.documentElement;
-        if (!root || typeof root.contains !== "function" || root.contains(target)) target.focus();
+    function settingsRefreshBlocked() {
+        return settingsLoading || operations.isBusy();
     }
-
-    function focusSettingsPrivacyNoticeClose() {
-        var close = element("first-run-notice-close-btn");
-        if (close && !close.hidden && typeof close.focus === "function") close.focus();
-    }
-
-    function initPrivacyNoticeViewLifecycle() {
-        if (privacyNoticeViewLifecycleBound) return;
-        privacyNoticeViewLifecycleBound = true;
-        var overlay = element("first-run-notice-overlay");
-        if (overlay) {
-            overlay.addEventListener("click", function (event) {
-                if (
-                    settingsPrivacyNoticeViewOpen()
-                    && event.target === overlay
-                ) hideFirstRunNotice();
-            });
-        }
-        document.addEventListener("keydown", function (event) {
-            if (!settingsPrivacyNoticeViewOpen()) return;
-            if (event.key === "Escape") {
-                event.preventDefault();
-                hideFirstRunNotice();
-                return;
-            }
-            var dialog = element("first-run-notice-dialog");
-            if (dialog && App.trapFocus) App.trapFocus(event, dialog);
-        });
-    }
-
-    function resetSettingsSectionTransientUi(section) {
-        section = String(section || "");
-        if (section === "data") {
-            hideAllPasswordFields();
-            settingsBackupManifestViewToken += 1;
-            renderBackupManifest(null, "");
-            if (!App.settingsBackupExportInProgress) setStatusLine("settings-backup-status", "");
-            if (!App.settingsBackupImportInProgress) setStatusLine("settings-backup-import-status", "");
-            if (!App.settingsClearAllInProgress) setStatusLine("settings-clear-status", "");
-            return;
-        }
-        if (section === "advanced") {
-            var diagnostics = document.querySelector("#settings-section-advanced details");
-            if (diagnostics) diagnostics.open = false;
-            if (!App.recoveryInProgress) setStatusLine("settings-recovery-status", "");
-            return;
-        }
-        if (section === "privacy") {
-            settingsPrivacyNoticeViewToken += 1;
-            if (App.firstRunNoticeViewingFromSettings === true) {
-                hideFirstRunNotice({ restoreFocus: false });
-            }
-            settingsPrivacyNoticeReturnFocus = null;
-        }
-    }
-    App.resetSettingsSectionTransientUi = resetSettingsSectionTransientUi;
-
-    function initSettingsCategories() {
-        initPrivacyNoticeViewLifecycle();
-        var buttons = document.querySelectorAll("[data-settings-section]");
-        for (var index = 0; index < buttons.length; index++) {
-            buttons[index].addEventListener("click", function () {
-                var section = this.getAttribute("data-settings-section");
-                var previousSection = "";
-                for (var current = 0; current < buttons.length; current++) {
-                    if (buttons[current].getAttribute("aria-current") === "true") {
-                        previousSection = buttons[current].getAttribute("data-settings-section") || "";
-                        break;
-                    }
-                }
-                if (previousSection && previousSection !== section) {
-                    resetSettingsSectionTransientUi(previousSection);
-                }
-                for (var i = 0; i < buttons.length; i++) {
-                    buttons[i].removeAttribute("aria-current");
-                    var panel = element("settings-section-" + buttons[i].getAttribute("data-settings-section"));
-                    if (panel) { panel.hidden = true; panel.classList.remove("active"); }
-                }
-                this.setAttribute("aria-current", "true");
-                var target = element("settings-section-" + section);
-                if (target) { target.hidden = false; target.classList.add("active"); }
-            });
-        }
-    }
-    App.initSettingsCategories = initSettingsCategories;
 
     function loadSettingsPrivacyStatus(options) {
         options = options || {};
         var showLoading = options.showLoading === true
-            || (!App.settingsLoaded && options.showLoading !== false);
-        if (App.settingsLoadPromise) return App.settingsLoadPromise;
-        if (settingsRefreshBlocked()) {
-            App.settingsRefreshPending = true;
+            || (!settingsLoaded && options.showLoading !== false);
+        if (settingsLoadPromise) return settingsLoadPromise;
+        if (operations.isBusy()) {
+            requestSettingsRefresh();
             return Promise.resolve(null);
         }
-        if (showLoading) setSettingsLoading(true);
-        App.clearSettingsError();
-        var token = ++App.settingsRequestToken;
+        if (showLoading) {
+            settingsLoading = true;
+            syncSettingsPresentation();
+        }
+        presentation.clearSettingsError();
+        var token = ++settingsRequestToken;
         var request = App.bridge.getSettingsPrivacyStatus().then(function (result) {
-            if (token !== App.settingsRequestToken) return;
+            if (token !== settingsRequestToken) return null;
             var data = App.handleResult(result, function (message) {
-                showSettingsError(message || ERROR_MESSAGE);
+                presentation.showSettingsError(message || ERROR_MESSAGE);
             });
-            if (!data) return;
-            App.settingsLoaded = true;
-            App.lastSettingsStatus = data.status;
-            renderSettingsStatus(data.status);
-            App.settingsRefreshPending = false;
-            App.clearSettingsError();
+            if (!data) return null;
+            acceptSettingsSnapshot(data.status);
+            settingsRefreshPending = false;
+            return data.status;
         }).catch(function () {
-            if (token === App.settingsRequestToken) showSettingsError(ERROR_MESSAGE);
+            if (token === settingsRequestToken) presentation.showSettingsError(ERROR_MESSAGE);
+            return null;
         }).finally(function () {
-            if (App.settingsLoadPromise === request) App.settingsLoadPromise = null;
-            if (showLoading && token === App.settingsRequestToken) setSettingsLoading(false);
+            if (settingsLoadPromise === request) settingsLoadPromise = null;
+            if (showLoading && token === settingsRequestToken) {
+                settingsLoading = false;
+                syncSettingsPresentation();
+            }
         });
-        App.settingsLoadPromise = request;
+        settingsLoadPromise = request;
         return request;
     }
-    App.loadSettingsPrivacyStatus = loadSettingsPrivacyStatus;
 
     function refreshSettingsSilently() {
         return loadSettingsPrivacyStatus({ showLoading: false });
     }
 
     function drainSettingsRefresh() {
-        if (App.settingsRefreshPending !== true
+        if (
+            settingsRefreshPending !== true
             || App.currentPage !== "settings"
             || settingsRefreshBlocked()
-            || App.settingsLoading) {
+        ) {
             return Promise.resolve(null);
         }
         return refreshSettingsSilently();
@@ -645,7 +123,7 @@
     function onSettingsDataChanged(change) {
         change = change || {};
         if (change.settingsChanged !== true) return Promise.resolve(null);
-        App.settingsRefreshPending = true;
+        requestSettingsRefresh();
         if (change.source !== "refresh-state" || App.currentPage !== "settings") {
             return Promise.resolve(null);
         }
@@ -653,492 +131,117 @@
     }
 
     function onSettingsPageEntered() {
-        if (!App.settingsLoaded) return loadSettingsPrivacyStatus({ showLoading: true });
+        if (!settingsLoaded) return loadSettingsPrivacyStatus({ showLoading: true });
         return refreshSettingsSilently();
     }
 
-    function onSettingsRefreshRequested() {
-        return onSettingsPageEntered();
+    function onOperationStateChanged() {
+        syncSettingsPresentation();
     }
 
-    function onFDWorkStatusChanged() {
-        renderFDWorkToggle(App.lastSettingsStatus || {});
-    }
-
-    function resumeSettingsAfterOperation() {
-        setSettingsControlsDisabled(anySettingsOperationInProgress());
+    function onOperationSettled() {
+        syncSettingsPresentation();
         drainSettingsRefresh().catch(function () {});
     }
 
-    function setCaptureEnabled(enabled) {
-        if (settingsToggleGenericBusy() || App.settingsWriteInProgress) {
-            return Promise.resolve();
-        }
-        App.settingsWriteInProgress = true;
-        setSettingsControlsDisabled(true);
-        var toggle = element("settings-clipboard-toggle");
-        return App.bridge.setClipboardCaptureEnabled(enabled).then(function (result) {
-            var data = App.handleResult(result, function (message) {
-                showSettingsError(message || WRITE_ERROR_MESSAGE);
-            });
-            if (!data) {
-                if (toggle) toggle.checked = !enabled;
-                setCaptureToggleStatus(!enabled ? "开启" : "关闭");
-                return;
-            }
-            renderSettingsStatus(data.status);
-            App.clearSettingsError();
-        }).catch(function () {
-            showSettingsError(WRITE_ERROR_MESSAGE);
-            if (toggle) toggle.checked = !enabled;
-            setCaptureToggleStatus(!enabled ? "开启" : "关闭");
-        }).then(function () {
-            App.settingsWriteInProgress = false;
-            resumeSettingsAfterOperation();
-        });
-    }
-    App.setCaptureEnabled = setCaptureEnabled;
-
-    function handleCaptureToggleChange(event) {
-        var toggle = event ? event.target : element("settings-clipboard-toggle");
-        if (!toggle || toggle.disabled || App.settingsWriteInProgress) return;
-        setCaptureEnabled(!!toggle.checked);
-    }
-    App.handleCaptureToggleChange = handleCaptureToggleChange;
-
-    function setLaunchAtLoginEnabled(enabled) {
-        if (settingsToggleGenericBusy() || App.launchAtLoginWriteInProgress) {
-            return Promise.resolve();
-        }
-        App.launchAtLoginWriteInProgress = true;
-        setSettingsControlsDisabled(anySettingsOperationInProgress());
-        var toggle = element("settings-launch-at-login-toggle");
-        return App.bridge.setLaunchAtLogin(enabled).then(function (result) {
-            if (result && result.status) {
-                App.lastSettingsStatus = result.status;
-                renderSettingsStatus(result.status);
-            }
-            var data = App.handleResult(result, function (message) {
-                showSettingsError(message || LAUNCH_AT_LOGIN_ERROR_MESSAGE);
-            });
-            if (!data) return;
-            App.lastSettingsStatus = data.status;
-            renderSettingsStatus(data.status);
-            App.clearSettingsError();
-        }).catch(function () {
-            showSettingsError(LAUNCH_AT_LOGIN_ERROR_MESSAGE);
-            if (App.lastSettingsStatus) {
-                renderLaunchAtLoginToggle(App.lastSettingsStatus);
-            } else if (toggle) {
-                toggle.checked = !enabled;
-            }
-        }).then(function () {
-            App.launchAtLoginWriteInProgress = false;
-            resumeSettingsAfterOperation();
-            if (App.lastSettingsStatus) {
-                renderLaunchAtLoginToggle(App.lastSettingsStatus);
-            }
-        });
-    }
-    App.setLaunchAtLoginEnabled = setLaunchAtLoginEnabled;
-
-    function handleLaunchAtLoginToggleChange(event) {
-        var toggle = event
-            ? event.target
-            : element("settings-launch-at-login-toggle");
-        if (!toggle || toggle.disabled || App.launchAtLoginWriteInProgress) return;
-        setLaunchAtLoginEnabled(!!toggle.checked);
-    }
-    App.handleLaunchAtLoginToggleChange = handleLaunchAtLoginToggleChange;
-
-    function setFDWorkEnabled(enabled) {
-        if (settingsToggleGenericBusy() || App.fdWorkSettingsWriteInProgress) {
-            return Promise.resolve(false);
-        }
-        App.fdWorkSettingsWriteInProgress = true;
-        setSettingsControlsDisabled(anySettingsOperationInProgress());
-        return App.bridge.setFDWorkEnabled(enabled).then(function (result) {
-            if (result && result.status) {
-                App.lastSettingsStatus = result.status;
-                renderSettingsStatus(result.status);
-            }
-            var data = App.handleResult(result, function (message) {
-                showSettingsError(message || "设置 FD Work 插件失败");
-            });
-            if (!data) return false;
-            App.lastSettingsStatus = data.status;
-            renderSettingsStatus(data.status);
-            App.clearSettingsError();
-            return true;
-        }).catch(function () {
-            showSettingsError("设置 FD Work 插件失败");
-            if (App.lastSettingsStatus) renderFDWorkToggle(App.lastSettingsStatus);
-            return false;
-        }).then(function (ok) {
-            App.fdWorkSettingsWriteInProgress = false;
-            resumeSettingsAfterOperation();
-            if (App.lastSettingsStatus) renderFDWorkToggle(App.lastSettingsStatus);
-            return ok;
-        });
-    }
-    App.setFDWorkEnabled = setFDWorkEnabled;
-
-    function handleFDWorkToggleChange(event) {
-        var toggle = event ? event.target : element("settings-fd-work-toggle");
-        if (!toggle || toggle.disabled || App.fdWorkSettingsWriteInProgress) return;
-        setFDWorkEnabled(!!toggle.checked);
-    }
-    App.handleFDWorkToggleChange = handleFDWorkToggleChange;
-
-    function setStatusLine(id, text) {
-        var target = element(id);
-        if (!target) return;
-        target.hidden = !text;
-        target.textContent = text || "";
+    function afterDataReplacement() {
+        App.resetClientGeneration("database_replacement");
+        requestSettingsRefresh();
+        if (typeof App.refreshAll === "function") return Promise.resolve(App.refreshAll());
+        return Promise.resolve();
     }
 
-    function setSettingsBackupStatus(text) { setStatusLine("settings-backup-status", text); }
-    function setSettingsImportStatus(text) { setStatusLine("settings-backup-import-status", text); }
-    function setSettingsClearStatus(text) { setStatusLine("settings-clear-status", text); }
-    App.setSettingsBackupStatus = setSettingsBackupStatus;
-    App.clearSettingsBackupStatus = function () { setSettingsBackupStatus(""); };
-    App.setSettingsImportStatus = setSettingsImportStatus;
-    App.clearSettingsImportStatus = function () { setSettingsImportStatus(""); };
-    App.setSettingsClearStatus = setSettingsClearStatus;
-    App.clearSettingsClearStatus = function () { setSettingsClearStatus(""); };
+    var operations = App.createSettingsDataOperations({
+        acceptSettingsSnapshot: acceptSettingsSnapshot,
+        isLoading: function () { return settingsLoading; },
+        onOperationSettled: onOperationSettled,
+        onOperationStateChanged: onOperationStateChanged,
+        presentation: presentation,
+        renderSettingsSnapshot: renderSettingsSnapshot
+    });
 
-    function renderBackupManifest(manifest, filename) {
-        var container = element("settings-backup-manifest");
-        if (!container) return;
-        var filenameEl = container.querySelector(".settings-backup-manifest-filename");
-        var fieldsEl = container.querySelector(".settings-backup-manifest-fields");
-        if (!manifest) {
-            container.hidden = true;
-            if (filenameEl) filenameEl.textContent = "";
-            if (fieldsEl) fieldsEl.textContent = "";
-            return;
-        }
-        if (filenameEl) filenameEl.textContent = "文件：" + (filename || "");
-        if (fieldsEl) {
-            fieldsEl.textContent = "";
-            [
-                ["清单版本", manifest.version],
-                ["应用版本", manifest.app_version],
-                ["创建时间", manifest.created_at],
-                ["KDF 算法", manifest.kdf_algorithm],
-                ["载荷格式", manifest.payload_format],
-                ["载荷算法", manifest.payload_alg]
-            ].forEach(function (field) {
-                var dt = document.createElement("dt");
-                var dd = document.createElement("dd");
-                dt.textContent = field[0];
-                dd.textContent = field[1] === undefined || field[1] === null ? "" : String(field[1]);
-                fieldsEl.appendChild(dt);
-                fieldsEl.appendChild(dd);
-            });
-        }
-        container.hidden = false;
+    var backupRecovery = App.createSettingsBackupRecovery({
+        afterDataReplacement: afterDataReplacement,
+        operations: operations,
+        presentation: presentation,
+        requestSettingsRefresh: requestSettingsRefresh,
+        viewState: settingsViewState
+    });
+
+    function transientContext() {
+        return {
+            cancelManifestPreview: backupRecovery.cancelManifestPreview,
+            openPrivacyNotice: openPrivacyNoticeFromSettings,
+            operationIs: operations.operationIs
+        };
     }
-    App.renderBackupManifest = renderBackupManifest;
-    App.clearBackupManifestPreview = function () { renderBackupManifest(null, ""); };
-
-    function exportEncryptedBackup() {
-        if (anySettingsOperationInProgress()) return;
-        var passInput = element("settings-backup-passphrase");
-        var confirmInput = element("settings-backup-passphrase-confirm");
-        var passphrase = passInput ? String(passInput.value || "") : "";
-        var confirmation = confirmInput ? String(confirmInput.value || "") : "";
-        if (!passphrase.trim()) return setSettingsBackupStatus("请输入备份口令");
-        if (confirmation !== passphrase) return setSettingsBackupStatus("两次输入的备份口令不一致");
-        App.settingsBackupExportInProgress = true;
-        setSettingsControlsDisabled(true);
-        setSettingsBackupStatus("正在导出加密备份…");
-        App.bridge.exportEncryptedBackup(passphrase, confirmation).then(function (result) {
-            var data = App.handleResult(result, function (message) {
-                setSettingsBackupStatus(message || BACKUP_EXPORT_ERROR_MESSAGE);
-            });
-            if (data) setSettingsBackupStatus(data.message || ("已导出：" + (data.filename || "")));
-        }).catch(function () {
-            setSettingsBackupStatus(BACKUP_EXPORT_ERROR_MESSAGE);
-        }).then(function () {
-            if (passInput) passInput.value = "";
-            if (confirmInput) confirmInput.value = "";
-            App.settingsBackupExportInProgress = false;
-            resumeSettingsAfterOperation();
-        });
-    }
-    App.exportEncryptedBackup = exportEncryptedBackup;
-
-    function previewEncryptedBackupManifest() {
-        if (anySettingsOperationInProgress()) return;
-        var viewToken = ++settingsBackupManifestViewToken;
-        App.settingsBackupManifestInProgress = true;
-        setSettingsControlsDisabled(true);
-        setSettingsBackupStatus("正在读取备份清单…");
-        App.bridge.previewEncryptedBackupManifest().then(function (result) {
-            if (viewToken !== settingsBackupManifestViewToken) return;
-            var data = App.handleResult(result, function (message) {
-                setSettingsBackupStatus(message || BACKUP_MANIFEST_ERROR_MESSAGE);
-                renderBackupManifest(null, "");
-            });
-            if (!data) return;
-            setSettingsBackupStatus("");
-            renderBackupManifest(data.manifest, data.filename);
-        }).catch(function () {
-            if (viewToken !== settingsBackupManifestViewToken) return;
-            setSettingsBackupStatus(BACKUP_MANIFEST_ERROR_MESSAGE);
-            renderBackupManifest(null, "");
-        }).then(function () {
-            App.settingsBackupManifestInProgress = false;
-            resumeSettingsAfterOperation();
-        });
-    }
-    App.previewEncryptedBackupManifest = previewEncryptedBackupManifest;
-
-    function importEncryptedBackup() {
-        if (anySettingsOperationInProgress()) return;
-        var passInput = element("settings-backup-import-passphrase");
-        var passphrase = passInput ? String(passInput.value || "") : "";
-        if (!passphrase.trim()) return setSettingsImportStatus("请输入备份口令");
-        if (typeof App.openConfirmDialog !== "function") return;
-        return App.openConfirmDialog({
-            trigger: element("settings-backup-import-btn"),
-            title: "导入并替换本地数据",
-            confirmLabel: "选择备份并替换",
-            objectLabel: "当前项目、规则、时间记录和设置",
-            warning: "这些本地数据将被备份文件替换，且操作不可撤销。建议先导出当前数据备份。",
-            twoStep: false,
-            danger: true
-        }).then(function (confirmed) {
-            if (!confirmed || anySettingsOperationInProgress()) return false;
-            App.settingsBackupImportInProgress = true;
-            setSettingsControlsDisabled(true);
-            setSettingsImportStatus("正在导入加密备份…");
-            return App.bridge.importEncryptedBackup(
-                passphrase,
-                IMPORT_CONFIRM_LITERAL
-            ).then(function (result) {
-                var data = App.handleResult(result, function (message) {
-                    setSettingsImportStatus(message || BACKUP_IMPORT_ERROR_MESSAGE);
-                });
-                if (!data) return;
-                var tableCount = Number(data.imported_table_count || 0);
-                var rowCount = Number(data.imported_row_count || 0);
-                var message = data.message || "加密备份已导入";
-                if (tableCount > 0 || rowCount > 0) {
-                    message += "（已导入：" + tableCount + " 个数据组 / " + rowCount + " 条记录）";
-                }
-                setSettingsImportStatus(message);
-                App.resetClientGeneration("database_replacement");
-                renderBackupManifest(null, "");
-                return loadSettingsPrivacyStatus().then(function () {
-                    if (typeof App.refreshAll === "function") App.refreshAll();
-                });
-            }).catch(function () {
-                setSettingsImportStatus(BACKUP_IMPORT_ERROR_MESSAGE);
-            }).then(function () {
-                if (passInput) passInput.value = "";
-                App.settingsBackupImportInProgress = false;
-                resumeSettingsAfterOperation();
-            });
-        });
-    }
-    App.importEncryptedBackup = importEncryptedBackup;
-
-    function clearAllLocalData() {
-        if (anySettingsOperationInProgress()) return;
-        var confirmInput = element("settings-clear-confirm");
-        var confirmation = confirmInput ? String(confirmInput.value || "") : "";
-        if (confirmation.trim() !== CLEAR_CONFIRM_LITERAL) {
-            return setSettingsClearStatus("请输入确认文字：" + CLEAR_CONFIRM_LITERAL);
-        }
-        App.settingsClearAllInProgress = true;
-        setSettingsControlsDisabled(true);
-        setSettingsClearStatus("正在清空本地数据…");
-        App.bridge.clearAllLocalData(confirmation).then(function (result) {
-            var data = App.handleResult(result, function (message) {
-                setSettingsClearStatus(message || CLEAR_ALL_ERROR_MESSAGE);
-            });
-            if (!data) return;
-            setSettingsClearStatus(data.message || "本地数据已清空");
-            App.resetClientGeneration("database_replacement");
-            renderBackupManifest(null, "");
-            return loadSettingsPrivacyStatus().then(function () {
-                if (typeof App.refreshAll === "function") App.refreshAll();
-            });
-        }).catch(function () {
-            setSettingsClearStatus(CLEAR_ALL_ERROR_MESSAGE);
-        }).then(function () {
-            if (confirmInput) confirmInput.value = "";
-            App.settingsClearAllInProgress = false;
-            resumeSettingsAfterOperation();
-        });
-    }
-    App.clearAllLocalData = clearAllLocalData;
-
-    function setFirstRunNoticeError(message) { setStatusLine("first-run-notice-error", message); }
-
-    function clearChildren(target) {
-        if (!target) return;
-        while (target.firstChild) target.removeChild(target.firstChild);
-    }
-
-    function renderFirstRunNotice(notice, mode) {
-        if (!notice) return;
-        var title = element("first-run-notice-title");
-        var highlights = element("first-run-notice-highlights");
-        var text = element("first-run-notice-text");
-        var accept = element("first-run-notice-accept-btn");
-        var close = element("first-run-notice-close-btn");
-        var retry = element("first-run-notice-retry-btn");
-        if (title) title.textContent = String(notice.title || "有迹隐私说明");
-        clearChildren(highlights);
-        if (highlights && Array.isArray(notice.highlights)) {
-            notice.highlights.forEach(function (item) {
-                var li = document.createElement("li");
-                li.textContent = String(item || "");
-                highlights.appendChild(li);
-            });
-        }
-        if (text) text.textContent = String(notice.text || "");
-        if (accept) { accept.hidden = mode === "view"; accept.disabled = false; }
-        if (close) close.hidden = mode !== "view";
-        if (retry) retry.hidden = true;
-        setFirstRunNoticeError("");
-    }
-    App.renderFirstRunNotice = renderFirstRunNotice;
-
-    function showFirstRunNotice(notice, mode) {
-        App.firstRunNoticeViewingFromSettings = mode === "view";
-        renderFirstRunNotice(notice, mode);
-        var overlay = element("first-run-notice-overlay");
-        if (overlay) overlay.hidden = false;
-        if (mode === "view") focusSettingsPrivacyNoticeClose();
-    }
-    App.showFirstRunNotice = showFirstRunNotice;
-
-    function showFirstRunNoticeBlockingError(message) {
-        var title = element("first-run-notice-title");
-        var highlights = element("first-run-notice-highlights");
-        var text = element("first-run-notice-text");
-        var accept = element("first-run-notice-accept-btn");
-        var close = element("first-run-notice-close-btn");
-        var retry = element("first-run-notice-retry-btn");
-        if (title) title.textContent = "";
-        clearChildren(highlights);
-        if (text) text.textContent = "";
-        if (accept) { accept.hidden = true; accept.disabled = true; }
-        if (close) close.hidden = true;
-        if (retry) { retry.hidden = false; retry.disabled = false; }
-        setFirstRunNoticeError(message || FIRST_RUN_NOTICE_LOAD_ERROR);
-        var overlay = element("first-run-notice-overlay");
-        if (overlay) overlay.hidden = false;
-    }
-    App.showFirstRunNoticeBlockingError = showFirstRunNoticeBlockingError;
-
-    function hideFirstRunNotice(options) {
-        options = options || {};
-        var wasSettingsView = App.firstRunNoticeViewingFromSettings === true;
-        var restore = settingsPrivacyNoticeReturnFocus;
-        var overlay = element("first-run-notice-overlay");
-        if (overlay) overlay.hidden = true;
-        App.firstRunNoticeViewingFromSettings = false;
-        if (wasSettingsView) {
-            settingsPrivacyNoticeReturnFocus = null;
-            if (options.restoreFocus !== false) restoreSettingsPrivacyNoticeFocus(restore);
-        }
-    }
-    App.hideFirstRunNotice = hideFirstRunNotice;
-
-    function settleFirstRunNoticeAcceptedUi() {
-        var retry = element("first-run-notice-retry-btn");
-        var accept = element("first-run-notice-accept-btn");
-        var close = element("first-run-notice-close-btn");
-
-        setFirstRunNoticeError("");
-
-        if (retry) {
-            retry.hidden = true;
-            retry.disabled = false;
-        }
-
-        if (accept) {
-            accept.hidden = false;
-            accept.disabled = false;
-        }
-
-        if (close) close.hidden = true;
-
-        hideFirstRunNotice({ restoreFocus: false });
-    }
-    App.settleFirstRunNoticeAcceptedUi = settleFirstRunNoticeAcceptedUi;
 
     function setPrivacyGateState(state) {
-        App.privacyGateState = state;
-        App.firstRunNoticeRequired = state === "acceptance_required";
+        privacyGateState = String(state || "loading");
     }
-    App.setPrivacyGateState = setPrivacyGateState;
+
+    function privacyGateReady() { return privacyGateState === "accepted_ready"; }
 
     function loadFirstRunNotice(options) {
         var force = !!(options && options.force);
-        if (App.firstRunNoticeLoading) return Promise.resolve(App.privacyGateState === "accepted_ready");
-        if (App.firstRunNoticeLoaded && !force) {
-            return Promise.resolve(App.privacyGateState === "accepted_ready");
-        }
-        App.firstRunNoticeLoading = true;
+        if (privacyNoticeLoading) return Promise.resolve(privacyGateReady());
+        if (privacyNoticeLoaded && !force) return Promise.resolve(privacyGateReady());
+        privacyNoticeLoading = true;
         setPrivacyGateState("loading");
+        var token = ++privacyNoticeRequestToken;
         return App.bridge.getFirstRunNotice().then(function (result) {
-            App.firstRunNoticeLoading = false;
+            if (token !== privacyNoticeRequestToken) return false;
+            privacyNoticeLoading = false;
             if (!result || result.ok === false) {
                 setPrivacyGateState("load_failed");
-                showFirstRunNoticeBlockingError(
-                    App.extractBridgeError(result, FIRST_RUN_NOTICE_LOAD_ERROR)
+                transientUi.showFirstRunNoticeBlockingError(
+                    App.extractBridgeError(result, FIRST_RUN_NOTICE_LOAD_ERROR),
+                    "gate"
                 );
                 return false;
             }
-            App.firstRunNoticeLoaded = true;
+            privacyNoticeLoaded = true;
             var notice = result.notice || {};
-            var accepted = notice.accepted === true;
-            if (accepted) {
+            if (notice.accepted === true) {
                 setPrivacyGateState("accepted_ready");
-                settleFirstRunNoticeAcceptedUi();
+                transientUi.settleFirstRunNoticeAcceptedUi();
                 return true;
             }
             setPrivacyGateState("acceptance_required");
-            showFirstRunNotice(notice, "gate");
-            return true;
+            transientUi.showFirstRunNotice(notice, "gate");
+            return false;
         }).catch(function () {
-            App.firstRunNoticeLoading = false;
+            if (token !== privacyNoticeRequestToken) return false;
+            privacyNoticeLoading = false;
             setPrivacyGateState("load_failed");
-            showFirstRunNoticeBlockingError(FIRST_RUN_NOTICE_LOAD_ERROR);
+            transientUi.showFirstRunNoticeBlockingError(
+                FIRST_RUN_NOTICE_LOAD_ERROR,
+                "gate"
+            );
             return false;
         });
     }
-    App.loadFirstRunNotice = loadFirstRunNotice;
 
     function acceptFirstRunNotice() {
-        if (App.firstRunNoticeAcceptInProgress) return;
-        App.firstRunNoticeAcceptInProgress = true;
-        var accept = element("first-run-notice-accept-btn");
-        if (accept) accept.disabled = true;
-        setFirstRunNoticeError("");
+        if (privacyNoticeAccepting) return Promise.resolve(false);
+        privacyNoticeAccepting = true;
+        presentation.setFirstRunNoticeAcceptDisabled(true);
+        presentation.setFirstRunNoticeError("");
         setPrivacyGateState("accepted_starting");
-        App.bridge.acceptFirstRunNotice().then(function (result) {
+        return App.bridge.acceptFirstRunNotice().then(function (result) {
             var accepted = !!(result && result.accepted === true);
             if (accepted && result.ok === true) {
                 setPrivacyGateState("accepted_ready");
-                App.firstRunNoticeRequired = false;
-                settleFirstRunNoticeAcceptedUi();
+                transientUi.settleFirstRunNoticeAcceptedUi();
                 if (typeof App.continueStartupAfterPrivacyGate === "function") {
                     App.continueStartupAfterPrivacyGate();
                 }
                 loadSettingsPrivacyStatus();
-                return;
+                return true;
             }
             if (accepted && result.ok === false) {
                 setPrivacyGateState("accepted_start_failed");
-                App.firstRunNoticeRequired = false;
-                settleFirstRunNoticeAcceptedUi();
+                transientUi.settleFirstRunNoticeAcceptedUi();
                 var message = App.extractBridgeError(
                     result,
                     "隐私说明已确认，但记录功能未能启动。可前往设置查看原因或重试。"
@@ -1148,116 +251,62 @@
                     App.continueStartupAfterPrivacyGate();
                 }
                 loadSettingsPrivacyStatus();
-                return;
+                return true;
             }
             setPrivacyGateState("acceptance_required");
-            setFirstRunNoticeError(
+            presentation.setFirstRunNoticeError(
                 App.extractBridgeError(result, FIRST_RUN_NOTICE_ACCEPT_ERROR)
             );
+            return false;
         }).catch(function () {
             setPrivacyGateState("acceptance_required");
-            setFirstRunNoticeError(FIRST_RUN_NOTICE_ACCEPT_ERROR);
-        }).then(function () {
-            App.firstRunNoticeAcceptInProgress = false;
-            if (accept) accept.disabled = false;
+            presentation.setFirstRunNoticeError(FIRST_RUN_NOTICE_ACCEPT_ERROR);
+            return false;
+        }).then(function (accepted) {
+            privacyNoticeAccepting = false;
+            presentation.setFirstRunNoticeAcceptDisabled(false);
+            return accepted;
         });
     }
-    App.acceptFirstRunNotice = acceptFirstRunNotice;
 
-    function resetSettingsTransientUi(options) {
-        options = options || {};
-        settingsPrivacyNoticeViewToken += 1;
-        settingsBackupManifestViewToken += 1;
-        [
-            "settings-backup-passphrase",
-            "settings-backup-passphrase-confirm",
-            "settings-backup-import-passphrase",
-            "settings-clear-confirm"
-        ].forEach(function (id) {
-            var input = element(id);
-            if (input) input.value = "";
-        });
-        hideAllPasswordFields();
-        setStatusLine("settings-backup-status", "");
-        setStatusLine("settings-backup-import-status", "");
-        setStatusLine("settings-clear-status", "");
-        renderBackupManifest(null, "");
-        var diagnostics = document.querySelector("#settings-section-advanced details");
-        if (diagnostics) diagnostics.open = false;
-        if (App.firstRunNoticeViewingFromSettings === true) {
-            hideFirstRunNotice({ restoreFocus: options.restoreFocus !== false });
-        }
-        settingsPrivacyNoticeReturnFocus = null;
-        if (!App.recoveryInProgress) setStatusLine("settings-recovery-status", "");
-    }
-    App.resetSettingsTransientUi = resetSettingsTransientUi;
-
-    function privacyNoticeViewRequestCurrent(token) {
-        return token === settingsPrivacyNoticeViewToken
-            && (!App.currentPage || App.currentPage === "settings");
-    }
-
-    function showSettingsPrivacyNoticeError(message) {
-        showFirstRunNoticeBlockingError(message || FIRST_RUN_NOTICE_LOAD_ERROR);
-        var accept = element("first-run-notice-accept-btn");
-        var close = element("first-run-notice-close-btn");
-        if (accept) accept.hidden = true;
-        if (close) close.hidden = false;
-        App.firstRunNoticeViewingFromSettings = true;
-        focusSettingsPrivacyNoticeClose();
-    }
-
-    function openPrivacyNoticeFromSettings() {
-        initPrivacyNoticeViewLifecycle();
-        var token = ++settingsPrivacyNoticeViewToken;
-        settingsPrivacyNoticeReturnFocus = element("settings-privacy-notice-btn")
-            || document.activeElement;
-        return App.bridge.getFirstRunNotice().then(function (result) {
-            if (!privacyNoticeViewRequestCurrent(token)) return false;
-            if (!result || result.ok === false) {
-                showSettingsPrivacyNoticeError(
-                    (result && result.error) || FIRST_RUN_NOTICE_LOAD_ERROR
-                );
-                return false;
+    function retryFirstRunNotice() {
+        if (privacyNoticeLoading) return Promise.resolve(false);
+        privacyNoticeLoaded = false;
+        return loadFirstRunNotice({ force: true }).then(function (ready) {
+            if (ready && typeof App.continueStartupAfterPrivacyGate === "function") {
+                return App.continueStartupAfterPrivacyGate();
             }
-            showFirstRunNotice(result.notice || {}, "view");
-            return true;
-        }).catch(function () {
-            if (!privacyNoticeViewRequestCurrent(token)) return false;
-            showSettingsPrivacyNoticeError(FIRST_RUN_NOTICE_LOAD_ERROR);
             return false;
         });
     }
-    App.openPrivacyNoticeFromSettings = openPrivacyNoticeFromSettings;
 
-    function bindSettingsControl(id, event, handler) {
-        var target = element(id);
-        if (target) target.addEventListener(event, handler);
+    function openPrivacyNoticeFromSettings() {
+        var token = transientUi.beginPrivacyNoticeViewRequest();
+        return App.bridge.getFirstRunNotice().then(function (result) {
+            if (!transientUi.privacyNoticeViewRequestCurrent(token)) return false;
+            if (!result || result.ok === false) {
+                transientUi.showFirstRunNoticeBlockingError(
+                    result && result.error || FIRST_RUN_NOTICE_LOAD_ERROR,
+                    "view"
+                );
+                return false;
+            }
+            transientUi.showFirstRunNotice(result.notice || {}, "view");
+            return true;
+        }).catch(function () {
+            if (!transientUi.privacyNoticeViewRequestCurrent(token)) return false;
+            transientUi.showFirstRunNoticeBlockingError(
+                FIRST_RUN_NOTICE_LOAD_ERROR,
+                "view"
+            );
+            return false;
+        });
     }
 
     function bindSettingsEvents() {
-        bindSettingsControl("settings-clipboard-toggle", "change", App.handleCaptureToggleChange);
-        bindSettingsControl(
-            "settings-launch-at-login-toggle", "change", App.handleLaunchAtLoginToggleChange
-        );
-        bindSettingsControl("settings-fd-work-toggle", "change", App.handleFDWorkToggleChange);
-        bindSettingsControl("settings-fd-work-reconnect", "click", App.reconnectFDWork);
-        bindSettingsControl("settings-backup-export-btn", "click", App.exportEncryptedBackup);
-        bindSettingsControl(
-            "settings-backup-manifest-btn", "click", App.previewEncryptedBackupManifest
-        );
-        bindSettingsControl("settings-backup-import-btn", "click", App.importEncryptedBackup);
-        bindSettingsControl("settings-clear-local-data-btn", "click", App.clearAllLocalData);
-        bindSettingsControl("settings-clear-all-btn", "click", App.clearAllLocalData);
-        bindSettingsControl(
-            "settings-privacy-notice-btn", "click", App.openPrivacyNoticeFromSettings
-        );
-        bindSettingsControl("settings-recovery-btn", "click", App.recoverDatabaseMaintenance);
-        bindSettingsControl("first-run-notice-close-btn", "click", function () {
-            if (App.firstRunNoticeViewingFromSettings) App.hideFirstRunNotice();
-        });
-        initSettingsCategories();
-        initPasswordRevealControls();
+        operations.bindEvents();
+        backupRecovery.bindEvents();
+        transientUi.bindEvents(transientContext());
     }
 
     function settingsRuntimeRefreshIdentity(runtime) {
@@ -1273,30 +322,81 @@
     }
 
     function resetSettingsGeneration() {
-        App.settingsLoaded = false;
-        App.settingsRefreshPending = false;
-        App.settingsLoadPromise = null;
-        App.firstRunNoticeLoaded = false;
-        App.firstRunNoticeLoading = false;
-        App.settingsRequestToken = (App.settingsRequestToken || 0) + 1;
-        resetSettingsTransientUi({ restoreFocus: false });
-        setSettingsLoading(false);
+        settingsLoaded = false;
+        settingsRefreshPending = false;
+        settingsLoadPromise = null;
+        settingsLoading = false;
+        settingsRequestToken += 1;
+        privacyNoticeLoaded = false;
+        privacyNoticeLoading = false;
+        privacyNoticeRequestToken += 1;
+        transientUi.resetSettingsTransientUi(
+            { restoreFocus: false },
+            transientContext()
+        );
+        syncSettingsPresentation();
     }
+
+    function onFDWorkStatusChanged(status) {
+        presentation.renderFDWorkToggle(
+            settingsSnapshot || {},
+            settingsViewState(status)
+        );
+    }
+
+    var privacyCapability = Object.freeze({
+        accept: acceptFirstRunNotice,
+        isReady: privacyGateReady,
+        load: loadFirstRunNotice,
+        requiresAcceptance: function () { return privacyGateState === "acceptance_required"; },
+        retry: retryFirstRunNotice,
+        state: function () { return privacyGateState; }
+    });
+
     App.settings = Object.freeze({
         bindEvents: bindSettingsEvents,
+        hasLoadedData: function () { return settingsLoaded; },
+        isLoading: function () { return settingsLoading; },
+        onDataChanged: onSettingsDataChanged,
+        onFDWorkStatusChanged: onFDWorkStatusChanged,
+        onPageEntered: onSettingsPageEntered,
+        onPageLeft: function () {
+            transientUi.resetSettingsTransientUi(
+                { restoreFocus: false },
+                transientContext()
+            );
+        },
+        onRefreshRequested: onSettingsPageEntered,
+        operationName: operations.operationName,
+        privacy: privacyCapability,
+        refreshEvidence: function () { return settingsSnapshot; },
+        refreshPending: function () { return settingsRefreshPending; },
         refreshPolicy: Object.freeze({
             entryGenerations: Object.freeze(["settings", "privacy_catalog"]),
             automaticGenerations: Object.freeze(["settings", "privacy_catalog"]),
             deferred: false
         }),
-        hasLoadedData: function () { return App.settingsLoaded === true; },
-        onDataChanged: onSettingsDataChanged,
-        onFDWorkStatusChanged: onFDWorkStatusChanged,
-        onPageEntered: onSettingsPageEntered,
-        onPageLeft: function () { resetSettingsTransientUi({ restoreFocus: false }); },
-        onRefreshRequested: onSettingsRefreshRequested,
-        refreshEvidence: function () { return App.lastSettingsStatus || null; },
+        resetGeneration: resetSettingsGeneration,
         runtimeRefreshIdentity: settingsRuntimeRefreshIdentity,
-        resetGeneration: resetSettingsGeneration
+        snapshot: function () { return settingsSnapshot; }
     });
+
+    App.loadSettingsPrivacyStatus = loadSettingsPrivacyStatus;
+    App.loadFirstRunNotice = loadFirstRunNotice;
+    App.acceptFirstRunNotice = acceptFirstRunNotice;
+    App.retryFirstRunNotice = retryFirstRunNotice;
+    App.openPrivacyNoticeFromSettings = openPrivacyNoticeFromSettings;
+    App.setCaptureEnabled = operations.setCaptureEnabled;
+    App.setLaunchAtLoginEnabled = operations.setLaunchAtLoginEnabled;
+    App.setFDWorkEnabled = operations.setFDWorkEnabled;
+    App.reconnectFDWork = operations.reconnectFDWork;
+    App.setSettingsBackupControlsDisabled = function (disabled) {
+        presentation.setSettingsBackupControlsDisabled(disabled);
+        if (disabled) transientUi.hideAllPasswordFields();
+    };
+    App.exportEncryptedBackup = backupRecovery.exportEncryptedBackup;
+    App.previewEncryptedBackupManifest = backupRecovery.previewEncryptedBackupManifest;
+    App.importEncryptedBackup = backupRecovery.importEncryptedBackup;
+    App.clearAllLocalData = backupRecovery.clearAllLocalData;
+    App.recoverDatabaseMaintenance = backupRecovery.recoverDatabaseMaintenance;
 })();

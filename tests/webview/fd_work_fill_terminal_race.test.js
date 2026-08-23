@@ -108,7 +108,6 @@ function configureFDWorkSession(App, element) {
     structure_revision: "source-a",
     entries: [session],
   };
-  App.lastSettingsStatus = { fd_work: { supported: true, enabled: true } };
   App.projectsCache = [{ id: 17, name: "CASE-001", fd_work_bound: true }];
   App.timelineLastSaveFailed = false;
   App.editSaving = false;

@@ -234,7 +234,7 @@ def test_overview_uses_exact_aggregate_clocks_and_safe_error_surface() -> None:
 
 def test_startup_waits_for_privacy_notice_before_refresh_and_heartbeat() -> None:
     init_body = func_body(read_js("init_fd_work_v5.js"), "init()")
-    notice = init_body.index("App.loadFirstRunNotice()")
+    notice = init_body.index("App.settings.privacy.load()")
     continue_entry = init_body.index("continueStartupAfterPrivacyGate()")
     assert notice < continue_entry
     assert ".then(function" in init_body[notice:continue_entry]

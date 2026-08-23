@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
+const { SETTINGS_MODULES } = require("./settings_test_helpers");
 
 function deferred() {
   let resolve;
@@ -318,9 +319,6 @@ function prepareSettings() {
   const h = createHarness();
   Object.assign(h.App, {
     currentPage: "settings",
-    settingsLoaded: true,
-    recoveryInProgress: false,
-    firstRunNoticeViewingFromSettings: false,
     handleResult: (result) => result,
     extractBridgeError: (result, fallback) => result && result.error || fallback,
     clearGlobalAlert() {},
@@ -329,7 +327,7 @@ function prepareSettings() {
   });
   h.element("first-run-notice-overlay").hidden = true;
   h.element("first-run-notice-close-btn").hidden = true;
-  h.load("settings.js");
+  SETTINGS_MODULES.forEach(h.load);
   h.App.initSettingsCategories();
   return h;
 }
@@ -367,7 +365,7 @@ test("startup privacy gate stays fail-closed under Escape and backdrop clicks", 
     { accepted: false, title: "隐私说明", text: "内容", highlights: [] },
     "gate"
   );
-  assert.equal(h.App.firstRunNoticeViewingFromSettings, false);
+  assert.equal(h.App.settingsTransientUi.isNoticeViewOpen(), false);
   assert.equal(overlay.hidden, false);
 
   h.dispatchDocument("keydown", { key: "Escape" });
@@ -391,7 +389,7 @@ test("stale settings privacy notice completion cannot reopen after page reset", 
 
   assert.equal(await opening, false);
   assert.equal(overlay.hidden, true);
-  assert.equal(h.App.firstRunNoticeViewingFromSettings, false);
+  assert.equal(h.App.settingsTransientUi.isNoticeViewOpen(), false);
 });
 
 test("leaving a settings category clears presentation state without discarding form drafts", () => {

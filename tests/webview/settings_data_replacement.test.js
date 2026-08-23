@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { loadSettingsModules } = require("./settings_test_helpers");
 
 const MAINTENANCE_STATUS = {
   maintenance_in_progress: false,
@@ -66,19 +67,6 @@ function harness() {
   const App = context.window.WorkTraceApp;
   Object.assign(App, {
     currentPage: "settings",
-    settingsLoaded: false,
-    settingsLoading: false,
-    settingsRequestToken: 0,
-    settingsWriteInProgress: false,
-    settingsBackupExportInProgress: false,
-    settingsBackupManifestInProgress: false,
-    settingsBackupImportInProgress: false,
-    settingsClearAllInProgress: false,
-    firstRunNoticeLoaded: false,
-    firstRunNoticeLoading: false,
-    firstRunNoticeRequired: false,
-    firstRunNoticeAcceptInProgress: false,
-    firstRunNoticeViewingFromSettings: false,
     handleResult(result, onError) {
       if (!result || result.ok === false) {
         onError((result && result.message) || "操作失败");
@@ -113,11 +101,7 @@ function harness() {
     acceptFirstRunNotice: () => Promise.resolve({ ok: true, accepted: true, collector_started: true }),
   };
 
-  vm.runInContext(
-    fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/settings.js"), "utf8"),
-    context,
-    { filename: "settings.js" }
-  );
+  loadSettingsModules(context);
 
   return {
     App,
@@ -130,7 +114,6 @@ function harness() {
 
 test("settings renders the exact maintenance DTO without legacy aliases", () => {
   const { App, settingsLine } = harness();
-  App.settingsLoaded = true;
   App.renderSettingsStatus({
     clipboard_capture_enabled: false,
     export_path_configured: false,
@@ -175,7 +158,7 @@ test("secure import resets replacement generation, reloads settings, refreshes, 
   assert.equal(statusReads, 1);
   assert.equal(state.refreshCount, 1);
   assert.equal(element("settings-backup-import-passphrase").value, "");
-  assert.equal(App.settingsBackupImportInProgress, false);
+  assert.equal(App.settings.operationName(), "");
 });
 
 test("secure import cancellation preserves the passphrase and never enters bridge or busy", async () => {
@@ -193,7 +176,7 @@ test("secure import cancellation preserves the passphrase and never enters bridg
   await flush();
 
   assert.equal(bridgeCalls, 0);
-  assert.equal(App.settingsBackupImportInProgress, false);
+  assert.equal(App.settings.operationName(), "");
   assert.equal(element("settings-backup-import-passphrase").value, "secret");
 });
 
@@ -213,7 +196,7 @@ test("secure import confirmation calls bridge once with internal literal", async
 
   assert.deepEqual(calls, [["secret", "导入并替换"]]);
   assert.equal(element("settings-backup-import-passphrase").value, "");
-  assert.equal(App.settingsBackupImportInProgress, false);
+  assert.equal(App.settings.operationName(), "");
 });
 
 test("secure import rejection clears the passphrase and releases busy", async () => {
@@ -227,7 +210,7 @@ test("secure import rejection clears the passphrase and releases busy", async ()
   await flush();
 
   assert.equal(element("settings-backup-import-passphrase").value, "");
-  assert.equal(App.settingsBackupImportInProgress, false);
+  assert.equal(App.settings.operationName(), "");
 });
 
 test("clear-all uses the same replacement boundary and clears confirmation", async () => {
@@ -242,22 +225,32 @@ test("clear-all uses the same replacement boundary and clears confirmation", asy
   assert.deepEqual(generationResets, ["database_replacement"]);
   assert.equal(state.refreshCount, 1);
   assert.equal(element("settings-clear-confirm").value, "");
-  assert.equal(App.settingsClearAllInProgress, false);
+  assert.equal(App.settings.operationName(), "");
 });
 
-test("one Settings operation blocks every other destructive write", () => {
+test("one Settings operation blocks every other destructive write", async () => {
   const { App, element } = harness();
+  let releaseImport;
+  const importPending = new Promise((resolve) => { releaseImport = resolve; });
   let clearCalls = 0;
+  App.bridge.importEncryptedBackup = () => importPending;
   App.bridge.clearAllLocalData = () => {
     clearCalls += 1;
     return Promise.resolve({ ok: true });
   };
-  App.settingsBackupImportInProgress = true;
+  element("settings-backup-import-passphrase").value = "secret";
+  const importing = App.importEncryptedBackup();
+  await flush();
+  assert.equal(App.settings.operationName(), "backup_import");
   element("settings-clear-confirm").value = "清空本地数据";
 
-  App.clearAllLocalData();
+  const cleared = await App.clearAllLocalData();
 
+  assert.equal(cleared, false);
   assert.equal(clearCalls, 0);
+  releaseImport({ ok: false, message: "cancelled" });
+  await importing;
+  assert.equal(App.settings.operationName(), "");
 });
 
 test("backup passphrases are cleared after a rejected bridge call", async () => {
@@ -272,7 +265,7 @@ test("backup passphrases are cleared after a rejected bridge call", async () => 
 
   assert.equal(element("settings-backup-passphrase").value, "");
   assert.equal(element("settings-backup-passphrase-confirm").value, "");
-  assert.equal(App.settingsBackupExportInProgress, false);
+  assert.equal(App.settings.operationName(), "");
 });
 
 test("first-run acceptance refreshes status only after confirmed success", async () => {
@@ -282,7 +275,7 @@ test("first-run acceptance refreshes status only after confirmed success", async
   let startupContinued = 0;
   // In the new architecture, acceptFirstRunNotice delegates page refresh to
   // continueStartupAfterPrivacyGate (owned by init_fd_work_v5.js) instead of calling
-  // refreshAll directly. This harness only loads settings.js, so we stub the
+  // refreshAll directly. This harness loads the Settings owners, so we stub the
   // startup entry to verify it is invoked.
   App.continueStartupAfterPrivacyGate = () => { startupContinued += 1; return Promise.resolve(true); };
   App.bridge.getSettingsPrivacyStatus = () => {
@@ -302,8 +295,8 @@ test("first-run acceptance refreshes status only after confirmed success", async
   await flush();
   await flush();
 
-  assert.equal(App.firstRunNoticeRequired, false);
-  assert.equal(App.firstRunNoticeAcceptInProgress, false);
+  assert.equal(App.settings.privacy.requiresAcceptance(), false);
+  assert.equal(App.settings.privacy.state(), "accepted_ready");
   assert.equal(startupContinued, 1, "continueStartupAfterPrivacyGate called once");
   assert.equal(statusReads, 1);
 });

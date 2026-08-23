@@ -551,7 +551,9 @@ def test_export_cancellation_does_not_write(temp_db, tmp_path):
 def test_settings_maintenance_in_progress_shows_maintaining():
     """Settings source maps maintenance_in_progress to a concise non-failure status."""
 
-    source = (ROOT / "worktrace/webview_ui/js/settings.js").read_text(encoding="utf-8")
+    source = (ROOT / "worktrace/webview_ui/js/settings_presentation.js").read_text(
+        encoding="utf-8"
+    )
     assert 'badgeText = "维护中"' in source
     assert "维护期间其他数据操作暂时不可用" in source
     assert "数据维护失败" not in source
@@ -560,7 +562,9 @@ def test_settings_maintenance_in_progress_shows_maintaining():
 def test_settings_recovery_blocked_shows_recovery_title():
     """Settings source maps recovery_blocked to a concise recovery status."""
 
-    source = (ROOT / "worktrace/webview_ui/js/settings.js").read_text(encoding="utf-8")
+    source = (ROOT / "worktrace/webview_ui/js/settings_presentation.js").read_text(
+        encoding="utf-8"
+    )
     assert 'badgeText = "需恢复"' in source
     assert "请在高级设置中尝试恢复" in source
 
@@ -568,7 +572,9 @@ def test_settings_recovery_blocked_shows_recovery_title():
 def test_settings_collector_not_running_shows_service_title():
     """Settings source maps collector-not-running to a concise abnormal status."""
 
-    source = (ROOT / "worktrace/webview_ui/js/settings.js").read_text(encoding="utf-8")
+    source = (ROOT / "worktrace/webview_ui/js/settings_presentation.js").read_text(
+        encoding="utf-8"
+    )
     assert 'badgeText = "异常"' in source
     assert "请重启应用后再次检查" in source
 

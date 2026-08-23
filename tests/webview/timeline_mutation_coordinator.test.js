@@ -657,8 +657,6 @@ function configureFDWorkSession(App, element, overrides = {}) {
     structure_revision: "source-a",
     entries: [session],
   };
-  App.settingsLoaded = true;
-  App.lastSettingsStatus = { fd_work: { supported: true, enabled: true } };
   App.receiveFDWorkStatus({
     supported: true, enabled: true, session_state: "ready", operation: "none",
     ready: true, login_required: false, error_code: null,

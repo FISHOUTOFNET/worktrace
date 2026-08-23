@@ -234,11 +234,8 @@ test("after login the next click fills using the latest projection revision", as
 
 test("Settings composition delegates reconnect to the shared FD Work session action", () => {
   const composition = source("ui_composition.js");
-  assert.match(composition, /App\.fdWork\.ensureSession\(\)/);
-  assert.match(composition, /App\.reconnectFDWork\s*=\s*reconnectFDWorkThroughSharedSession/);
-  const adapter = composition.slice(
-    composition.indexOf("function reconnectFDWorkThroughSharedSession"),
-    composition.indexOf("App.reconnectFDWork = reconnectFDWorkThroughSharedSession")
-  );
-  assert.doesNotMatch(adapter, /App\.bridge\.showFDWorkLogin/);
+  const operations = source("settings_data_operations.js");
+  assert.doesNotMatch(composition, /App\.reconnectFDWork\s*=/);
+  assert.match(operations, /App\.fdWork\.ensureSession\(\)/);
+  assert.doesNotMatch(operations, /App\.bridge\.showFDWorkLogin/);
 });

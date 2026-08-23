@@ -27,31 +27,6 @@
     }
     App.syncFDWorkConsumers = syncFDWorkConsumers;
 
-    function reconnectFDWorkThroughSharedSession() {
-        if (!App.fdWork || typeof App.fdWork.ensureSession !== "function") {
-            if (typeof App.showSettingsError === "function") {
-                App.showSettingsError("打开 FD Work 失败");
-            }
-            return Promise.resolve(false);
-        }
-        return App.fdWork.ensureSession().then(function (result) {
-            if (!result || result.ok !== true) {
-                if (typeof App.showSettingsError === "function") {
-                    App.showSettingsError(result && result.message || "打开 FD Work 失败");
-                }
-                return false;
-            }
-            if (typeof App.clearSettingsError === "function") App.clearSettingsError();
-            return true;
-        }).catch(function () {
-            if (typeof App.showSettingsError === "function") {
-                App.showSettingsError("打开 FD Work 失败");
-            }
-            return false;
-        });
-    }
-    App.reconnectFDWork = reconnectFDWorkThroughSharedSession;
-
     function nonNegativeInt(value) {
         var parsed = parseInt(value, 10);
         return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;

@@ -11,7 +11,7 @@ pytestmark = [pytest.mark.contract, pytest.mark.webview_static]
 ROOT = Path(__file__).resolve().parents[2]
 UI_ROOT = ROOT / "worktrace" / "webview_ui"
 INDEX = UI_ROOT / "index_fd_work_v5.html"
-SETTINGS_JS = UI_ROOT / "js" / "settings.js"
+SETTINGS_PRESENTATION_JS = UI_ROOT / "js" / "settings_presentation.js"
 STYLES = UI_ROOT / "styles.css"
 
 
@@ -31,7 +31,7 @@ def test_advanced_settings_do_not_render_internal_diagnostics() -> None:
 
 
 def test_local_data_location_is_rendered_from_authoritative_status() -> None:
-    source = SETTINGS_JS.read_text(encoding="utf-8")
+    source = SETTINGS_PRESENTATION_JS.read_text(encoding="utf-8")
     assert 'element("settings-local-data-path")' in source
     assert "status.local_data_path" in source
     assert 'target.textContent = path || "未加载";' in source
@@ -42,7 +42,7 @@ def test_local_data_location_is_rendered_from_authoritative_status() -> None:
 
 def test_privacy_action_and_health_status_are_concise() -> None:
     index = INDEX.read_text(encoding="utf-8")
-    source = SETTINGS_JS.read_text(encoding="utf-8")
+    source = SETTINGS_PRESENTATION_JS.read_text(encoding="utf-8")
     assert 'id="settings-privacy-notice-btn" type="button">查看政策</button>' in index
     assert 'strong.textContent = "系统状态";' in source
     assert 'var badgeText = "正常";' in source

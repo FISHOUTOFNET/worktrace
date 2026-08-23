@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { loadSettingsModules } = require("./settings_test_helpers");
 const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
 
 // End-to-end behavior tests for the UI redesign PR (spec section 11).
@@ -129,21 +130,7 @@ function privacyHarness() {
   const { context, element } = makeBaseContext();
   const App = context.window.WorkTraceApp;
   Object.assign(App, {
-    firstRunNoticeLoaded: false,
-    firstRunNoticeLoading: false,
-    firstRunNoticeRequired: false,
-    firstRunNoticeAcceptInProgress: false,
-    firstRunNoticeViewingFromSettings: false,
-    privacyGateState: "loading",
     heartbeatTimer: null,
-    settingsLoaded: false,
-    settingsLoading: false,
-    settingsRequestToken: 0,
-    settingsWriteInProgress: false,
-    settingsBackupExportInProgress: false,
-    settingsBackupManifestInProgress: false,
-    settingsBackupImportInProgress: false,
-    settingsClearAllInProgress: false,
     handleResult(result, onError) {
       if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
       return result;
@@ -162,7 +149,7 @@ function privacyHarness() {
     getSettingsPrivacyStatus: () => Promise.resolve({ ok: true, status: {} }),
   };
   loadJs(context, "core.js");
-  loadJs(context, "settings.js");
+  loadSettingsModules(context);
   return {
     App,
     element,
@@ -188,8 +175,8 @@ test("1. privacy first launch: unaccepted notice is fail-closed, no heartbeat", 
   await App.loadFirstRunNotice();
   await flush();
 
-  assert.equal(App.privacyGateState, "acceptance_required");
-  assert.equal(App.firstRunNoticeRequired, true);
+  assert.equal(App.settings.privacy.state(), "acceptance_required");
+  assert.equal(App.settings.privacy.requiresAcceptance(), true);
   assert.equal(element("first-run-notice-overlay").hidden, false);
   assert.equal(element("first-run-notice-title").textContent, "WorkTrace 隐私说明");
   assert.equal(element("first-run-notice-text").textContent.length > 0, true);
@@ -204,7 +191,7 @@ test("1b. privacy notice load failure is fail-closed with visible error", async 
   await App.loadFirstRunNotice();
   await flush();
 
-  assert.equal(App.privacyGateState, "load_failed");
+  assert.equal(App.settings.privacy.state(), "load_failed");
   assert.equal(element("first-run-notice-overlay").hidden, false);
   assert.equal(element("first-run-notice-accept-btn").disabled, true);
   assert.equal(element("first-run-notice-accept-btn").hidden, true);
@@ -225,14 +212,14 @@ test("2. privacy confirmation success closes gate, continues via single startup 
 
   await App.loadFirstRunNotice();
   await flush();
-  assert.equal(App.firstRunNoticeRequired, true);
+  assert.equal(App.settings.privacy.state(), "acceptance_required");
 
   App.acceptFirstRunNotice();
   await flush();
   await flush();
 
-  assert.equal(App.privacyGateState, "accepted_ready");
-  assert.equal(App.firstRunNoticeRequired, false);
+  assert.equal(App.settings.privacy.state(), "accepted_ready");
+  assert.equal(App.settings.privacy.isReady(), true);
   assert.equal(element("first-run-notice-overlay").hidden, true);
   assert.equal(startupContinues(), 1);
   assert.equal(heartbeatStarts(), 0, "gate must not start heartbeat directly");
@@ -260,8 +247,8 @@ test("3. privacy partial success: accepted but collector failed does not lock UI
   await flush();
   await flush();
 
-  assert.equal(App.privacyGateState, "accepted_start_failed");
-  assert.equal(App.firstRunNoticeRequired, false);
+  assert.equal(App.settings.privacy.state(), "accepted_start_failed");
+  assert.equal(App.settings.privacy.requiresAcceptance(), false);
   assert.equal(element("first-run-notice-overlay").hidden, true);
   assert.equal(element("global-alert").hidden, false);
   assert.match(element("global-alert").textContent, /记录功能未能启动/);
@@ -275,32 +262,26 @@ test("3. privacy partial success: accepted but collector failed does not lock UI
 test("4. maintenance recovery: blocked -> recover -> reload status and page", async () => {
   const { context } = makeBaseContext();
   const App = context.window.WorkTraceApp;
-  Object.assign(App, {
-    settingsLoaded: true,
-    settingsLoading: false,
-    settingsRequestToken: 0,
-    settingsWriteInProgress: false,
-    settingsBackupExportInProgress: false,
-    settingsBackupManifestInProgress: false,
-    settingsBackupImportInProgress: false,
-    settingsClearAllInProgress: false,
-    recoveryInProgress: false,
-    handleResult(result, onError) {
-      if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
-      return result;
-    },
-  });
+  App.currentPage = "settings";
+  App.handleResult = function (result, onError) {
+    if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
+    return result;
+  };
   let recoverCalls = 0;
+  let statusCount = 0;
+  App.currentPage = "settings";
   App.bridge = {
     recoverDatabaseMaintenance: () => { recoverCalls += 1; return Promise.resolve({ ok: true }); },
-    getSettingsPrivacyStatus: () => Promise.resolve({ ok: true, status: {} }),
+    getSettingsPrivacyStatus: () => {
+      statusCount += 1;
+      return Promise.resolve({ ok: true, status: {} });
+    },
   };
   loadJs(context, "core.js");
-  loadJs(context, "settings.js");
+  loadSettingsModules(context);
+  App.currentPage = "settings";
   let refreshCount = 0;
-  let statusCount = 0;
   App.refreshAll = () => { refreshCount += 1; return Promise.resolve(); };
-  App.loadSettingsPrivacyStatus = () => { statusCount += 1; return Promise.resolve(); };
   App.showToast = () => {};
 
   const ok = await App.recoverDatabaseMaintenance();
@@ -311,27 +292,16 @@ test("4. maintenance recovery: blocked -> recover -> reload status and page", as
   assert.equal(recoverCalls, 1);
   assert.equal(statusCount, 1, "settings status must be reloaded");
   assert.equal(refreshCount, 1, "page must be refreshed");
-  assert.equal(App.recoveryInProgress, false);
+  assert.equal(App.settings.operationName(), "");
 });
 
 test("4b. maintenance recovery failure keeps blocked flag and shows public error", async () => {
   const { context, element } = makeBaseContext();
   const App = context.window.WorkTraceApp;
-  Object.assign(App, {
-    settingsLoaded: true,
-    settingsLoading: false,
-    settingsRequestToken: 0,
-    settingsWriteInProgress: false,
-    settingsBackupExportInProgress: false,
-    settingsBackupManifestInProgress: false,
-    settingsBackupImportInProgress: false,
-    settingsClearAllInProgress: false,
-    recoveryInProgress: false,
-    handleResult(result, onError) {
-      if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
-      return result;
-    },
-  });
+  App.handleResult = function (result, onError) {
+    if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
+    return result;
+  };
   App.bridge = {
     recoverDatabaseMaintenance: () => Promise.resolve({
       ok: false,
@@ -344,12 +314,15 @@ test("4b. maintenance recovery failure keeps blocked flag and shows public error
         blocked_reason: "maintenance_recovery_not_verified",
       },
     }),
-    getSettingsPrivacyStatus: () => Promise.resolve({ ok: true, status: {} }),
+    getSettingsPrivacyStatus: () => Promise.resolve({ ok: true, status: {
+        recovery_blocked: true,
+        blocked_reason: "maintenance_recovery_not_verified",
+      } }),
   };
   loadJs(context, "core.js");
-  loadJs(context, "settings.js");
+  loadSettingsModules(context);
+  App.currentPage = "settings";
   App.refreshAll = () => Promise.resolve();
-  App.loadSettingsPrivacyStatus = () => Promise.resolve();
   App.showToast = () => {};
 
   const ok = await App.recoverDatabaseMaintenance();
@@ -357,83 +330,92 @@ test("4b. maintenance recovery failure keeps blocked flag and shows public error
   await flush();
 
   assert.equal(ok, false);
-  assert.equal(App.recoveryInProgress, false);
+  assert.equal(App.settings.operationName(), "");
   assert.equal(element("settings-recovery-btn").disabled, false);
   assert.match(element("settings-recovery-status").textContent, /恢复失败：维护锁仍被持有/);
 });
 
-const RECOVERY_BLOCKING_FLAGS = [
-  ["settingsLoading", "settings status load"],
-  ["settingsWriteInProgress", "clipboard setting write"],
-  ["settingsBackupExportInProgress", "backup export"],
-  ["settingsBackupManifestInProgress", "manifest preview"],
-  ["settingsBackupImportInProgress", "backup import"],
-  ["settingsClearAllInProgress", "clear-all"],
-  ["recoveryInProgress", "recovery already running"],
+const RECOVERY_BLOCKING_OPERATIONS = [
+  ["settings status load", "settings_load"],
+  ["clipboard setting write", "clipboard_write"],
+  ["backup export", "backup_export"],
+  ["manifest preview", "backup_manifest"],
+  ["backup import", "backup_import"],
+  ["clear-all", "clear_all"],
+  ["recovery already running", "recovery"],
 ];
 
-for (const [flag, label] of RECOVERY_BLOCKING_FLAGS) {
-  test(`4c. ${label} (${flag}) blocks recovery — symmetric mutex`, async () => {
-    const { context } = makeBaseContext();
+for (const [label, operation] of RECOVERY_BLOCKING_OPERATIONS) {
+  test(`4c. ${label} blocks recovery — symmetric mutex`, async () => {
+    const { context, element } = makeBaseContext();
     const App = context.window.WorkTraceApp;
-    Object.assign(App, {
-      settingsLoaded: true,
-      settingsLoading: false,
-      settingsRequestToken: 0,
-      settingsWriteInProgress: false,
-      settingsBackupExportInProgress: false,
-      settingsBackupManifestInProgress: false,
-      settingsBackupImportInProgress: false,
-      settingsClearAllInProgress: false,
-      recoveryInProgress: false,
-      handleResult(result, onError) {
-        if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
-        return result;
-      },
-    });
+    const gate = deferred();
     let recoverCalls = 0;
+    App.currentPage = "settings";
+    App.handleResult = (result, onError) => {
+      if (!result || result.ok === false) {
+        if (onError) onError((result && result.message) || "操作失败");
+        return null;
+      }
+      return result;
+    };
     App.bridge = {
-      recoverDatabaseMaintenance: () => { recoverCalls += 1; return Promise.resolve({ ok: true }); },
-      getSettingsPrivacyStatus: () => Promise.resolve({ ok: true, status: {} }),
+      clearAllLocalData: () => gate.promise,
+      exportEncryptedBackup: () => gate.promise,
+      getSettingsPrivacyStatus: () => gate.promise,
+      importEncryptedBackup: () => gate.promise,
+      previewEncryptedBackupManifest: () => gate.promise,
+      recoverDatabaseMaintenance: () => { recoverCalls += 1; return gate.promise; },
+      setClipboardCaptureEnabled: () => gate.promise,
     };
     loadJs(context, "core.js");
-    loadJs(context, "settings.js");
+    loadSettingsModules(context);
     App.refreshAll = () => Promise.resolve();
-    App.loadSettingsPrivacyStatus = () => Promise.resolve();
+    App.openConfirmDialog = () => Promise.resolve(true);
     App.showToast = () => {};
-    App[flag] = true;
 
-    const ok = await App.recoverDatabaseMaintenance();
-    await flush();
-    await flush();
-
-    assert.equal(ok, false, `recovery must be rejected when ${flag} is true`);
-    assert.equal(recoverCalls, 0, `recovery Bridge must not be called when ${flag} is true`);
-    assert.equal(App[flag], true, `${flag} must not be cleared by the rejected recovery`);
-    if (flag !== "recoveryInProgress") {
-      assert.equal(App.recoveryInProgress, false, "recovery flag must not be set by the rejected path");
+    let pending;
+    if (operation === "settings_load") {
+      pending = App.settings.onPageEntered();
+    } else if (operation === "clipboard_write") {
+      pending = App.setCaptureEnabled(true);
+    } else if (operation === "backup_export") {
+      element("settings-backup-passphrase").value = "secret";
+      element("settings-backup-passphrase-confirm").value = "secret";
+      pending = App.exportEncryptedBackup();
+    } else if (operation === "backup_manifest") {
+      pending = App.previewEncryptedBackupManifest();
+    } else if (operation === "backup_import") {
+      element("settings-backup-import-passphrase").value = "secret";
+      pending = App.importEncryptedBackup();
+    } else if (operation === "clear_all") {
+      element("settings-clear-confirm").value = "清空本地数据";
+      pending = App.clearAllLocalData();
+    } else {
+      pending = App.recoverDatabaseMaintenance();
     }
+    await flush();
+    if (operation === "settings_load") assert.equal(App.settings.isLoading(), true);
+    else assert.equal(App.settings.operationName(), operation);
+
+    const recoverCallsBefore = recoverCalls;
+    const ok = await App.recoverDatabaseMaintenance();
+    assert.equal(ok, false, `recovery must be rejected during ${operation}`);
+    assert.equal(recoverCalls, recoverCallsBefore, "recovery Bridge must not be called twice");
+
+    gate.resolve({ ok: false, message: "test operation finished" });
+    await pending;
   });
 }
 
 test("4d. recovery in progress blocks backup export, manifest, import, clear, and clipboard write", async () => {
   const { context, element } = makeBaseContext();
   const App = context.window.WorkTraceApp;
-  Object.assign(App, {
-    settingsLoaded: true,
-    settingsLoading: false,
-    settingsRequestToken: 0,
-    settingsWriteInProgress: false,
-    settingsBackupExportInProgress: false,
-    settingsBackupManifestInProgress: false,
-    settingsBackupImportInProgress: false,
-    settingsClearAllInProgress: false,
-    recoveryInProgress: false,
-    handleResult(result, onError) {
-      if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
-      return result;
-    },
-  });
+  App.currentPage = "settings";
+  App.handleResult = function (result, onError) {
+    if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
+    return result;
+  };
   const recoveryGate = deferred();
   const bridgeCalls = {
     exportEncryptedBackup: 0,
@@ -453,15 +435,15 @@ test("4d. recovery in progress blocks backup export, manifest, import, clear, an
     getSettingsPrivacyStatus: () => Promise.resolve({ ok: true, status: {} }),
   };
   loadJs(context, "core.js");
-  loadJs(context, "settings.js");
+  loadSettingsModules(context);
+  App.currentPage = "settings";
+  App.currentPage = "settings";
   App.refreshAll = () => Promise.resolve();
-  App.loadSettingsPrivacyStatus = () => Promise.resolve();
   App.showToast = () => {};
-  App.lastSettingsStatus = { recovery_blocked: true };
 
   App.recoverDatabaseMaintenance();
   await flush();
-  assert.equal(App.recoveryInProgress, true, "recovery must be in progress");
+  assert.equal(App.settings.operationName(), "recovery", "recovery must be in progress");
 
   App.exportEncryptedBackup();
   App.previewEncryptedBackupManifest();
@@ -478,40 +460,30 @@ test("4d. recovery in progress blocks backup export, manifest, import, clear, an
   assert.equal(bridgeCalls.clearAllLocalData, 0, "clear must not run during recovery");
   assert.equal(bridgeCalls.setClipboardCaptureEnabled, 0, "clipboard write must not run during recovery");
   assert.equal(bridgeCalls.recoverDatabaseMaintenance, 1, "recovery itself runs exactly once");
-  assert.equal(App.recoveryInProgress, true, "recovery flag must remain set while pending");
+  assert.equal(App.settings.operationName(), "recovery", "recovery owner must remain active while pending");
   assert.equal(element("settings-recovery-btn").disabled, true, "recovery button disabled during recovery");
 
   recoveryGate.resolve({ ok: true });
   await flush();
   await flush();
-  assert.equal(App.recoveryInProgress, false, "recovery flag released after completion");
+  assert.equal(App.settings.operationName(), "", "recovery owner released after completion");
 });
 
 test("4e. recovery transport rejection re-reads authoritative state (blocked=false → button disabled)", async () => {
   const { context, element } = makeBaseContext();
   const App = context.window.WorkTraceApp;
-  Object.assign(App, {
-    settingsLoaded: true,
-    settingsLoading: false,
-    settingsRequestToken: 0,
-    settingsWriteInProgress: false,
-    settingsBackupExportInProgress: false,
-    settingsBackupManifestInProgress: false,
-    settingsBackupImportInProgress: false,
-    settingsClearAllInProgress: false,
-    recoveryInProgress: false,
-    handleResult(result, onError) {
-      if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
-      return result;
-    },
-  });
+  App.currentPage = "settings";
+  App.handleResult = function (result, onError) {
+    if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
+    return result;
+  };
   let recoverCalls = 0;
   let statusReads = 0;
   App.bridge = {
     recoverDatabaseMaintenance: () => { recoverCalls += 1; return Promise.reject(new Error("webview transport disconnected")); },
-    getSettingsPrivacyStatus: () => Promise.resolve({
-      ok: true,
-      status: {
+    getSettingsPrivacyStatus: () => {
+      statusReads += 1;
+      return Promise.resolve({ ok: true, status: {
         maintenance_in_progress: false,
         maintenance_restored: true,
         recovery_blocked: false,
@@ -519,22 +491,14 @@ test("4e. recovery transport rejection re-reads authoritative state (blocked=fal
         collector_running: true,
         collector_status: "running",
         user_paused: false,
-      },
-    }),
+      } });
+    },
   };
   loadJs(context, "core.js");
-  loadJs(context, "settings.js");
+  loadSettingsModules(context);
+  App.currentPage = "settings";
   App.refreshAll = () => Promise.resolve();
-  App.loadSettingsPrivacyStatus = async function () {
-    statusReads += 1;
-    const result = await App.bridge.getSettingsPrivacyStatus();
-    if (result && result.ok && result.status) {
-      App.lastSettingsStatus = result.status;
-    }
-    return result;
-  };
   App.showToast = () => {};
-  App.lastSettingsStatus = { recovery_blocked: true };
 
   const ok = await App.recoverDatabaseMaintenance();
   await flush();
@@ -544,37 +508,26 @@ test("4e. recovery transport rejection re-reads authoritative state (blocked=fal
   assert.equal(ok, false, "transport rejection must not be reported as success");
   assert.equal(recoverCalls, 1, "recovery Bridge called exactly once");
   assert.equal(statusReads, 1, "authoritative status must be re-read exactly once after rejection");
-  assert.equal(App.recoveryInProgress, false, "recovery busy flag must be released after state refresh");
+  assert.equal(App.settings.operationName(), "", "recovery owner must be released after state refresh");
   assert.equal(element("settings-recovery-btn").disabled, true, "button disabled when backend reports no recovery needed");
-  assert.equal(App.lastSettingsStatus.recovery_blocked, false, "lastSettingsStatus refreshed to authoritative state");
+  assert.equal(App.settings.snapshot().recovery_blocked, false, "snapshot refreshed to authoritative state");
   assert.match(element("settings-recovery-status").textContent, /恢复结果未知/);
 });
 
 test("4f. recovery transport rejection re-reads authoritative state (blocked=true → button re-enabled)", async () => {
   const { context, element } = makeBaseContext();
   const App = context.window.WorkTraceApp;
-  Object.assign(App, {
-    settingsLoaded: true,
-    settingsLoading: false,
-    settingsRequestToken: 0,
-    settingsWriteInProgress: false,
-    settingsBackupExportInProgress: false,
-    settingsBackupManifestInProgress: false,
-    settingsBackupImportInProgress: false,
-    settingsClearAllInProgress: false,
-    recoveryInProgress: false,
-    handleResult(result, onError) {
-      if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
-      return result;
-    },
-  });
+  App.handleResult = function (result, onError) {
+    if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
+    return result;
+  };
   let recoverCalls = 0;
   let statusReads = 0;
   App.bridge = {
     recoverDatabaseMaintenance: () => { recoverCalls += 1; return Promise.reject(new Error("webview transport disconnected")); },
-    getSettingsPrivacyStatus: () => Promise.resolve({
-      ok: true,
-      status: {
+    getSettingsPrivacyStatus: () => {
+      statusReads += 1;
+      return Promise.resolve({ ok: true, status: {
         maintenance_in_progress: false,
         maintenance_restored: false,
         recovery_blocked: true,
@@ -582,22 +535,14 @@ test("4f. recovery transport rejection re-reads authoritative state (blocked=tru
         collector_running: false,
         collector_status: "stopped",
         user_paused: false,
-      },
-    }),
+      } });
+    },
   };
   loadJs(context, "core.js");
-  loadJs(context, "settings.js");
+  loadSettingsModules(context);
+  App.currentPage = "settings";
   App.refreshAll = () => Promise.resolve();
-  App.loadSettingsPrivacyStatus = async function () {
-    statusReads += 1;
-    const result = await App.bridge.getSettingsPrivacyStatus();
-    if (result && result.ok && result.status) {
-      App.lastSettingsStatus = result.status;
-    }
-    return result;
-  };
   App.showToast = () => {};
-  App.lastSettingsStatus = { recovery_blocked: true };
 
   const ok = await App.recoverDatabaseMaintenance();
   await flush();
@@ -607,45 +552,42 @@ test("4f. recovery transport rejection re-reads authoritative state (blocked=tru
   assert.equal(ok, false, "transport rejection must not be reported as success");
   assert.equal(recoverCalls, 1, "recovery Bridge called exactly once");
   assert.equal(statusReads, 1, "authoritative status must be re-read exactly once after rejection");
-  assert.equal(App.recoveryInProgress, false, "recovery busy flag must be released after state refresh");
+  assert.equal(App.settings.operationName(), "", "recovery owner must be released after state refresh");
   assert.equal(element("settings-recovery-btn").disabled, false, "button re-enabled when backend still reports blocked");
-  assert.equal(App.lastSettingsStatus.recovery_blocked, true, "lastSettingsStatus refreshed to authoritative state");
+  assert.equal(App.settings.snapshot().recovery_blocked, true, "snapshot refreshed to authoritative state");
   assert.match(element("settings-recovery-status").textContent, /恢复结果未知/);
 });
 
 test("4g. recovery transport rejection when status read also fails still releases busy flag", async () => {
   const { context } = makeBaseContext();
   const App = context.window.WorkTraceApp;
-  Object.assign(App, {
-    settingsLoaded: true,
-    settingsLoading: false,
-    settingsRequestToken: 0,
-    settingsWriteInProgress: false,
-    settingsBackupExportInProgress: false,
-    settingsBackupManifestInProgress: false,
-    settingsBackupImportInProgress: false,
-    settingsClearAllInProgress: false,
-    recoveryInProgress: false,
-    handleResult(result, onError) {
-      if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
-      return result;
-    },
-  });
+  App.currentPage = "settings";
+  App.handleResult = function (result, onError) {
+    if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
+    return result;
+  };
   let recoverCalls = 0;
   let statusReads = 0;
+  let statusReadFails = false;
   App.bridge = {
     recoverDatabaseMaintenance: () => { recoverCalls += 1; return Promise.reject(new Error("webview transport disconnected")); },
-    getSettingsPrivacyStatus: () => Promise.reject(new Error("status read failed")),
+    getSettingsPrivacyStatus: () => {
+      statusReads += 1;
+      if (statusReadFails) return Promise.reject(new Error("status read failed"));
+      return Promise.resolve({
+        ok: true,
+        status: { recovery_blocked: true, blocked_reason: "prior_failure" },
+      });
+    },
   };
   loadJs(context, "core.js");
-  loadJs(context, "settings.js");
+  loadSettingsModules(context);
+  App.currentPage = "settings";
   App.refreshAll = () => Promise.resolve();
-  App.loadSettingsPrivacyStatus = async function () {
-    statusReads += 1;
-    await App.bridge.getSettingsPrivacyStatus();
-  };
   App.showToast = () => {};
-  App.lastSettingsStatus = { recovery_blocked: true, blocked_reason: "prior_failure" };
+  await App.settings.onPageEntered();
+  statusReads = 0;
+  statusReadFails = true;
 
   const ok = await App.recoverDatabaseMaintenance();
   await flush();
@@ -655,8 +597,8 @@ test("4g. recovery transport rejection when status read also fails still release
   assert.equal(ok, false, "must not be reported as success when both recovery and status read fail");
   assert.equal(recoverCalls, 1);
   assert.equal(statusReads, 1, "status must still be attempted once");
-  assert.equal(App.recoveryInProgress, false, "busy flag released even on double failure");
-  assert.equal(App.lastSettingsStatus.recovery_blocked, true, "prior blocked state preserved");
+  assert.equal(App.settings.operationName(), "", "operation owner released even on double failure");
+  assert.equal(App.settings.snapshot().recovery_blocked, true, "prior authoritative snapshot preserved");
 });
 
 test("5. global toggle error is visible via global-alert on every page", async () => {
@@ -1939,6 +1881,10 @@ test("14. launch-at-login rollback is authoritative and switch mutations are ind
   const launchGate = deferred();
   let clipboardCalls = 0;
   App.bridge = {
+    getSettingsPrivacyStatus: () => Promise.resolve({ ok: true, status: {
+        clipboard_capture_enabled: false,
+        launch_at_login: { supported: true, enabled: false },
+      } }),
     setLaunchAtLogin: () => launchGate.promise,
     setClipboardCaptureEnabled: () => {
       clipboardCalls += 1;
@@ -1959,16 +1905,13 @@ test("14. launch-at-login rollback is authoritative and switch mutations are ind
     return result;
   };
   loadJs(context, "core.js");
-  loadJs(context, "settings.js");
-  App.settingsLoaded = true;
-  App.lastSettingsStatus = {
-    clipboard_capture_enabled: false,
-    launch_at_login: { supported: true, enabled: false },
-  };
+  loadSettingsModules(context);
+  App.currentPage = "settings";
+  await App.settings.onPageEntered();
   element("settings-launch-at-login-toggle").checked = true;
 
   const launchPromise = App.setLaunchAtLoginEnabled(true);
-  assert.equal(App.launchAtLoginWriteInProgress, true);
+  assert.equal(App.settings.operationName(), "launch_at_login_write");
   assert.equal(element("settings-clipboard-toggle").disabled, false, "launch write must not lock clipboard toggle");
   await App.setCaptureEnabled(true);
   assert.equal(clipboardCalls, 1, "clipboard write can proceed independently");
@@ -1985,6 +1928,6 @@ test("14. launch-at-login rollback is authoritative and switch mutations are ind
   await flush();
 
   assert.equal(element("settings-launch-at-login-toggle").checked, false);
-  assert.equal(App.launchAtLoginWriteInProgress, false);
+  assert.equal(App.settings.operationName(), "");
   assert.equal(element("settings-error").hidden, false);
 });
