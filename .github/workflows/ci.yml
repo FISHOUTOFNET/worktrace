@@ -20,3 +20,51 @@ jobs:
       revision: ${{ github.event.pull_request.head.sha || github.sha }}
       run_node_tests: true
       run_build_smoke: ${{ github.event_name == 'pull_request' }}
+
+  timeline-governance-apply:
+    name: Apply timeline governance
+    if: github.event_name == 'pull_request' && github.head_ref == 'codex/timeline-js-governance'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Detect pending extraction
+        id: pending
+        shell: bash
+        run: |
+          if [ -f worktrace/webview_ui/js/timeline_presentation.js ]; then
+            echo "apply=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "apply=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Apply ownership refactor
+        if: steps.pending.outputs.apply == 'true'
+        run: python scripts/refactor_timeline_governance.py
+      - name: Sync WebView asset revisions
+        if: steps.pending.outputs.apply == 'true'
+        run: python scripts/sync_webview_asset_revisions.py
+      - name: Syntax check extracted JavaScript owners
+        if: steps.pending.outputs.apply == 'true'
+        run: |
+          node --check worktrace/webview_ui/js/timeline_presentation.js
+          node --check worktrace/webview_ui/js/timeline_transient_ui.js
+          node --check worktrace/webview_ui/js/timeline_editor_state.js
+          node --check worktrace/webview_ui/js/timeline_fd_work.js
+          node --check worktrace/webview_ui/js/timeline.js
+      - name: Verify patch whitespace
+        if: steps.pending.outputs.apply == 'true'
+        run: git diff --check
+      - name: Commit generated refactor
+        if: steps.pending.outputs.apply == 'true'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add WorkTrace.spec worktrace/webview_ui/index_fd_work_v5.html worktrace/webview_ui/js tests/webview
+          git commit -m "refactor: split timeline frontend ownership"
+          git push origin HEAD:${{ github.head_ref }}
