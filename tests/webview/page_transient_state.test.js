@@ -468,6 +468,10 @@ test("page resetters clear only transient page UI and preserve authoritative sta
   Object.assign(settings.App, {
     currentPage: "settings",
     bridge: {
+      getFirstRunNotice: () => Promise.resolve({
+        ok: true,
+        notice: { accepted: true, title: "隐私", highlights: [] },
+      }),
       getSettingsPrivacyStatus: () => Promise.resolve({ ok: true, status: { recovery_blocked: true } }),
     },
     handleResult: (result) => result,
@@ -478,7 +482,7 @@ test("page resetters clear only transient page UI and preserve authoritative sta
   settings.element("settings-diagnostics").open = true;
   SETTINGS_MODULES.forEach(settings.load);
   await settings.App.settings.onPageEntered();
-  settings.App.showFirstRunNotice({ title: "隐私", highlights: [] }, "view");
+  await settings.App.privacyNotice.openFromSettings();
   settings.App.settings.onPageLeft();
   assert.equal(settings.element("settings-backup-passphrase").value, "");
   assert.equal(settings.element("settings-clear-confirm").value, "");
@@ -506,13 +510,13 @@ test("page resetters clear only transient page UI and preserve authoritative sta
   });
   SETTINGS_MODULES.forEach(forcedPrivacy.load);
   await forcedPrivacy.App.settings.onPageEntered();
-  await forcedPrivacy.App.settings.privacy.load();
+  await forcedPrivacy.App.privacyNotice.loadGate();
   forcedPrivacy.App.recoverDatabaseMaintenance();
   await flush();
   forcedPrivacy.App.settings.onPageLeft();
   assert.equal(forcedPrivacy.element("first-run-notice-overlay").hidden, false);
-  assert.equal(forcedPrivacy.App.settings.privacy.requiresAcceptance(), true);
-  assert.equal(forcedPrivacy.App.settings.privacy.state(), "acceptance_required");
+  assert.equal(forcedPrivacy.App.privacyNotice.requiresAcceptance(), true);
+  assert.equal(forcedPrivacy.App.privacyNotice.state(), "acceptance_required");
   assert.equal(
     forcedPrivacy.element("settings-recovery-status").textContent,
     "正在尝试恢复，请勿关闭应用……"

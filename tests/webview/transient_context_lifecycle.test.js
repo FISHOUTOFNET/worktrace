@@ -329,6 +329,7 @@ function prepareSettings() {
   h.element("first-run-notice-close-btn").hidden = true;
   SETTINGS_MODULES.forEach(h.load);
   h.App.initSettingsCategories();
+  h.App.privacyNotice.bindEvents();
   return h;
 }
 
@@ -344,28 +345,31 @@ test("settings privacy notice view supports Escape, backdrop close, and focus re
     }),
   };
 
-  assert.equal(await h.App.openPrivacyNoticeFromSettings(), true);
+  assert.equal(await h.App.privacyNotice.openFromSettings(), true);
   assert.equal(overlay.hidden, false);
   assert.equal(h.activeElement(), close);
   h.dispatchDocument("keydown", { key: "Escape" });
   assert.equal(overlay.hidden, true);
   assert.equal(h.activeElement(), trigger);
 
-  assert.equal(await h.App.openPrivacyNoticeFromSettings(), true);
+  assert.equal(await h.App.privacyNotice.openFromSettings(), true);
   overlay.dispatch("click", { target: overlay });
   assert.equal(overlay.hidden, true);
   assert.equal(h.activeElement(), trigger);
 });
 
-test("startup privacy gate stays fail-closed under Escape and backdrop clicks", () => {
+test("startup privacy gate stays fail-closed under Escape and backdrop clicks", async () => {
   const h = prepareSettings();
   const overlay = h.element("first-run-notice-overlay");
+  h.App.bridge = {
+    getFirstRunNotice: () => Promise.resolve({
+      ok: true,
+      notice: { accepted: false, title: "隐私说明", text: "内容", highlights: [] },
+    }),
+  };
 
-  h.App.showFirstRunNotice(
-    { accepted: false, title: "隐私说明", text: "内容", highlights: [] },
-    "gate"
-  );
-  assert.equal(h.App.settingsTransientUi.isNoticeViewOpen(), false);
+  await h.App.privacyNotice.loadGate();
+  assert.equal(h.App.privacyNotice.state(), "acceptance_required");
   assert.equal(overlay.hidden, false);
 
   h.dispatchDocument("keydown", { key: "Escape" });
@@ -374,14 +378,14 @@ test("startup privacy gate stays fail-closed under Escape and backdrop clicks", 
   assert.equal(overlay.hidden, false);
 });
 
-test("stale settings privacy notice completion cannot reopen after page reset", async () => {
+test("stale settings privacy notice completion cannot reopen after settings page leave", async () => {
   const h = prepareSettings();
   const pending = deferred();
   const overlay = h.element("first-run-notice-overlay");
   h.App.bridge = { getFirstRunNotice: () => pending.promise };
 
-  const opening = h.App.openPrivacyNoticeFromSettings();
-  h.App.resetSettingsTransientUi({ restoreFocus: false });
+  const opening = h.App.privacyNotice.openFromSettings();
+  h.App.settings.onPageLeft();
   pending.resolve({
     ok: true,
     notice: { accepted: true, title: "旧请求", text: "内容", highlights: [] },
@@ -389,7 +393,6 @@ test("stale settings privacy notice completion cannot reopen after page reset", 
 
   assert.equal(await opening, false);
   assert.equal(overlay.hidden, true);
-  assert.equal(h.App.settingsTransientUi.isNoticeViewOpen(), false);
 });
 
 test("leaving a settings category clears presentation state without discarding form drafts", () => {

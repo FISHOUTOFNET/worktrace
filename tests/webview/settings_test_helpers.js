@@ -3,6 +3,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const SETTINGS_MODULES = Object.freeze([
+  "privacy_notice.js",
   "settings_presentation.js",
   "settings_transient_ui.js",
   "settings_data_operations.js",

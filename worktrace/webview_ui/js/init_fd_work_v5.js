@@ -721,8 +721,17 @@
         bind("toggle-pause-btn", "click", togglePause);
         bind("refresh-btn", "click", App.refreshAll);
         if (App.pageLifecycle) App.pageLifecycle.bindEvents();
-        bind("first-run-notice-accept-btn", "click", App.settings.privacy.accept);
-        bind("first-run-notice-retry-btn", "click", App.settings.privacy.retry);
+        App.privacyNotice.bindEvents();
+        bind("first-run-notice-accept-btn", "click", function () {
+            return App.privacyNotice.acceptGate().then(function (ready) {
+                return ready ? continueStartupAfterPrivacyGate() : false;
+            });
+        });
+        bind("first-run-notice-retry-btn", "click", function () {
+            return App.privacyNotice.retryGate().then(function (ready) {
+                return ready ? continueStartupAfterPrivacyGate() : false;
+            });
+        });
     }
     App.initButtons = initButtons;
 
@@ -911,7 +920,7 @@
     function init() {
         initNav();
         initButtons();
-        App.settings.privacy.load().then(function (ready) {
+        App.privacyNotice.loadGate().then(function (ready) {
             return ready ? continueStartupAfterPrivacyGate() : null;
         });
     }

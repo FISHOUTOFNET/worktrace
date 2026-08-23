@@ -24,6 +24,7 @@ datas = [
     (str(root / 'worktrace' / 'webview_ui' / 'ui_components.css'), 'worktrace/webview_ui'),
     (str(root / 'worktrace' / 'webview_ui' / 'project_autocomplete.css'), 'worktrace/webview_ui'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'core.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'privacy_notice.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'fd_work_v5.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'ui_components.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'project_catalog.js'), 'worktrace/webview_ui/js'),

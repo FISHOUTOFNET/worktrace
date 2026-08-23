@@ -268,15 +268,11 @@ test("backup passphrases are cleared after a rejected bridge call", async () => 
   assert.equal(App.settings.operationName(), "");
 });
 
-test("first-run acceptance refreshes status only after confirmed success", async () => {
+test("first-run acceptance does not couple application startup to Settings reads", async () => {
   const state = harness();
   const { App } = state;
   let statusReads = 0;
   let startupContinued = 0;
-  // In the new architecture, acceptFirstRunNotice delegates page refresh to
-  // continueStartupAfterPrivacyGate (owned by init_fd_work_v5.js) instead of calling
-  // refreshAll directly. This harness loads the Settings owners, so we stub the
-  // startup entry to verify it is invoked.
   App.continueStartupAfterPrivacyGate = () => { startupContinued += 1; return Promise.resolve(true); };
   App.bridge.getSettingsPrivacyStatus = () => {
     statusReads += 1;
@@ -291,12 +287,10 @@ test("first-run acceptance refreshes status only after confirmed success", async
     });
   };
 
-  App.acceptFirstRunNotice();
-  await flush();
-  await flush();
+  assert.equal(await App.privacyNotice.acceptGate(), true);
 
-  assert.equal(App.settings.privacy.requiresAcceptance(), false);
-  assert.equal(App.settings.privacy.state(), "accepted_ready");
-  assert.equal(startupContinued, 1, "continueStartupAfterPrivacyGate called once");
-  assert.equal(statusReads, 1);
+  assert.equal(App.privacyNotice.requiresAcceptance(), false);
+  assert.equal(App.privacyNotice.state(), "accepted_ready");
+  assert.equal(startupContinued, 0, "privacy owner must not coordinate application startup");
+  assert.equal(statusReads, 0, "privacy acceptance must not eagerly read Settings state");
 });

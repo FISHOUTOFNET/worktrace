@@ -321,80 +321,14 @@
         container.hidden = false;
     }
 
-    function clearChildren(target) {
-        if (!target) return;
-        while (target.firstChild) target.removeChild(target.firstChild);
-    }
-
-    function setFirstRunNoticeError(message) {
-        setStatusLine("first-run-notice-error", message);
-    }
-
-    function renderFirstRunNotice(notice, mode) {
-        if (!notice) return;
-        var title = element("first-run-notice-title");
-        var highlights = element("first-run-notice-highlights");
-        var text = element("first-run-notice-text");
-        var accept = element("first-run-notice-accept-btn");
-        var close = element("first-run-notice-close-btn");
-        var retry = element("first-run-notice-retry-btn");
-        if (title) title.textContent = String(notice.title || "有迹隐私说明");
-        clearChildren(highlights);
-        if (highlights && Array.isArray(notice.highlights)) {
-            notice.highlights.forEach(function (item) {
-                var li = document.createElement("li");
-                li.textContent = String(item || "");
-                highlights.appendChild(li);
-            });
-        }
-        if (text) text.textContent = String(notice.text || "");
-        if (accept) { accept.hidden = mode === "view"; accept.disabled = false; }
-        if (close) close.hidden = mode !== "view";
-        if (retry) retry.hidden = true;
-        setFirstRunNoticeError("");
-    }
-
-    function showFirstRunNoticeBlockingError(message) {
-        var title = element("first-run-notice-title");
-        var highlights = element("first-run-notice-highlights");
-        var text = element("first-run-notice-text");
-        var accept = element("first-run-notice-accept-btn");
-        var close = element("first-run-notice-close-btn");
-        var retry = element("first-run-notice-retry-btn");
-        if (title) title.textContent = "";
-        clearChildren(highlights);
-        if (text) text.textContent = "";
-        if (accept) { accept.hidden = true; accept.disabled = true; }
-        if (close) close.hidden = true;
-        if (retry) { retry.hidden = false; retry.disabled = false; }
-        setFirstRunNoticeError(message);
-    }
-
-    function settleFirstRunNoticeControls() {
-        var retry = element("first-run-notice-retry-btn");
-        var accept = element("first-run-notice-accept-btn");
-        var close = element("first-run-notice-close-btn");
-        setFirstRunNoticeError("");
-        if (retry) { retry.hidden = true; retry.disabled = false; }
-        if (accept) { accept.hidden = false; accept.disabled = false; }
-        if (close) close.hidden = true;
-    }
-
-    function setFirstRunNoticeAcceptDisabled(disabled) {
-        setDisabled("first-run-notice-accept-btn", disabled);
-    }
-
     App.settingsPresentation = Object.freeze({
         clearSettingsError: clearSettingsError,
         renderBackupManifest: renderBackupManifest,
         renderFDWorkToggle: renderFDWorkToggle,
-        renderFirstRunNotice: renderFirstRunNotice,
         renderLaunchAtLoginToggle: renderLaunchAtLoginToggle,
         renderRecoveryCard: renderRecoveryCard,
         renderSettingsStatus: renderSettingsStatus,
         setCaptureToggleStatus: setCaptureToggleStatus,
-        setFirstRunNoticeAcceptDisabled: setFirstRunNoticeAcceptDisabled,
-        setFirstRunNoticeError: setFirstRunNoticeError,
         setSettingsBackupStatus: function (text) { setStatusLine("settings-backup-status", text); },
         setSettingsBackupControlsDisabled: setSettingsBackupControlsDisabled,
         setSettingsClearStatus: function (text) { setStatusLine("settings-clear-status", text); },
@@ -402,8 +336,6 @@
         setSettingsImportStatus: function (text) { setStatusLine("settings-backup-import-status", text); },
         setSettingsLoading: setSettingsLoading,
         setSettingsRecoveryStatus: function (text) { setStatusLine("settings-recovery-status", text); },
-        settleFirstRunNoticeControls: settleFirstRunNoticeControls,
-        showFirstRunNoticeBlockingError: showFirstRunNoticeBlockingError,
         showSettingsError: showSettingsError
     });
 
@@ -411,7 +343,6 @@
     App.clearSettingsError = clearSettingsError;
     App.renderSettingsStatus = renderSettingsStatus;
     App.renderBackupManifest = renderBackupManifest;
-    App.renderFirstRunNotice = renderFirstRunNotice;
     App.renderRecoveryCard = renderRecoveryCard;
     App.setSettingsBackupControlsDisabled = setSettingsBackupControlsDisabled;
 })();

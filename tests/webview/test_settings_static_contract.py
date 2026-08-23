@@ -27,10 +27,8 @@ from static_helpers import (  # noqa: E402
 )
 
 SETTINGS_BRIDGE_METHODS = {
-    "acceptFirstRunNotice",
     "clearAllLocalData",
     "exportEncryptedBackup",
-    "getFirstRunNotice",
     "getSettingsPrivacyStatus",
     "importEncryptedBackup",
     "previewEncryptedBackupManifest",
@@ -67,6 +65,10 @@ def _operations_source() -> str:
 
 def _backup_recovery_source() -> str:
     return read_js("settings_backup_recovery.js")
+
+
+def _privacy_source() -> str:
+    return read_js("privacy_notice.js")
 
 
 def _all_settings_sources() -> str:
@@ -345,8 +347,8 @@ def test_settings_exposes_transient_reset_without_clearing_authoritative_state()
     ):
         assert dom_id in reset
     assert "renderBackupManifest(null" in reset
-    assert "privacyNoticeMode" in reset
-    assert "hideFirstRunNotice" in reset
+    assert "privacyNoticeMode" not in reset
+    assert "hideFirstRunNotice" not in reset
     for preserved in (
         "settingsLoaded =",
         "lastSettingsStatus =",
@@ -470,40 +472,38 @@ def test_danger_zone_removes_only_its_local_divider_and_status_gap() -> None:
 
 
 def test_first_run_notice_is_fail_closed_and_mode_safe() -> None:
-    source = _settings_source()
-    presentation = _presentation_source()
-    transient = _transient_source()
-    render = func_body(presentation, "renderFirstRunNotice")
+    source = _privacy_source()
+    render = func_body(source, "renderNotice")
     assert 'mode === "view"' in render
     assert 'mode !== "view"' in render
     assert ".hidden" in render
     assert "textContent" in render
     assert "first-run-notice-retry-btn" in render
 
-    blocking = func_body(presentation, "showFirstRunNoticeBlockingError")
+    blocking = func_body(source, "renderBlockingError")
     assert 'textContent = ""' in blocking
     assert "disabled = true" in blocking
     assert "hidden = true" in blocking
     assert "first-run-notice-retry-btn" in blocking
 
-    load = func_body(source, "loadFirstRunNotice")
+    load = func_body(source, "loadGate")
     assert "App.bridge.getFirstRunNotice()" in load
-    assert "showFirstRunNoticeBlockingError" in load
-    assert 'setPrivacyGateState("acceptance_required")' in load
+    assert "showBlockingError" in load
+    assert 'setGateState("acceptance_required")' in load
 
-    gate = func_body(source, "setPrivacyGateState")
-    assert "privacyGateState = String" in gate
+    gate = func_body(source, "setGateState")
+    assert "gateState = String" in gate
     assert "App." not in gate
 
-    hide = func_body(transient, "hideFirstRunNotice")
+    hide = func_body(source, "hideNotice")
     assert "App.bridge" not in hide
-    assert 'privacyNoticeMode = ""' in hide
+    assert 'noticeMode = ""' in hide
 
-    accept = func_body(source, "acceptFirstRunNotice")
+    accept = func_body(source, "acceptGate")
     assert "App.bridge.acceptFirstRunNotice()" in accept
-    assert "privacyNoticeAccepting" in accept
-    assert "App.continueStartupAfterPrivacyGate" in accept
-    assert "loadSettingsPrivacyStatus()" in accept
+    assert "noticeAccepting" in accept
+    assert "App.continueStartupAfterPrivacyGate" not in accept
+    assert "loadSettingsPrivacyStatus" not in accept
 
 
 def test_settings_buttons_are_bound_to_named_capabilities() -> None:
@@ -530,12 +530,12 @@ def test_settings_buttons_are_bound_to_named_capabilities() -> None:
         assert dom_id in backup
     transient = func_body(_transient_source(), "bindEvents")
     assert "settings-privacy-notice-btn" in transient
-    assert "first-run-notice-close-btn" in transient
+    assert "first-run-notice-close-btn" not in transient
     global_bindings = func_body(read_js("init_fd_work_v5.js"), "initButtons")
     assert "first-run-notice-accept-btn" in global_bindings
-    assert "App.settings.privacy.accept" in global_bindings
+    assert "App.privacyNotice.acceptGate" in global_bindings
     assert "first-run-notice-retry-btn" in global_bindings
-    assert "App.settings.privacy.retry" in global_bindings
+    assert "App.privacyNotice.retryGate" in global_bindings
 
 
 def test_settings_styles_are_scoped() -> None:

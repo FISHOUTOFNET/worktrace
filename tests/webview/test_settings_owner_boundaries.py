@@ -62,7 +62,6 @@ def test_settings_coordinator_does_not_own_dom_presentation_or_transient_ui() ->
     for render_name in (
         "renderSettingsStatus",
         "renderBackupManifest",
-        "renderFirstRunNotice",
         "renderRecoveryCard",
     ):
         assert not re.search(rf"function\s+{render_name}\s*\(", coordinator)
@@ -73,7 +72,7 @@ def test_presentation_is_stateless_and_never_calls_the_bridge() -> None:
     assert "textContent" in presentation
     assert "renderSettingsStatus" in presentation
     assert "renderBackupManifest" in presentation
-    assert "renderFirstRunNotice" in presentation
+    assert "renderFirstRunNotice" not in presentation
     assert "App.bridge" not in presentation
     for forbidden in (
         "activeOperation",
@@ -85,7 +84,7 @@ def test_presentation_is_stateless_and_never_calls_the_bridge() -> None:
         assert forbidden not in presentation
 
 
-def test_transient_ui_owns_sections_passwords_and_notice_view_state_only() -> None:
+def test_transient_ui_owns_only_settings_sections_and_password_state() -> None:
     transient = source("settings_transient_ui.js")
     coordinator = source("settings.js")
     for required in (
@@ -97,7 +96,7 @@ def test_transient_ui_owns_sections_passwords_and_notice_view_state_only() -> No
         assert required in transient
         assert not re.search(rf"function\s+{required}\s*\(", coordinator)
     for private_state in ("privacyNoticeViewToken", "privacyNoticeReturnFocus"):
-        assert private_state in transient
+        assert private_state not in transient
         assert private_state not in coordinator
     assert "App.bridge" not in transient
     assert "settingsSnapshot" not in transient
@@ -140,11 +139,7 @@ def test_bridge_capabilities_are_partitioned_by_owner() -> None:
     }
     assert calls["settings_presentation.js"] == set()
     assert calls["settings_transient_ui.js"] == set()
-    assert calls["settings.js"] == {
-        "acceptFirstRunNotice",
-        "getFirstRunNotice",
-        "getSettingsPrivacyStatus",
-    }
+    assert calls["settings.js"] == {"getSettingsPrivacyStatus"}
     assert calls["settings_data_operations.js"] == {
         "setClipboardCaptureEnabled",
         "setFDWorkEnabled",
@@ -175,7 +170,8 @@ def test_init_and_composition_only_use_settings_capabilities() -> None:
     ):
         assert private not in init
         assert private not in composition
-    assert "App.settings.privacy" in init
+    assert "App.privacyNotice" in init
+    assert "App.settings.privacy" not in init
     assert "showSettingsError" not in composition
     assert "clearSettingsError" not in composition
     assert "reconnectFDWorkThroughSharedSession" not in composition

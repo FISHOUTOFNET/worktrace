@@ -4,10 +4,6 @@
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
     var presentation = App.settingsPresentation;
 
-    var privacyNoticeViewToken = 0;
-    var privacyNoticeReturnFocus = null;
-    var privacyNoticeMode = "";
-    var privacyNoticeLifecycleBound = false;
     var passwordRevealControlsBound = false;
     var settingsCategoriesBound = false;
 
@@ -93,94 +89,6 @@
         }
     }
 
-    function settingsPrivacyNoticeViewOpen() {
-        var overlay = element("first-run-notice-overlay");
-        return privacyNoticeMode === "view" && overlay && overlay.hidden === false;
-    }
-
-    function restoreSettingsPrivacyNoticeFocus(target) {
-        if (!target || typeof target.focus !== "function") return;
-        var root = document.documentElement;
-        if (!root || typeof root.contains !== "function" || root.contains(target)) target.focus();
-    }
-
-    function focusSettingsPrivacyNoticeClose() {
-        var close = element("first-run-notice-close-btn");
-        if (close && !close.hidden && typeof close.focus === "function") close.focus();
-    }
-
-    function hideFirstRunNotice(options) {
-        options = options || {};
-        var wasSettingsView = privacyNoticeMode === "view";
-        var restore = privacyNoticeReturnFocus;
-        var overlay = element("first-run-notice-overlay");
-        if (overlay) overlay.hidden = true;
-        privacyNoticeMode = "";
-        if (wasSettingsView) {
-            privacyNoticeReturnFocus = null;
-            if (options.restoreFocus !== false) restoreSettingsPrivacyNoticeFocus(restore);
-        }
-    }
-
-    function initPrivacyNoticeViewLifecycle() {
-        if (privacyNoticeLifecycleBound) return;
-        privacyNoticeLifecycleBound = true;
-        var overlay = element("first-run-notice-overlay");
-        if (overlay) {
-            overlay.addEventListener("click", function (event) {
-                if (settingsPrivacyNoticeViewOpen() && event.target === overlay) {
-                    hideFirstRunNotice();
-                }
-            });
-        }
-        document.addEventListener("keydown", function (event) {
-            if (!settingsPrivacyNoticeViewOpen()) return;
-            if (event.key === "Escape") {
-                event.preventDefault();
-                hideFirstRunNotice();
-                return;
-            }
-            var dialog = element("first-run-notice-dialog");
-            if (dialog && App.trapFocus) App.trapFocus(event, dialog);
-        });
-    }
-
-    function showFirstRunNotice(notice, mode) {
-        privacyNoticeMode = mode === "view" ? "view" : "gate";
-        presentation.renderFirstRunNotice(notice, privacyNoticeMode);
-        var overlay = element("first-run-notice-overlay");
-        if (overlay) overlay.hidden = false;
-        if (privacyNoticeMode === "view") focusSettingsPrivacyNoticeClose();
-    }
-
-    function showFirstRunNoticeBlockingError(message, mode) {
-        privacyNoticeMode = mode === "view" ? "view" : "gate";
-        presentation.showFirstRunNoticeBlockingError(message);
-        if (privacyNoticeMode === "view") {
-            var close = element("first-run-notice-close-btn");
-            if (close) close.hidden = false;
-        }
-        var overlay = element("first-run-notice-overlay");
-        if (overlay) overlay.hidden = false;
-        if (privacyNoticeMode === "view") focusSettingsPrivacyNoticeClose();
-    }
-
-    function settleFirstRunNoticeAcceptedUi() {
-        presentation.settleFirstRunNoticeControls();
-        hideFirstRunNotice({ restoreFocus: false });
-    }
-
-    function beginPrivacyNoticeViewRequest() {
-        privacyNoticeReturnFocus = element("settings-privacy-notice-btn")
-            || document.activeElement;
-        return ++privacyNoticeViewToken;
-    }
-
-    function privacyNoticeViewRequestCurrent(token) {
-        return token === privacyNoticeViewToken
-            && (!App.currentPage || App.currentPage === "settings");
-    }
-
     function operationActive(context, name) {
         return !!(
             context
@@ -210,14 +118,13 @@
             return;
         }
         if (section === "privacy") {
-            privacyNoticeViewToken += 1;
-            if (privacyNoticeMode === "view") hideFirstRunNotice({ restoreFocus: false });
-            privacyNoticeReturnFocus = null;
+            if (context && typeof context.closePrivacyNotice === "function") {
+                context.closePrivacyNotice();
+            }
         }
     }
 
     function initSettingsCategories(context) {
-        initPrivacyNoticeViewLifecycle();
         if (settingsCategoriesBound) return;
         settingsCategoriesBound = true;
         var buttons = document.querySelectorAll("[data-settings-section]");
@@ -248,7 +155,6 @@
 
     function resetSettingsTransientUi(options, context) {
         options = options || {};
-        privacyNoticeViewToken += 1;
         [
             "settings-backup-passphrase",
             "settings-backup-passphrase-confirm",
@@ -269,10 +175,6 @@
         }
         var diagnostics = document.querySelector("#settings-section-advanced details");
         if (diagnostics) diagnostics.open = false;
-        if (privacyNoticeMode === "view") {
-            hideFirstRunNotice({ restoreFocus: options.restoreFocus !== false });
-        }
-        privacyNoticeReturnFocus = null;
         if (!operationActive(context, "recovery")) presentation.setSettingsRecoveryStatus("");
     }
 
@@ -289,26 +191,16 @@
                 context.openPrivacyNotice();
             }
         });
-        bindSettingsControl("first-run-notice-close-btn", "click", function () {
-            if (privacyNoticeMode === "view") hideFirstRunNotice();
-        });
     }
 
     App.settingsTransientUi = Object.freeze({
-        beginPrivacyNoticeViewRequest: beginPrivacyNoticeViewRequest,
         bindEvents: bindEvents,
         hideAllPasswordFields: hideAllPasswordFields,
-        hideFirstRunNotice: hideFirstRunNotice,
         initPasswordRevealControls: initPasswordRevealControls,
         initSettingsCategories: initSettingsCategories,
-        isNoticeViewOpen: settingsPrivacyNoticeViewOpen,
-        privacyNoticeViewRequestCurrent: privacyNoticeViewRequestCurrent,
         resetSettingsSectionTransientUi: resetSettingsSectionTransientUi,
         resetSettingsTransientUi: resetSettingsTransientUi,
-        setPasswordFieldVisible: setPasswordFieldVisible,
-        settleFirstRunNoticeAcceptedUi: settleFirstRunNoticeAcceptedUi,
-        showFirstRunNotice: showFirstRunNotice,
-        showFirstRunNoticeBlockingError: showFirstRunNoticeBlockingError
+        setPasswordFieldVisible: setPasswordFieldVisible
     });
 
     App.setPasswordFieldVisible = setPasswordFieldVisible;
@@ -317,7 +209,4 @@
     App.initSettingsCategories = initSettingsCategories;
     App.resetSettingsSectionTransientUi = resetSettingsSectionTransientUi;
     App.resetSettingsTransientUi = resetSettingsTransientUi;
-    App.showFirstRunNotice = showFirstRunNotice;
-    App.hideFirstRunNotice = hideFirstRunNotice;
-    App.settleFirstRunNoticeAcceptedUi = settleFirstRunNoticeAcceptedUi;
 })();

@@ -172,11 +172,11 @@ test("1. privacy first launch: unaccepted notice is fail-closed, no heartbeat", 
     },
   });
 
-  await App.loadFirstRunNotice();
+  await App.privacyNotice.loadGate();
   await flush();
 
-  assert.equal(App.settings.privacy.state(), "acceptance_required");
-  assert.equal(App.settings.privacy.requiresAcceptance(), true);
+  assert.equal(App.privacyNotice.state(), "acceptance_required");
+  assert.equal(App.privacyNotice.requiresAcceptance(), true);
   assert.equal(element("first-run-notice-overlay").hidden, false);
   assert.equal(element("first-run-notice-title").textContent, "WorkTrace 隐私说明");
   assert.equal(element("first-run-notice-text").textContent.length > 0, true);
@@ -188,16 +188,16 @@ test("1b. privacy notice load failure is fail-closed with visible error", async 
   const { App, element } = privacyHarness();
   App.bridge.getFirstRunNotice = () => Promise.resolve({ ok: false, error: "load_failed" });
 
-  await App.loadFirstRunNotice();
+  await App.privacyNotice.loadGate();
   await flush();
 
-  assert.equal(App.settings.privacy.state(), "load_failed");
+  assert.equal(App.privacyNotice.state(), "load_failed");
   assert.equal(element("first-run-notice-overlay").hidden, false);
   assert.equal(element("first-run-notice-accept-btn").disabled, true);
   assert.equal(element("first-run-notice-accept-btn").hidden, true);
 });
 
-test("2. privacy confirmation success closes gate, continues via single startup entry", async () => {
+test("2. privacy confirmation success closes gate and returns authorization to startup owner", async () => {
   const { App, element, heartbeatStarts, startupContinues } = privacyHarness();
   App.bridge.getFirstRunNotice = () => Promise.resolve({
     ok: true,
@@ -210,18 +210,18 @@ test("2. privacy confirmation success closes gate, continues via single startup 
     collector_status: { running: true },
   });
 
-  await App.loadFirstRunNotice();
+  await App.privacyNotice.loadGate();
   await flush();
-  assert.equal(App.settings.privacy.state(), "acceptance_required");
+  assert.equal(App.privacyNotice.state(), "acceptance_required");
 
-  App.acceptFirstRunNotice();
+  await App.privacyNotice.acceptGate();
   await flush();
   await flush();
 
-  assert.equal(App.settings.privacy.state(), "accepted_ready");
-  assert.equal(App.settings.privacy.isReady(), true);
+  assert.equal(App.privacyNotice.state(), "accepted_ready");
+  assert.equal(App.privacyNotice.isReady(), true);
   assert.equal(element("first-run-notice-overlay").hidden, true);
-  assert.equal(startupContinues(), 1);
+  assert.equal(startupContinues(), 0, "privacy owner must not coordinate application startup");
   assert.equal(heartbeatStarts(), 0, "gate must not start heartbeat directly");
 });
 
@@ -240,19 +240,19 @@ test("3. privacy partial success: accepted but collector failed does not lock UI
     collector_status: { running: false },
   });
 
-  await App.loadFirstRunNotice();
+  await App.privacyNotice.loadGate();
   await flush();
 
-  App.acceptFirstRunNotice();
+  await App.privacyNotice.acceptGate();
   await flush();
   await flush();
 
-  assert.equal(App.settings.privacy.state(), "accepted_start_failed");
-  assert.equal(App.settings.privacy.requiresAcceptance(), false);
+  assert.equal(App.privacyNotice.state(), "accepted_start_failed");
+  assert.equal(App.privacyNotice.requiresAcceptance(), false);
   assert.equal(element("first-run-notice-overlay").hidden, true);
   assert.equal(element("global-alert").hidden, false);
   assert.match(element("global-alert").textContent, /记录功能未能启动/);
-  assert.equal(startupContinues(), 1, "partial success must still continue startup");
+  assert.equal(startupContinues(), 0, "privacy owner must return readiness without starting the app");
 });
 
 // ---------------------------------------------------------------------------

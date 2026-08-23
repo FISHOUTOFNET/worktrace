@@ -13,6 +13,7 @@ function flush() {
 }
 
 function makeElement(id) {
+  const listeners = new Map();
   return {
     id,
     hidden: false,
@@ -29,7 +30,21 @@ function makeElement(id) {
     firstChild: null,
     querySelector() { return null; },
     querySelectorAll() { return []; },
-    addEventListener() {},
+    addEventListener(type, handler) {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type).push(handler);
+    },
+    dispatch(type, event = {}) {
+      let result;
+      for (const handler of listeners.get(type) || []) {
+        result = handler.call(this, {
+          target: this,
+          preventDefault() {},
+          ...event,
+        });
+      }
+      return result;
+    },
   };
 }
 
@@ -161,7 +176,7 @@ test("S1. first launch unaccepted: no project load, no refresh state, no heartbe
   await flush();
   await flush();
 
-  assert.equal(App.settings.privacy.state(), "acceptance_required");
+  assert.equal(App.privacyNotice.state(), "acceptance_required");
   assert.equal(element("first-run-notice-overlay").hidden, false, "gate overlay must be visible");
   // No startup work may happen while unaccepted.
   assert.equal(bridgeCalls.getFirstRunNotice, 1, "notice loaded once");
@@ -186,7 +201,7 @@ test("S2. accepted cold start: catalog + refresh state + page refresh + single h
   await flush();
   await flush();
 
-  assert.equal(App.settings.privacy.state(), "accepted_ready");
+  assert.equal(App.privacyNotice.state(), "accepted_ready");
   assert.equal(bridgeCalls.listProjectsForTimeline, 0, "loadProjects stubbed (no bridge call)");
   assert.equal(bridgeCalls.getRefreshState, 1, "refresh state requested once");
   assert.ok(bridgeCalls.getOverview >= 1, "page refreshed at least once");
@@ -210,15 +225,15 @@ test("S3. user confirm success: single continueStartup, single heartbeat", async
   App.init();
   await flush();
   await flush();
-  assert.equal(App.settings.privacy.state(), "acceptance_required");
+  assert.equal(App.privacyNotice.state(), "acceptance_required");
 
-  App.acceptFirstRunNotice();
+  element("first-run-notice-accept-btn").dispatch("click");
   await flush();
   await flush();
   await flush();
   await flush();
 
-  assert.equal(App.settings.privacy.state(), "accepted_ready");
+  assert.equal(App.privacyNotice.state(), "accepted_ready");
   assert.equal(element("first-run-notice-overlay").hidden, true);
   assert.equal(bridgeCalls.getRefreshState, 1, "refresh state once after confirm");
   assert.equal(intervalsCreated(), 1, "heartbeat created once after confirm");
@@ -244,13 +259,13 @@ test("S4. partial success: accepted + collector failed, UI enters app", async ()
   await flush();
   await flush();
 
-  App.acceptFirstRunNotice();
+  element("first-run-notice-accept-btn").dispatch("click");
   await flush();
   await flush();
   await flush();
   await flush();
 
-  assert.equal(App.settings.privacy.state(), "accepted_start_failed");
+  assert.equal(App.privacyNotice.state(), "accepted_start_failed");
   assert.equal(element("first-run-notice-overlay").hidden, true, "gate must close");
   assert.equal(element("global-alert").hidden, false, "global error visible");
   assert.match(element("global-alert").textContent, /维护状态尚未恢复/);
@@ -278,11 +293,11 @@ test("S5. accept write failure: gate stays open, no heartbeat, retryable", async
   await flush();
   await flush();
 
-  App.acceptFirstRunNotice();
+  element("first-run-notice-accept-btn").dispatch("click");
   await flush();
   await flush();
 
-  assert.equal(App.settings.privacy.state(), "acceptance_required");
+  assert.equal(App.privacyNotice.state(), "acceptance_required");
   assert.equal(element("first-run-notice-overlay").hidden, false, "gate must stay open");
   assert.equal(bridgeCalls.getRefreshState, 0, "no startup on accept failure");
   assert.equal(intervalsCreated(), 0, "no heartbeat on accept failure");
@@ -307,7 +322,7 @@ test("S6. load failure then retry: fail-closed, retry succeeds, startup continue
   await flush();
 
   // First load failed — fail-closed.
-  assert.equal(App.settings.privacy.state(), "load_failed");
+  assert.equal(App.privacyNotice.state(), "load_failed");
   assert.equal(element("first-run-notice-overlay").hidden, false);
   assert.equal(element("first-run-notice-retry-btn").hidden, false, "retry button visible");
   assert.equal(element("first-run-notice-accept-btn").hidden, true, "accept hidden on failure");
@@ -315,12 +330,12 @@ test("S6. load failure then retry: fail-closed, retry succeeds, startup continue
   assert.equal(bridgeCalls.getRefreshState, 0);
 
   // Retry succeeds.
-  await App.retryFirstRunNotice();
+  await element("first-run-notice-retry-btn").dispatch("click");
   await flush();
   await flush();
   await flush();
 
-  assert.equal(App.settings.privacy.state(), "accepted_ready");
+  assert.equal(App.privacyNotice.state(), "accepted_ready");
   assert.equal(loadAttempts, 2, "retry issued a new request");
   assert.equal(bridgeCalls.getRefreshState, 1, "startup continued after retry");
   assert.equal(intervalsCreated(), 1, "heartbeat created after retry");
@@ -350,15 +365,15 @@ test("S6b. load failure then retry returns unaccepted: gate restored, no startup
   await flush();
 
   // First load failed — fail-closed with retry visible.
-  assert.equal(App.settings.privacy.state(), "load_failed");
+  assert.equal(App.privacyNotice.state(), "load_failed");
   assert.equal(element("first-run-notice-retry-btn").hidden, false);
 
   // Retry returns unaccepted — gate must be restored, not startup.
-  await App.retryFirstRunNotice();
+  await element("first-run-notice-retry-btn").dispatch("click");
   await flush();
   await flush();
 
-  assert.equal(App.settings.privacy.state(), "acceptance_required");
+  assert.equal(App.privacyNotice.state(), "acceptance_required");
   assert.equal(loadAttempts, 2);
   assert.equal(element("first-run-notice-overlay").hidden, false, "overlay must stay open");
   assert.equal(element("first-run-notice-retry-btn").hidden, true, "retry must hide");
@@ -383,15 +398,15 @@ test("S6c. load failure then retry fails again: stays fail-closed", async () => 
   await flush();
   await flush();
 
-  assert.equal(App.settings.privacy.state(), "load_failed");
+  assert.equal(App.privacyNotice.state(), "load_failed");
   assert.equal(element("first-run-notice-retry-btn").hidden, false);
 
   // Retry fails again — must stay fail-closed.
-  await App.retryFirstRunNotice();
+  await element("first-run-notice-retry-btn").dispatch("click");
   await flush();
   await flush();
 
-  assert.equal(App.settings.privacy.state(), "load_failed");
+  assert.equal(App.privacyNotice.state(), "load_failed");
   assert.equal(loadAttempts, 2);
   assert.equal(element("first-run-notice-overlay").hidden, false, "overlay must stay open");
   assert.equal(element("first-run-notice-retry-btn").hidden, false, "retry must stay visible");
