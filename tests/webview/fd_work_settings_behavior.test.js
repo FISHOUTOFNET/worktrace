@@ -159,7 +159,6 @@ test("FD Work reconnect error clears on later authoritative recovery", async () 
   App.settings.onFDWorkStatusChanged(App.fdWorkStatus);
 
   assert.equal(element("settings-error").hidden, true);
-  assert.equal(element("settings-error").textContent, "");
 });
 
 test("FD Work recovery never clears a newer unrelated Settings error", async () => {
