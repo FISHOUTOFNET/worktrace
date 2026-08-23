@@ -39,7 +39,8 @@ function harness() {
   };
   vm.createContext(context);
   vm.runInContext(
-    fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/timeline.js"), "utf8"),
+    ["timeline_presentation.js", "timeline_transient_ui.js", "timeline_editor_state.js", "timeline_fd_work.js", "timeline.js"].map((name) => fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", name), "utf8")).join("
+"),
     context,
     { filename: "timeline.js" }
   );

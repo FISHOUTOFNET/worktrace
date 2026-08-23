@@ -14,6 +14,19 @@ def _resource(name: str) -> str:
     return (ROOT / "worktrace" / "webview_ui" / name).read_text(encoding="utf-8")
 
 
+TIMELINE_MODULES = (
+    "timeline_presentation.js",
+    "timeline_transient_ui.js",
+    "timeline_editor_state.js",
+    "timeline_fd_work.js",
+    "timeline.js",
+)
+
+
+def _timeline_source() -> str:
+    return "\n".join(_source(name) for name in TIMELINE_MODULES)
+
+
 def func_body(source: str, name: str) -> str:
     start = source.find("function " + name)
     assert start != -1
@@ -22,7 +35,7 @@ def func_body(source: str, name: str) -> str:
 
 
 def test_timeline_consumes_canonical_entries_and_authoritative_mutation_result():
-    source = _source("timeline.js")
+    source = _timeline_source()
     assert "data.entries" in source
     assert "selection_hint" in source
     assert "snapshot_revision" in source
@@ -32,7 +45,7 @@ def test_timeline_consumes_canonical_entries_and_authoritative_mutation_result()
 
 
 def test_details_and_mutation_have_single_owner_models():
-    source = _source("timeline.js") + _source("core.js")
+    source = _timeline_source() + _source("core.js")
     assert "detailsOwner" in source
     assert "detailsRequestToken" not in source
     assert "selectedSessionId" not in source
@@ -40,13 +53,13 @@ def test_details_and_mutation_have_single_owner_models():
 
 
 def test_unknown_and_refresh_failure_messages_are_explicit():
-    source = _source("timeline.js")
+    source = _timeline_source()
     assert "操作结果尚未确认，可重试同一操作或刷新核对" in source
     assert "操作已保存，但刷新失败" in source
 
 
 def test_timeline_empty_state_uses_shared_visual_language():
-    source = _source("timeline.js")
+    source = _timeline_source()
     assert 'class="empty-state timeline-empty"' in source
     assert "当日暂无时间记录" in source
     assert "选择其他日期，或开始记录新的工作活动。" in source
@@ -136,7 +149,7 @@ def test_timeline_header_filter_editor_and_advanced_menu_contract():
 
 
 def test_timeline_transient_reset_preserves_selection_and_autosave_owners():
-    source = _source("timeline.js")
+    source = _timeline_source()
     close_menu = source[
         source.index("function closeTimelineAdvancedMenu") :
         source.index("App.closeTimelineAdvancedMenu")
@@ -157,7 +170,7 @@ def test_timeline_transient_reset_preserves_selection_and_autosave_owners():
 
 
 def test_timeline_list_sort_duration_and_badge_contract():
-    source = _source("timeline.js")
+    source = _timeline_source()
     core = _source("core.js")
     overview = _source("overview.js")
 
@@ -242,7 +255,7 @@ def test_timeline_styles_keep_fixed_time_columns_and_two_line_editor():
 
 def test_activity_detail_rows_use_three_columns_with_spanning_side_controls():
     css = _resource("styles.css")
-    source = _source("timeline.js")
+    source = _timeline_source()
     item = re.search(r"\.summary-item\s*\{([^}]*)\}", css)
     name = re.search(r"\.summary-item-name\s*\{([^}]*)\}", css)
     project = re.search(r"\.summary-item-project\s*\{([^}]*)\}", css)
@@ -275,7 +288,7 @@ def test_activity_detail_rows_use_three_columns_with_spanning_side_controls():
 
 def test_activity_details_divider_only_appears_for_a_valid_selection():
     css = _resource("styles.css")
-    source = _source("timeline.js")
+    source = _timeline_source()
     base = re.search(r"\.activity-details\s*\{([^}]*)\}", css)
     selected = re.search(
         r"\.timeline-inspector\.has-selection \.activity-details\s*\{([^}]*)\}",
@@ -292,7 +305,7 @@ def test_activity_details_divider_only_appears_for_a_valid_selection():
 
 
 def test_timeline_duration_draft_preserves_exact_override_until_user_touches_field():
-    source = _source("timeline.js")
+    source = _timeline_source()
     populate = func_body(source, "populateEditPanel")
     dirty = func_body(source, "isEditDirty")
     save = func_body(source, "saveEdit")

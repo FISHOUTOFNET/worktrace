@@ -10,66 +10,6 @@
         App.suppressNextTimelineCollectionRefresh = false;
     }
 
-    function exactRowClock(row, semantic, reason) {
-        var source = row && row.live_clock;
-        if (source === null || source === undefined) return null;
-        var clock = App.validateLiveClock(source);
-        if (!clock || (clock.is_live === true && clock.duration_semantic !== semantic)) {
-            App.recordLiveClockContractViolation(
-                clock ? clock.display_span_id : "",
-                "timeline",
-                reason,
-                2
-            );
-            return null;
-        }
-        return clock;
-    }
-
-    function clockedSeconds(clock, durableSeconds) {
-        if (!clock || clock.is_live !== true) return durableSeconds;
-        var projected = App.computeClockDurationNow(clock, Date.now());
-        return projected === null ? durableSeconds : projected;
-    }
-
-    function formatTimelineStartTime(startTime) {
-        var value = String(startTime || "");
-        var exact = value.length >= 19 ? value.slice(11, 19) : value.slice(0, 8);
-        return exact.slice(0, 5);
-    }
-    App.formatTimelineStartTime = formatTimelineStartTime;
-
-    function formatTimelineDuration(seconds) {
-        return App.formatDuration(seconds);
-    }
-    App.formatTimelineDuration = formatTimelineDuration;
-
-    function renderTimelineTotal(data) {
-        var element = document.getElementById("timeline-total");
-        var label = document.getElementById("timeline-total-label");
-        if (label) {
-            label.textContent = String(data.date || "") === String(data.today || "")
-                ? "今日总时长"
-                : "当日总时长";
-        }
-        var durable = Math.max(0, parseInt(data.today_total_seconds, 10) || 0);
-        var clock = exactRowClock(
-            { live_clock: data.total_live_clock },
-            "aggregate_live",
-            "timeline_total_invalid_live_clock"
-        );
-        if (clock && clock.is_live === true) {
-            App.setLiveClockTarget(element, clock, "timeline-total", "timeline-total");
-        } else {
-            App.clearLiveClockTarget(element);
-        }
-        App.renderDurationProjected(
-            element,
-            clockedSeconds(clock, durable),
-            "timeline-total"
-        );
-    }
-
     function resetEmptyTimeline() {
         App.lastSessionDetailsViewModel = null;
         App.lastSessionActivitySummaryViewModel = null;
@@ -77,120 +17,8 @@
         document.getElementById("timeline-details-list").innerHTML = "";
         clearTimelineSelectionState();
         App.detailsOwner = null;
-        clearEditPanel();
+        App.clearEditPanel();
     }
-
-    function timelineSessionOrder(left, right) {
-        var byStart = String(right.start_time || "")
-            .localeCompare(String(left.start_time || ""));
-        if (byStart !== 0) return byStart;
-        return String(right.projection_instance_key || "")
-            .localeCompare(String(left.projection_instance_key || ""));
-    }
-
-    function timelineProjectScope(session) {
-        session = session || {};
-        var rowKind = String(session.row_kind || "");
-        if (
-            session.privacy_redacted === true
-            || rowKind === "standalone_status"
-            || rowKind === "status_only"
-        ) return "status";
-        if (session.project_is_deleted === true) return "other";
-        if (rowKind && rowKind !== "project_session") return "other";
-        var projectId = parseInt(session.project_id, 10);
-        if (session.is_report_project === true && projectId > 0) return "project";
-        if (session.is_report_uncategorized === true) return "unclassified";
-        return "other";
-    }
-    App.timelineProjectScope = timelineProjectScope;
-
-    function timelineStatusLabel(session) {
-        var status = String(
-            session.display_status
-            || session.status_summary
-            || session.status_code
-            || session.status
-            || ""
-        ).trim();
-        var labels = {
-            excluded: "已排除",
-            idle: "空闲",
-            error: "异常",
-            paused: "已暂停"
-        };
-        return labels[status] || status || "状态记录";
-    }
-
-    function timelineProjectLabel(session) {
-        var scope = timelineProjectScope(session);
-        if (scope === "status") return timelineStatusLabel(session || {});
-        if (scope === "unclassified") return "未归类";
-        if (scope === "project") {
-            return App.formatProjectLabel(
-                session.project_name,
-                session.project_description
-            );
-        }
-        var name = String((session && session.project_name) || "").trim();
-        return name && name !== "未归类" ? name : "其他记录";
-    }
-    App.timelineProjectLabel = timelineProjectLabel;
-
-    function filteredTimelineSessions(entries) {
-        var filter = document.getElementById("timeline-project-filter");
-        var value = filter ? String(filter.value || "") : "";
-        var filtered = (Array.isArray(entries) ? entries : []).filter(function (session) {
-            if (!value) return true;
-            if (value === "unclassified") {
-                return timelineProjectScope(session) === "unclassified";
-            }
-            return timelineProjectScope(session) === "project"
-                && String(session.project_id || "") === value;
-        });
-        return filtered.slice().sort(timelineSessionOrder);
-    }
-    App.filteredTimelineSessions = filteredTimelineSessions;
-
-    function renderTimelineProjectFilter(projects) {
-        var select = document.getElementById("timeline-project-filter");
-        if (!select) return;
-        var previous = select.value;
-        var html = '<option value="">全部项目</option><option value="unclassified">未归类</option>';
-        (projects || []).forEach(function (project) {
-            html += '<option value="' + App.escapeHtml(String(project.id || "")) + '">'
-                + App.escapeHtml(project.name || "未命名项目") + '</option>';
-        });
-        select.innerHTML = html;
-        select.value = previous;
-        if (select.value !== previous) select.value = "";
-    }
-    App.renderTimelineProjectFilter = renderTimelineProjectFilter;
-
-    function openTimelineDrawer(focusTarget) {
-        if (!window.matchMedia || !window.matchMedia("(max-width: 959px)").matches) return;
-        var pane = document.getElementById("timeline-details-pane");
-        var backdrop = document.getElementById("timeline-drawer-backdrop");
-        if (!pane) return;
-        App.timelineDrawerRestoreFocus = document.activeElement;
-        pane.classList.add("drawer-open");
-        if (backdrop) { backdrop.hidden = false; backdrop.classList.add("open"); }
-        var target = focusTarget || document.getElementById("timeline-details-close");
-        if (target && target.focus) target.focus();
-    }
-    App.openTimelineDrawer = openTimelineDrawer;
-
-    function closeTimelineDrawer(options) {
-        options = options || {};
-        var pane = document.getElementById("timeline-details-pane");
-        var backdrop = document.getElementById("timeline-drawer-backdrop");
-        if (pane) pane.classList.remove("drawer-open");
-        if (backdrop) { backdrop.classList.remove("open"); backdrop.hidden = true; }
-        var restore = App.timelineDrawerRestoreFocus;
-        App.timelineDrawerRestoreFocus = null;
-        if (options.restoreFocus !== false && restore && restore.focus) restore.focus();
-    }
-    App.closeTimelineDrawer = closeTimelineDrawer;
 
     App.applyTimelineProjectFilter = function () {
         requestTimelineContextChange(function () {
@@ -252,7 +80,7 @@
         App.lastTimelineData = data;
         var dateInput = document.getElementById("timeline-date-input");
         if (dateInput) dateInput.value = data.date || "";
-        renderTimelineTotal(data);
+        App.renderTimelineTotal(data);
         loadProjects();
         App.renderCurrentActivityElement(
             document.getElementById("timeline-current"),
@@ -263,7 +91,7 @@
         var listEl = document.getElementById("timeline-sessions-list");
         var allSessions = Array.isArray(data.entries) ? data.entries : [];
         App.currentSessions = allSessions;
-        var sessions = filteredTimelineSessions(allSessions);
+        var sessions = App.filteredTimelineSessions(allSessions);
         if (sessions.length === 0) {
             listEl.innerHTML = '<div class="empty-state timeline-empty"><strong>'
                 + (allSessions.length ? "当前筛选下没有时间段" : "当日暂无时间记录")
@@ -276,7 +104,7 @@
         var hadSelection = !!App.selectedProjectionInstanceKey;
         if (hadSelection && !resolveTimelineSelection(sessions)) {
             resetEmptyTimeline();
-            closeTimelineDrawer();
+            App.closeTimelineDrawer();
         }
 
         var _renderStart = (typeof performance !== "undefined" && performance.now)
@@ -284,19 +112,19 @@
         var html = "";
         for (var i = 0; i < sessions.length; i++) {
             var session = sessions[i];
-            var clock = exactRowClock(
+            var clock = App.timelinePresentation.exactRowClock(
                 session,
                 "aggregate_live",
                 "timeline_session_invalid_live_clock"
             );
             var canTick = !!(clock && clock.is_live === true);
             var durable = Math.max(0, parseInt(session.duration_seconds, 10) || 0);
-            var seconds = clockedSeconds(clock, durable);
-            var durationText = formatTimelineDuration(seconds);
+            var seconds = App.timelinePresentation.clockedSeconds(clock, durable);
+            var durationText = App.formatTimelineDuration(seconds);
             var exactDurationText = durationText;
-            var startText = formatTimelineStartTime(session.start_time);
-            var scope = timelineProjectScope(session);
-            var projectLabel = timelineProjectLabel(session);
+            var startText = App.formatTimelineStartTime(session.start_time);
+            var scope = App.timelineProjectScope(session);
+            var projectLabel = App.timelineProjectLabel(session);
             var continuityKey = canTick
                 ? App.liveContinuityKey(session, "session")
                 : "";
@@ -390,15 +218,15 @@
             );
         }
         if (found.edit_disabled) {
-            clearEditPanel();
+            App.clearEditPanel();
         } else if (
             !App.editingSession
             || App.editingSession.projection_instance_key !== found.projection_instance_key
-            || !isEditDirty()
+            || !App.isEditDirty()
         ) {
-            populateEditPanel(found);
+            App.populateEditPanel(found);
         }
-        setTimelineReadOnlyNotice(found);
+        App.timelineEditorState.setReadOnlyNotice(found);
         updateSessionActionButtons(found);
     }
     App.showTimeline = showTimeline;
@@ -444,9 +272,9 @@
 
     function selectTimelineSession(projectionInstanceKey, sessions) {
         var selectionChanged = projectionInstanceKey !== App.selectedProjectionInstanceKey;
-        if (selectionChanged) dismissTimelineContextTransientUi();
+        if (selectionChanged) App.dismissTimelineContextTransientUi();
         if (selectionChanged
-                && (App.editSaving || isEditDirty() || App.mutationState === "unknown")) {
+                && (App.editSaving || App.isEditDirty() || App.mutationState === "unknown")) {
             requestTimelineContextChange(function () {
                 App.selectedProjectionInstanceKey = projectionInstanceKey;
                 showTimeline(App.lastTimelineData);
@@ -486,11 +314,11 @@
             found.projection_revision || "",
             owner
         );
-        if (found.edit_disabled === true) clearEditPanel();
-        else populateEditPanel(found);
-        setTimelineReadOnlyNotice(found);
+        if (found.edit_disabled === true) App.clearEditPanel();
+        else App.populateEditPanel(found);
+        App.timelineEditorState.setReadOnlyNotice(found);
         updateSessionActionButtons(found);
-        openTimelineDrawer(document.getElementById("timeline-details-close"));
+        App.openTimelineDrawer(document.getElementById("timeline-details-close"));
     }
     App.selectTimelineSession = selectTimelineSession;
 
@@ -575,7 +403,7 @@
             });
             if (!data || !App.timelineRequestState.isCurrentDetailsOwner(owner)) return null;
             if (!acceptTimelineDetailsPayload(data, date)) return null;
-            renderSessionDetails(data);
+            App.renderSessionDetails(data);
             return data;
         }).catch(function () {
             if (!App.timelineRequestState.isCurrentDetailsOwner(owner)) return null;
@@ -592,92 +420,19 @@
     }
     App.loadSessionDetails = loadSessionDetails;
 
-    function renderSessionDetails(data) {
-        if (typeof App._timelineEditingActive === "function" && App._timelineEditingActive()) return;
-        if (App.lastTimelineData) {
-            App.lastTimelineData.current_activity = data.current_activity
-                || App.lastTimelineData.current_activity
-                || {};
-        }
-        App.lastSessionDetailsViewModel = data;
-        App.lastSessionActivitySummaryViewModel = data;
-        var header = document.getElementById("timeline-details-header");
-        var list = document.getElementById("timeline-details-list");
-        var rows = Array.isArray(data.summary_rows) ? data.summary_rows : [];
-        if (rows.length === 0) {
-            header.textContent = "活动详情";
-            list.innerHTML = '<div class="timeline-empty">该时段暂无活动详情</div>';
-            return;
-        }
-        header.textContent = "活动详情";
-        var html = "";
-        for (var i = 0; i < rows.length; i++) {
-            var row = rows[i];
-            var clock = exactRowClock(
-                row,
-                "aggregate_live",
-                "timeline_detail_invalid_live_clock"
-            );
-            var canTick = !!(clock && clock.is_live === true);
-            var durable = Math.max(0, parseInt(row.duration_seconds, 10) || 0);
-            var seconds = clockedSeconds(clock, durable);
-            var continuityKey = canTick
-                ? App.liveContinuityKey(row, "project-summary")
-                : "";
-            var classes = "summary-item";
-            if (row.is_in_progress) classes += " in-progress";
-            if (canTick) classes += " live-projected";
-            var attributes = canTick
-                ? App.liveClockDataAttributes(clock, continuityKey, "timeline-detail")
-                : "";
-            var displayName = row.activity_name || "未知";
-            var projectLabel = row.display_project_name || "未归类";
-            html += '<div class="' + classes + '" data-summary-id="'
-                + App.escapeHtml(String(row.summary_id || ""))
-                + '" data-summary-index="' + i + '">'
-                + '<div class="summary-item-duration"' + attributes
-                + ' data-duration-seconds="' + String(seconds) + '">'
-                + App.escapeHtml(App.formatDuration(seconds)) + '</div>'
-                + '<div class="summary-item-name" title="' + App.escapeHtml(displayName) + '">'
-                + App.escapeHtml(displayName) + '</div>'
-                + '<div class="summary-item-project" title="' + App.escapeHtml(projectLabel) + '">'
-                + App.escapeHtml(projectLabel) + '</div>'
-                + (row.can_hide_activity || row.can_delete
-                    ? '<button type="button" class="summary-hide-activity compact-icon-button danger-icon-button" data-summary-id="'
-                        + App.escapeHtml(String(row.summary_id || ""))
-                        + '" aria-label="删除活动" data-tooltip="删除活动">'
-                        + App.iconMarkup("trash") + '</button>'
-                    : '')
-                + '</div>';
-        }
-        list.innerHTML = html;
-        if (!list._detailsDelegationBound) {
-            list.addEventListener("click", function (event) {
-                var btn = event.target.closest(".summary-hide-activity");
-                if (!btn) return;
-                event.stopPropagation();
-                App.confirmTimelineDeletion("hideActivity", {
-                    summaryId: btn.getAttribute("data-summary-id")
-                }, btn);
-            });
-            list._detailsDelegationBound = true;
-        }
-    }
-    App.renderSessionDetails = renderSessionDetails;
-    App.renderSessionActivitySummary = renderSessionDetails;
-
     function loadProjects() {
         if (!App.projectCatalog) return Promise.resolve([]);
         return App.projectCatalog.load().then(function (catalog) {
             var editing = catalog ? catalog.editingProjects : App.projectCatalog.getEditing();
             var filter = catalog ? catalog.filterProjects : App.projectCatalog.getFilter();
-            renderTimelineProjectFilter(filter || []);
+            App.renderTimelineProjectFilter(filter || []);
             return editing || [];
         });
     }
+    App.loadTimelineProjects = loadProjects;
 
     function confirmTimelineDeletion(operation, options, trigger) {
-        dismissTimelineContextTransientUi();
+        App.dismissTimelineContextTransientUi();
         if (!App.openDeleteDialog) return runTimelineSessionOperation(operation, options);
         var activity = operation === "hideActivity";
         return App.openDeleteDialog({
@@ -695,442 +450,15 @@
     }
     App.confirmTimelineDeletion = confirmTimelineDeletion;
 
-    function closeTimelineAdvancedMenu(options) {
-        options = options || {};
-        var menu = document.getElementById("timeline-session-actions");
-        var button = document.getElementById("timeline-advanced-toggle");
-        if (menu) menu.hidden = true;
-        if (button) button.setAttribute("aria-expanded", "false");
-        if (options.restoreFocus !== false && button && button.focus) button.focus();
-    }
-    App.closeTimelineAdvancedMenu = closeTimelineAdvancedMenu;
-
-    function dismissTimelineContextTransientUi() {
-        closeTimelineAdvancedMenu({ restoreFocus: false });
-    }
-    App.dismissTimelineContextTransientUi = dismissTimelineContextTransientUi;
-
-    App.toggleTimelineAdvancedMenu = function () {
-        var menu = document.getElementById("timeline-session-actions");
-        var button = document.getElementById("timeline-advanced-toggle");
-        if (!menu || !button) return;
-        if (!menu.hidden) {
-            closeTimelineAdvancedMenu({ restoreFocus: true });
-            return;
-        }
-        menu.hidden = false;
-        button.setAttribute("aria-expanded", "true");
-        var first = menu.querySelector("button:not([hidden]):not([disabled])");
-        if (first) first.focus();
-    };
-
-    App.initTimelineAccessibility = function () {
-        if (document.documentElement.getAttribute("data-timeline-a11y-bound") === "1") return;
-        document.documentElement.setAttribute("data-timeline-a11y-bound", "1");
-        function dismissAdvancedMenuOutsideTarget(target) {
-            var menu = document.getElementById("timeline-session-actions");
-            if (!menu || menu.hidden) return;
-            var button = document.getElementById("timeline-advanced-toggle");
-            if (target && menu.contains && menu.contains(target)) return;
-            if (target && button && button.contains && button.contains(target)) return;
-            dismissTimelineContextTransientUi();
-        }
-        document.addEventListener("pointerdown", function (event) {
-            dismissAdvancedMenuOutsideTarget(event.target);
-        });
-        document.addEventListener("focusin", function (event) {
-            dismissAdvancedMenuOutsideTarget(event.target);
-        });
-        document.addEventListener("keydown", function (event) {
-            var pane = document.getElementById("timeline-details-pane");
-            var menu = document.getElementById("timeline-session-actions");
-            if (event.key === "Escape" && menu && !menu.hidden) {
-                event.preventDefault();
-                closeTimelineAdvancedMenu({ restoreFocus: true });
-                return;
-            }
-            if (!pane || !pane.classList.contains("drawer-open")) return;
-            if (event.key === "Escape") {
-                event.preventDefault();
-                closeTimelineDrawer();
-                return;
-            }
-            if (App.trapFocus) App.trapFocus(event, pane);
-        });
-    };
-
-    function findCachedProject(projectId) {
-        var projects = App.projectCatalog ? App.projectCatalog.getEditing() : [];
-        for (var i = 0; i < projects.length; i++) {
-            if (String(projects[i].id) === String(projectId)) return projects[i];
-        }
-        return null;
-    }
-
-    function renderProjectSelect(projects, currentProjectId) {
-        var select = document.getElementById("edit-project-select");
-        if (!select) return;
-        select.innerHTML = "";
-        if (!projects || projects.length === 0) {
-            var failure = document.createElement("option");
-            failure.value = "";
-            failure.textContent = "项目列表加载失败";
-            select.appendChild(failure);
-            select.disabled = true;
-            return;
-        }
-        for (var i = 0; i < projects.length; i++) {
-            var project = projects[i];
-            var option = document.createElement("option");
-            option.value = String(project.id);
-            option.textContent = project.description
-                ? (project.name || "") + " (" + project.description + ")"
-                : (project.name || "");
-            if (currentProjectId && String(project.id) === String(currentProjectId)) {
-                option.selected = true;
-            }
-            select.appendChild(option);
-        }
-        applyEditCapabilities(App.editingSession);
-    }
-    App.renderProjectSelect = renderProjectSelect;
-
-    function canEditField(session, field) {
-        return !!session && session.edit_disabled !== true && session[field] !== false;
-    }
-
-    function hasEditableFields(session) {
-        return canEditField(session, "can_edit_project")
-            || canEditField(session, "can_edit_note")
-            || canEditField(session, "can_edit_duration");
-    }
-
-    function setTimelineReadOnlyNotice(session) {
-        var notice = document.getElementById("timeline-readonly-notice");
-        if (!notice) return;
-        notice.hidden = !(session && session.is_in_progress === true);
-    }
-
-    function applyEditCapabilities(session) {
-        var projectAllowed = canEditField(session, "can_edit_project");
-        var noteAllowed = canEditField(session, "can_edit_note");
-        var durationAllowed = canEditField(session, "can_edit_duration");
-        var select = document.getElementById("edit-project-select");
-        var note = document.getElementById("edit-note-text");
-        var duration = document.getElementById("edit-duration-input");
-        var save = document.getElementById("edit-save-btn");
-        var cancel = document.getElementById("edit-cancel-btn");
-        var noteChanged = !!(
-            noteAllowed
-            && note
-            && session
-            && note.value !== String(session.session_note || "")
-        );
-        if (select) select.disabled = !projectAllowed || !App.projectCatalog || !App.projectCatalog.getEditing().length;
-        if (note) note.disabled = !noteAllowed;
-        if (duration) duration.disabled = !durationAllowed;
-        if (cancel) cancel.disabled = App.editSaving || !session;
-        if (save) {
-            save.disabled = App.editSaving
-                || !hasEditableFields(session)
-                || (
-                    noteChanged
-                    && note.value.length
-                    > App.TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH
-                );
-        }
-        updateFDWorkEntryButton();
-    }
-    App.applyTimelineEditCapabilities = applyEditCapabilities;
-
-    function populateEditPanel(session) {
-        if (!session) {
-            clearEditPanel();
-            return;
-        }
-        App.editingSession = session;
-        setTimelineReadOnlyNotice(null);
-        var panel = document.getElementById("timeline-edit-panel");
-        if (panel) panel.hidden = false;
-        var select = document.getElementById("edit-project-select");
-        if (select) {
-            var cachedProjects = App.projectCatalog ? App.projectCatalog.getEditing() : [];
-            if (cachedProjects.length > 0) {
-                renderProjectSelect(cachedProjects, session.project_id);
-            } else {
-                select.innerHTML = '<option value="">加载中…</option>';
-                select.disabled = true;
-                loadProjects().then(function (projects) {
-                    if (
-                        App.editingSession
-                        && App.editingSession.projection_instance_key === session.projection_instance_key
-                    ) {
-                        renderProjectSelect(projects, session.project_id);
-                    }
-                });
-            }
-        }
-        var duration = document.getElementById("edit-duration-input");
-        if (duration) {
-            var source = session.adjusted_duration_seconds !== null
-                && session.adjusted_duration_seconds !== undefined
-                ? session.adjusted_duration_seconds
-                : session.duration_seconds;
-            var seconds = parseInt(source, 10);
-            duration.value = isNaN(seconds)
-                ? ""
-                : (Math.max(0, seconds) / 3600).toFixed(1);
-        }
-        App.timelineDurationDraftTouched = false;
-        App.timelineDurationDraftInvalid = false;
-        var durationStatus = document.getElementById("edit-duration-status");
-        if (durationStatus) {
-            durationStatus.textContent = session.has_duration_override ? "已修正" : "";
-        }
-        var note = document.getElementById("edit-note-text");
-        if (note) note.value = session.session_note || "";
-        var cancel = document.getElementById("edit-cancel-btn");
-        if (cancel) cancel.disabled = false;
-        updateNoteCount();
-        applyEditCapabilities(session);
-        showEditStatus("", false);
-    }
-    App.populateEditPanel = populateEditPanel;
-
-    function clearEditPanel() {
-        if (App.timelineAutosaveTimer) window.clearTimeout(App.timelineAutosaveTimer);
-        App.timelineAutosaveTimer = null;
-        App.timelineAutosaveQueued = false;
-        App.timelineCompositionActive = false;
-        App.editingSession = null;
-        App.editSaving = false;
-        App.submittedDraft = null;
-        App.timelineDurationDraftTouched = false;
-        App.timelineDurationDraftInvalid = false;
-        var panel = document.getElementById("timeline-edit-panel");
-        if (panel) panel.hidden = true;
-        setTimelineReadOnlyNotice(null);
-        updateSessionActionButtons(null);
-        var note = document.getElementById("edit-note-text");
-        if (note) {
-            note.value = "";
-            note.disabled = true;
-        }
-        var select = document.getElementById("edit-project-select");
-        if (select) {
-            select.innerHTML = '<option value="">加载中…</option>';
-            select.disabled = true;
-        }
-        var duration = document.getElementById("edit-duration-input");
-        if (duration) {
-            duration.value = "";
-            duration.disabled = true;
-        }
-        var durationStatus = document.getElementById("edit-duration-status");
-        if (durationStatus) durationStatus.textContent = "";
-        var save = document.getElementById("edit-save-btn");
-        var cancel = document.getElementById("edit-cancel-btn");
-        if (save) save.disabled = true;
-        if (cancel) cancel.disabled = true;
-        showEditStatus("", false);
-        showFDWorkStatus("", false);
-        updateFDWorkEntryButton();
-    }
-    App.clearEditPanel = clearEditPanel;
-
-    function isEditDirty() {
-        if (!App.editingSession) return false;
-        var session = App.editingSession;
-        var note = document.getElementById("edit-note-text");
-        var select = document.getElementById("edit-project-select");
-        var duration = document.getElementById("edit-duration-input");
-        if (canEditField(session, "can_edit_note") && note) {
-            if (note.value !== (session.session_note || "")) return true;
-        }
-        if (canEditField(session, "can_edit_project") && select && select.value) {
-            if (select.value !== String(session.project_id || "")) return true;
-        }
-        if (
-            canEditField(session, "can_edit_duration")
-            && duration
-            && App.timelineDurationDraftTouched === true
-        ) {
-            var durationText = (duration.value || "").trim();
-            var existingOverride = session.has_duration_override === true
-                ? parseInt(session.adjusted_duration_seconds, 10) : null;
-            if (isNaN(existingOverride)) existingOverride = null;
-            if (durationText === "") return existingOverride !== null;
-            var normalized = normalizeTimelineDurationInput(durationText);
-            if (!normalized.valid) return true;
-            var adjustedSeconds = normalized.seconds;
-            if (existingOverride === null || adjustedSeconds !== existingOverride) return true;
-        }
-        return false;
-    }
-    App.isEditDirty = isEditDirty;
-
-    function updateNoteCount() {
-        var textarea = document.getElementById("edit-note-text");
-        var counter = document.getElementById("edit-note-count");
-        if (!textarea || !counter) return;
-        var length = textarea.value.length;
-        var noteChanged = !!(
-            App.editingSession
-            && textarea.value !== String(App.editingSession.session_note || "")
-        );
-        counter.textContent = length + " / " + App.TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH;
-        counter.classList.toggle(
-            "over-limit",
-            noteChanged && length > App.TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH
-        );
-        applyEditCapabilities(App.editingSession);
-    }
-    App.updateNoteCount = updateNoteCount;
-
-    function showEditStatus(message, isError) {
-        var status = document.getElementById("edit-status");
-        if (!status) return;
-        if (!message) {
-            status.hidden = true;
-            status.textContent = "";
-            status.className = "edit-status";
-            return;
-        }
-        status.hidden = false;
-        status.textContent = message;
-        status.className = "edit-status "
-            + (isError ? "edit-status-error" : "edit-status-success");
-    }
-    App.showEditStatus = showEditStatus;
-
-    function cancelTimelineAutosaveTimer() {
-        if (App.timelineAutosaveTimer) {
-            window.clearTimeout(App.timelineAutosaveTimer);
-        }
-        App.timelineAutosaveTimer = null;
-    }
-
-    function handleTimelineCompositionStart() {
-        App.timelineCompositionActive = true;
-        cancelTimelineAutosaveTimer();
-    }
-    App.handleTimelineCompositionStart = handleTimelineCompositionStart;
-
-    function handleTimelineNoteInput(event) {
-        App.fdWorkStatusOverride = null;
-        updateNoteCount();
-        if (
-            (event && event.isComposing === true)
-            || App.timelineCompositionActive === true
-        ) {
-            return;
-        }
-        scheduleTimelineAutosave(650);
-    }
-    App.handleTimelineNoteInput = handleTimelineNoteInput;
-
-    function handleTimelineCompositionEnd() {
-        App.timelineCompositionActive = false;
-        updateNoteCount();
-        if (!App.editSaving) App.timelineAutosaveQueued = false;
-        scheduleTimelineAutosave(650);
-    }
-    App.handleTimelineCompositionEnd = handleTimelineCompositionEnd;
-
-    function handleTimelineNoteBlur() {
-        if (App.timelineCompositionActive === true) return;
-        scheduleTimelineAutosave(0);
-    }
-    App.handleTimelineNoteBlur = handleTimelineNoteBlur;
-
-    function normalizeTimelineDurationInput(value) {
-        var raw = String(value === null || value === undefined ? "" : value).trim();
-        if (raw === "") {
-            return { valid: true, cleared: true, text: "", seconds: null, reason: "" };
-        }
-        var hours = Number(raw);
-        if (!Number.isFinite(hours) || hours < 0) {
-            return { valid: false, cleared: false, text: raw, seconds: null, reason: "时长需为非负数" };
-        }
-        var tenths = Math.floor((hours * 10) + 0.5 + 1e-9);
-        var text = (tenths / 10).toFixed(1);
-        if (tenths < 1) {
-            return { valid: false, cleared: false, text: text, seconds: null, reason: "人工修正时长至少为 0.1 小时" };
-        }
-        var seconds = tenths * 360;
-        if (seconds > 86400) {
-            return { valid: false, cleared: false, text: text, seconds: null, reason: "人工修正时长不能超过 24.0 小时" };
-        }
-        return { valid: true, cleared: false, text: text, seconds: seconds, reason: "" };
-    }
-    App.normalizeTimelineDurationInput = normalizeTimelineDurationInput;
-
-    function handleTimelineDurationChange() {
-        App.fdWorkStatusOverride = null;
-        App.timelineDurationDraftTouched = true;
-        var input = document.getElementById("edit-duration-input");
-        var normalized = normalizeTimelineDurationInput(input ? input.value : "");
-        if (input) input.value = normalized.text;
-        App.timelineDurationDraftInvalid = !normalized.valid;
-        updateFDWorkEntryButton();
-        if (!normalized.valid) {
-            cancelTimelineAutosaveTimer();
-            showEditStatus(normalized.reason, true);
-            return;
-        }
-        scheduleTimelineAutosave(0);
-    }
-    App.handleTimelineDurationChange = handleTimelineDurationChange;
-
-    function scheduleTimelineAutosave(delay) {
-        if (!App.editingSession) return;
-        cancelTimelineAutosaveTimer();
-        if (App.timelineCompositionActive === true) {
-            App.timelineAutosaveQueued = true;
-            return;
-        }
-        if (App.editSaving) {
-            App.timelineAutosaveQueued = true;
-            showEditStatus("有新更改，等待保存", false);
-            return;
-        }
-        if (!isEditDirty()) {
-            showEditStatus("已保存", false);
-            return;
-        }
-        showEditStatus("等待自动保存", false);
-        App.timelineAutosaveTimer = window.setTimeout(function () {
-            App.timelineAutosaveTimer = null;
-            saveEdit();
-        }, Math.max(0, parseInt(delay, 10) || 0));
-    }
-    App.scheduleTimelineAutosave = scheduleTimelineAutosave;
-
-    App.focusTimelineEditorField = function (target) {
-        var id = target === "project" ? "edit-project-select"
-            : target === "description" ? "edit-note-text" : "timeline-details-close";
-        var element = document.getElementById(id);
-        openTimelineDrawer(element);
-        if (element && element.focus) element.focus();
-    };
-
-    function setEditSaving(saving) {
-        App.editSaving = saving;
-        applyEditCapabilities(App.editingSession);
-        updateSessionActionButtons(App.editingSession);
-        updateFDWorkEntryButton();
-    }
-    App.setEditSaving = setEditSaving;
-
     function blockDifferentMutationIntent() {
-        showEditStatus("已有操作结果尚未确认，请先重试同一操作或刷新核对。", true);
+        App.showEditStatus("已有操作结果尚未确认，请先重试同一操作或刷新核对。", true);
     }
 
     function markMutationUnknown(owner) {
         App.timelineRequestState.markMutationUnknown(owner);
         App.timelineAutosaveQueued = false;
-        setEditSaving(false);
-        showEditStatus("操作结果尚未确认，可重试同一操作或刷新核对。", true);
+        App.setEditSaving(false);
+        App.showEditStatus("操作结果尚未确认，可重试同一操作或刷新核对。", true);
     }
 
     function consumeMutationResult(result) {
@@ -1163,7 +491,7 @@
         if (refreshed.projection_instance_key !== App.editingSession.projection_instance_key) return;
         App.editingSession = refreshed;
         App.selectedProjectionRevision = refreshed.projection_revision || "";
-        applyEditCapabilities(refreshed);
+        App.applyTimelineEditCapabilities(refreshed);
     }
     App.rebaseEditingSessionAfterRefresh = rebaseEditingSessionAfterRefresh;
 
@@ -1174,7 +502,7 @@
             || App.timelineDurationDraftTouched !== true
         ) return;
         var durationElement = document.getElementById("edit-duration-input");
-        var normalized = normalizeTimelineDurationInput(
+        var normalized = App.normalizeTimelineDurationInput(
             durationElement ? durationElement.value : ""
         );
         if (
@@ -1189,10 +517,10 @@
     function saveEdit() {
         if (!App.editingSession) return Promise.resolve(false);
         if (App.timelineDurationDraftInvalid === true) {
-            var invalidDuration = normalizeTimelineDurationInput(
+            var invalidDuration = App.normalizeTimelineDurationInput(
                 (document.getElementById("edit-duration-input") || {}).value || ""
             );
-            showEditStatus(invalidDuration.reason || "时长无效", true);
+            App.showEditStatus(invalidDuration.reason || "时长无效", true);
             return Promise.resolve(false);
         }
         if (App.timelineCompositionActive === true) {
@@ -1204,11 +532,11 @@
             return App.timelineSavePromise || Promise.resolve(false);
         }
         var session = App.editingSession;
-        var canProject = canEditField(session, "can_edit_project");
-        var canNote = canEditField(session, "can_edit_note");
-        var canDuration = canEditField(session, "can_edit_duration");
+        var canProject = App.timelineEditorState.canEditField(session, "can_edit_project");
+        var canNote = App.timelineEditorState.canEditField(session, "can_edit_note");
+        var canDuration = App.timelineEditorState.canEditField(session, "can_edit_duration");
         if (!canProject && !canNote && !canDuration) {
-            showEditStatus(session.disable_reason || "当前时段不可编辑", true);
+            App.showEditStatus(session.disable_reason || "当前时段不可编辑", true);
             return Promise.resolve(false);
         }
         var select = document.getElementById("edit-project-select");
@@ -1217,15 +545,15 @@
         var key = session.projection_instance_key || App.selectedProjectionInstanceKey;
         var revision = session.projection_revision || App.selectedProjectionRevision;
         if (!key || !revision) {
-            showEditStatus("无法保存：时段版本无效，请刷新后重试", true);
+            App.showEditStatus("无法保存：时段版本无效，请刷新后重试", true);
             return Promise.resolve(false);
         }
         var originalProjectId = String(session.project_id || "");
         var projectIdText = canProject ? select.value : originalProjectId;
         var projectId = projectIdText ? parseInt(projectIdText, 10) : null;
         var projectChanged = canProject && projectIdText !== originalProjectId;
-        if (projectChanged && (!projectId || !findCachedProject(projectId))) {
-            showEditStatus("项目列表已过期，请刷新后重试", true);
+        if (projectChanged && (!projectId || !App.timelineEditorState.findCachedProject(projectId))) {
+            App.showEditStatus("项目列表已过期，请刷新后重试", true);
             return Promise.resolve(false);
         }
         var originalNote = session.session_note || "";
@@ -1235,7 +563,7 @@
             noteChanged
             && note.length > App.TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH
         ) {
-            showEditStatus("描述不能超过 200 个字符", true);
+            App.showEditStatus("描述不能超过 200 个字符", true);
             return Promise.resolve(false);
         }
         var adjustedDurationSeconds = null;
@@ -1252,9 +580,9 @@
                 adjustedDurationSeconds = null;
                 durationChanged = existingDurationOverride !== null;
             } else {
-                var normalizedDuration = normalizeTimelineDurationInput(durationText);
+                var normalizedDuration = App.normalizeTimelineDurationInput(durationText);
                 if (!normalizedDuration.valid) {
-                    showEditStatus(normalizedDuration.reason, true);
+                    App.showEditStatus(normalizedDuration.reason, true);
                     return Promise.resolve(false);
                 }
                 durationElement.value = normalizedDuration.text;
@@ -1264,18 +592,18 @@
             }
         }
         if (!projectChanged && !noteChanged && !durationChanged) {
-            showEditStatus("已保存", false);
+            App.showEditStatus("已保存", false);
             App.timelineLastSaveFailed = false;
             return Promise.resolve(true);
         }
         var reportDate = currentTimelineReportDate();
         if (!reportDate) {
-            showEditStatus("无法保存：日期无效", true);
+            App.showEditStatus("无法保存：日期无效", true);
             return Promise.resolve(false);
         }
-        setEditSaving(true);
+        App.setEditSaving(true);
         App.timelineLastSaveFailed = false;
-        showEditStatus("", false);
+        App.showEditStatus("", false);
         var overrideProjectId = canProject
             && (projectChanged || session.has_project_override === true)
             ? projectId
@@ -1293,7 +621,7 @@
             ])
         );
         if (!owner) {
-            setEditSaving(false);
+            App.setEditSaving(false);
             blockDifferentMutationIntent();
             return Promise.resolve(false);
         }
@@ -1320,9 +648,9 @@
         var completion = App.bridge.saveTimelineSessionEdit.apply(null, owner.payload).then(function (result) {
             if (!App.timelineRequestState.isCurrentMutationOwner(owner)) return;
             if (!result || result.ok === false) {
-                setEditSaving(false);
+                App.setEditSaving(false);
                 App.timelineLastSaveFailed = true;
-                showEditStatus(result && result.message ? result.message : "保存失败", true);
+                App.showEditStatus(result && result.message ? result.message : "保存失败", true);
                 App.timelineRequestState.releaseMutationOwner(owner, "confirmed_failure", result);
                 drainPendingContextChange(false);
                 return false;
@@ -1330,9 +658,9 @@
             App.timelineRequestState.transitionMutation(owner, "confirmed_success", result);
             consumeMutationResult(result);
             App.timelineRequestState.releaseMutationOwner(owner, "confirmed_success", result);
-            showEditStatus("已自动保存", false);
+            App.showEditStatus("已自动保存", false);
             return refreshAfterConfirmedMutation().catch(function () {
-                showEditStatus("操作已保存，但刷新失败", true);
+                App.showEditStatus("操作已保存，但刷新失败", true);
                 App.timelineLastSaveFailed = true;
                 throw new Error("timeline_refresh_failed");
             }).then(function () {
@@ -1340,13 +668,13 @@
                 settleSubmittedDurationIntent(submittedDraft);
                 return true;
             }).finally(function () {
-                setEditSaving(false);
-                if (App.timelineAutosaveQueued && isEditDirty()) {
+                App.setEditSaving(false);
+                if (App.timelineAutosaveQueued && App.isEditDirty()) {
                     App.timelineAutosaveQueued = false;
-                    scheduleTimelineAutosave(0);
+                    App.scheduleTimelineAutosave(0);
                 } else {
                     App.timelineAutosaveQueued = false;
-                    if (!isEditDirty()) App.submittedDraft = null;
+                    if (!App.isEditDirty()) App.submittedDraft = null;
                 }
                 drainPendingContextChange(true);
             });
@@ -1358,389 +686,11 @@
         });
         App.timelineSavePromise = completion.finally(function () {
             if (App.timelineSavePromise) App.timelineSavePromise = null;
-            updateFDWorkEntryButton();
+            App.updateFDWorkEntryButton();
         });
         return App.timelineSavePromise;
     }
     App.saveEdit = saveEdit;
-
-    var fdWorkFillTransactionSequence = 0;
-    var activeFDWorkFillTransaction = null;
-
-    function fdWorkOperationGeneration() {
-        var value = App.fdWorkStatus && App.fdWorkStatus.operation_generation;
-        return Number.isInteger(value) ? value : null;
-    }
-
-    function beginFDWorkFillTransaction() {
-        var transaction = {
-            id: ++fdWorkFillTransactionSequence,
-            state: "pending",
-            terminalKind: null,
-            baselineOperationGeneration: fdWorkOperationGeneration()
-        };
-        activeFDWorkFillTransaction = transaction;
-        return transaction;
-    }
-
-    function currentFDWorkTerminalKind(transaction) {
-        if (!transaction || activeFDWorkFillTransaction !== transaction) return null;
-        var status = App.fdWorkStatus || {};
-        if (
-            status.operation !== "none"
-            || status.operation_result_owner !== "automation_fill"
-            || ["save_completed", "operation_canceled", "failed"]
-                .indexOf(status.operation_status) < 0
-        ) return null;
-        var generation = Number.isInteger(status.operation_generation)
-            ? status.operation_generation : null;
-        if (
-            generation !== null
-            && transaction.baselineOperationGeneration !== null
-            && generation <= transaction.baselineOperationGeneration
-        ) return null;
-        return status.operation_status;
-    }
-
-    function settleFDWorkFillTransaction(transaction, terminalKind) {
-        if (
-            !transaction
-            || activeFDWorkFillTransaction !== transaction
-            || transaction.state !== "pending"
-        ) return false;
-        transaction.state = "terminal";
-        transaction.terminalKind = terminalKind;
-        return true;
-    }
-
-    function syncFDWorkFillTransactionFromStatus(transaction) {
-        var terminalKind = currentFDWorkTerminalKind(transaction);
-        if (!terminalKind) return null;
-        if (transaction.state === "pending") {
-            settleFDWorkFillTransaction(transaction, terminalKind);
-        }
-        return terminalKind;
-    }
-
-    function canFDWorkFillTransactionWrite(transaction) {
-        if (!transaction || activeFDWorkFillTransaction !== transaction) return false;
-        syncFDWorkFillTransactionFromStatus(transaction);
-        return transaction.state === "pending";
-    }
-
-    function fdWorkTerminalResult(transaction) {
-        return !!(transaction && transaction.terminalKind === "save_completed");
-    }
-
-    function fdWorkEnabled() {
-        var status = App.fdWorkStatus;
-        return !!status
-            && status.supported === true
-            && status.enabled === true;
-    }
-
-    function getFDWorkAvailability(session, options) {
-        options = options || {};
-        if (!fdWorkEnabled()) {
-            return { enabled: false, state: "hidden", reason: "" };
-        }
-        var capability = App.fdWorkStatus || {};
-        if (capability.session_state === "probing") {
-            return { enabled: true, state: "busy", reason: "正在连接 FD Work…" };
-        }
-        if (capability.session_state === "error") {
-            return { enabled: true, state: "error", reason: App.fdWorkStatusText(capability) };
-        }
-        if (capability.interaction_owner && capability.interaction_owner !== "none") {
-            return { enabled: true, state: "busy", reason: App.fdWorkStatusText(capability) };
-        }
-        if (
-            capability.ready !== true
-            && capability.session_state !== "idle"
-            && capability.session_state !== "login_required"
-        ) {
-            return { enabled: true, state: "disabled", reason: "FD Work 尚未准备完成" };
-        }
-        if (!session) {
-            return { enabled: true, state: "disabled", reason: "请选择一个已结束的时间段" };
-        }
-        if (session.is_in_progress === true || !session.end_time) {
-            return { enabled: true, state: "disabled", reason: "进行中的时间段无法填入 FD Work" };
-        }
-        if (
-            session.row_kind !== "project_session"
-            || session.is_report_project !== true
-            || session.is_report_uncategorized === true
-            || session.is_uncategorized === true
-            || session.project_is_deleted === true
-        ) return { enabled: true, state: "disabled", reason: "请先为时间段选择项目" };
-        var projectName = String(session.project_name || "").trim();
-        var narrative = String(session.session_note || "").trim();
-        var durationSeconds = Math.max(0, parseInt(session.duration_seconds, 10) || 0);
-        if (options.authoritative !== true) {
-            var project = document.getElementById("edit-project-select");
-            var selected = project && project.options
-                ? project.options[project.selectedIndex]
-                : null;
-            projectName = selected
-                ? String(selected.textContent || "").trim()
-                : projectName;
-            var note = document.getElementById("edit-note-text");
-            narrative = String(note ? note.value : narrative).trim();
-            var duration = document.getElementById("edit-duration-input");
-            var normalized = normalizeTimelineDurationInput(
-                duration ? duration.value : (durationSeconds / 3600).toFixed(1)
-            );
-            if (!normalized.valid) {
-                return { enabled: true, state: "disabled", reason: normalized.reason };
-            }
-            if (!normalized.cleared) durationSeconds = normalized.seconds;
-        }
-        if (!projectName) {
-            return { enabled: true, state: "disabled", reason: "请先为时间段选择项目" };
-        }
-        if (!narrative) {
-            return { enabled: true, state: "disabled", reason: "请先填写描述" };
-        }
-        if (durationSeconds < 360) {
-            return { enabled: true, state: "disabled", reason: "时长至少为 0.1 小时" };
-        }
-        if (durationSeconds > 86040) {
-            return { enabled: true, state: "disabled", reason: "该时间段超过 FD Work 允许的 23.9 小时" };
-        }
-        if (App.timelineLastSaveFailed === true) {
-            return { enabled: true, state: "error", reason: "上次更改保存失败，请重试" };
-        }
-        if (!options.ignoreBusy && (App.editSaving || App.timelineCompositionActive === true)) {
-            return { enabled: true, state: "busy", reason: "正在保存时间段" };
-        }
-        if (!options.ignoreBusy && App.mutationState === "unknown") {
-            return { enabled: true, state: "error", reason: "上次更改保存失败，请重试" };
-        }
-        if (!options.ignoreBusy && App.fdWorkOpenPromise) {
-            return { enabled: true, state: "busy", reason: "正在打开 FD Work…" };
-        }
-        if (!options.ignoreTransient && App.fdWorkStatusOverride) return App.fdWorkStatusOverride;
-        return {
-            enabled: true,
-            state: "ready",
-            reason: capability.ready === true
-                ? "将项目、日期、时长和描述填入并保存到 FD Work。"
-                : "填入前将先打开 FD Work。"
-        };
-    }
-    App.getFDWorkAvailability = getFDWorkAvailability;
-
-    function showFDWorkStatus(message, isError) {
-        syncFDWorkFillTransactionFromStatus(activeFDWorkFillTransaction);
-        App.fdWorkStatusOverride = message ? {
-            enabled: true,
-            state: isError ? "error" : "ready",
-            reason: message
-        } : null;
-        updateFDWorkEntryButton();
-    }
-    App.showFDWorkStatus = showFDWorkStatus;
-
-    function updateFDWorkEntryButton() {
-        var button = document.getElementById("fd-work-entry-btn");
-        var area = document.getElementById("fd-work-entry-area");
-        var status = document.getElementById("fd-work-status");
-        var availability = getFDWorkAvailability(App.editingSession);
-        if (area) area.hidden = availability.state === "hidden";
-        if (button) button.disabled = availability.state !== "ready";
-        if (status) {
-            status.hidden = availability.state === "hidden";
-            status.textContent = availability.reason || "";
-            status.className = "inline-status" + (
-                availability.state === "error" || availability.state === "disabled"
-                    ? " edit-status-error" : ""
-            );
-        }
-    }
-    App.updateFDWorkEntryButton = updateFDWorkEntryButton;
-
-    function flushTimelineEditsForFDWork() {
-        cancelTimelineAutosaveTimer();
-        if (App.timelineCompositionActive === true) {
-            showFDWorkStatus("请先完成当前文字输入", true);
-            return Promise.resolve(false);
-        }
-        if (App.editSaving) {
-            showFDWorkStatus("正在保存时间段…", false);
-            return (App.timelineSavePromise || Promise.resolve(false)).then(function (ok) {
-                if (!ok) return false;
-                return flushTimelineEditsForFDWork();
-            });
-        }
-        if (App.timelineAutosaveQueued || isEditDirty()) {
-            App.timelineAutosaveQueued = false;
-            showFDWorkStatus("正在保存时间段…", false);
-            return saveEdit().then(function (ok) {
-                if (!ok) return false;
-                return flushTimelineEditsForFDWork();
-            });
-        }
-        return Promise.resolve(App.timelineLastSaveFailed !== true);
-    }
-    App.flushTimelineEditsForFDWork = flushTimelineEditsForFDWork;
-
-    function openFDWorkEntryForSelection() {
-        if (App.fdWorkOpenPromise) return App.fdWorkOpenPromise;
-        App.fdWorkStatusOverride = null;
-        var availability = getFDWorkAvailability(App.editingSession);
-        if (availability.state !== "ready") {
-            updateFDWorkEntryButton();
-            if (availability.state !== "hidden") showFDWorkStatus(availability.reason, true);
-            updateFDWorkEntryButton();
-            return Promise.resolve(false);
-        }
-        var capability = App.fdWorkStatus || {};
-        if (capability.ready !== true) {
-            if (!App.fdWork || typeof App.fdWork.ensureSession !== "function") {
-                showFDWorkStatus("打开 FD Work 失败", true);
-                return Promise.resolve(false);
-            }
-            showFDWorkStatus(
-                capability.login_required === true ? "请登录 FD Work" : "正在连接 FD Work…",
-                false
-            );
-            var sessionOperation = App.fdWork.ensureSession().then(function (result) {
-                if (!result || result.ok !== true) {
-                    showFDWorkStatus(result && result.message || "打开 FD Work 失败", true);
-                    return false;
-                }
-                var latest = App.fdWorkStatus || {};
-                if (latest.ready === true) {
-                    showFDWorkStatus("FD Work 已连接，请再次点击填入", false);
-                } else if (latest.operation === "user_auth") {
-                    showFDWorkStatus(
-                        latest.page_phase === "login_confirmation"
-                            ? "请确认登录"
-                            : "请登录 FD Work",
-                        false
-                    );
-                } else {
-                    showFDWorkStatus("正在连接 FD Work…", false);
-                }
-                return false;
-            }).finally(function () {
-                if (App.fdWorkOpenPromise === sessionOperation) App.fdWorkOpenPromise = null;
-                updateFDWorkEntryButton();
-            });
-            App.fdWorkOpenPromise = sessionOperation;
-            updateFDWorkEntryButton();
-            return sessionOperation;
-        }
-        var transaction = beginFDWorkFillTransaction();
-        showFDWorkStatus(
-            isEditDirty() || App.editSaving ? "正在保存时间段…" : "正在填入 FD Work…",
-            false
-        );
-        var operation = flushTimelineEditsForFDWork().then(function (saved) {
-            if (!canFDWorkFillTransactionWrite(transaction)) {
-                return fdWorkTerminalResult(transaction);
-            }
-            if (!saved) {
-                settleFDWorkFillTransaction(transaction, "failed");
-                showFDWorkStatus("保存失败，未打开 FD Work", true);
-                return false;
-            }
-            var selectionKey = String(App.selectedProjectionInstanceKey || "");
-            return openResolvedFDWorkSelection(selectionKey, true, transaction);
-        }).finally(function () {
-            if (App.fdWorkOpenPromise === operation) App.fdWorkOpenPromise = null;
-            updateFDWorkEntryButton();
-        });
-        App.fdWorkOpenPromise = operation;
-        updateFDWorkEntryButton();
-        return operation;
-    }
-    App.openFDWorkEntryForSelection = openFDWorkEntryForSelection;
-
-    function resolveSelectedFDWorkSession(selectionKey) {
-        var matches = (App.currentSessions || []).filter(function (session) {
-            return String(session.projection_instance_key || "") === selectionKey;
-        });
-        if (matches.length !== 1) return null;
-        var availability = getFDWorkAvailability(matches[0], {
-            authoritative: true,
-            ignoreBusy: true,
-            ignoreTransient: true
-        });
-        if (availability.state !== "ready") {
-            showFDWorkStatus(availability.reason || "当前时间段已变化，请重新选择", true);
-            return null;
-        }
-        return matches[0];
-    }
-    App.resolveSelectedFDWorkSession = resolveSelectedFDWorkSession;
-
-    function openResolvedFDWorkSelection(selectionKey, allowStaleRecovery, transaction) {
-        if (!canFDWorkFillTransactionWrite(transaction)) {
-            return Promise.resolve(fdWorkTerminalResult(transaction));
-        }
-        var session = resolveSelectedFDWorkSession(selectionKey);
-        var reportDate = currentTimelineReportDate();
-        var revision = String(session ? session.projection_revision || "" : "");
-        if (!session || !reportDate || !selectionKey || !revision) {
-            if (canFDWorkFillTransactionWrite(transaction)) {
-                settleFDWorkFillTransaction(transaction, "failed");
-                showFDWorkStatus("当前时间段已变化，请重新选择", true);
-            }
-            return Promise.resolve(false);
-        }
-        showFDWorkStatus("正在填入 FD Work…", false);
-        return App.bridge.openFDWorkEntry(reportDate, selectionKey, revision).then(function (result) {
-            if (!canFDWorkFillTransactionWrite(transaction)) {
-                return fdWorkTerminalResult(transaction);
-            }
-            if (result && result.ok === true) {
-                if (result.operation_status === "save_completed") {
-                    settleFDWorkFillTransaction(transaction, "save_completed");
-                    showFDWorkStatus("已保存到 FD Work", false);
-                    return true;
-                }
-                settleFDWorkFillTransaction(transaction, "failed");
-                showFDWorkStatus("FD Work 操作结果未确认，请重试", true);
-                return false;
-            }
-            if (result && result.error === "stale_selection" && allowStaleRecovery) {
-                showFDWorkStatus("时间段已更新，正在刷新…", false);
-                return App.loadTimelineReport(reportDate, {
-                    showLoading: false,
-                    resetSelection: false,
-                    rejectOnError: true,
-                    errorMessage: "刷新失败，未打开 FD Work"
-                }).then(function () {
-                    if (!canFDWorkFillTransactionWrite(transaction)) {
-                        return fdWorkTerminalResult(transaction);
-                    }
-                    return openResolvedFDWorkSelection(selectionKey, false, transaction);
-                }).catch(function () {
-                    if (!canFDWorkFillTransactionWrite(transaction)) {
-                        return fdWorkTerminalResult(transaction);
-                    }
-                    settleFDWorkFillTransaction(transaction, "failed");
-                    showFDWorkStatus("刷新失败，未打开 FD Work", true);
-                    return false;
-                });
-            }
-            settleFDWorkFillTransaction(transaction, "failed");
-            showFDWorkStatus(
-                result && result.message ? result.message : "打开 FD Work 失败",
-                true
-            );
-            return false;
-        }).catch(function () {
-            if (!canFDWorkFillTransactionWrite(transaction)) {
-                return fdWorkTerminalResult(transaction);
-            }
-            settleFDWorkFillTransaction(transaction, "failed");
-            showFDWorkStatus("打开 FD Work 失败", true);
-            return false;
-        });
-    }
 
     App.refreshTimelineAfterEdit = function () {
         return App.loadTimelineReport(currentTimelineReportDate(), {
@@ -1752,8 +702,8 @@
 
     function cancelEdit() {
         if (App.editSaving) return;
-        if (!App.editingSession) clearEditPanel();
-        else populateEditPanel(App.editingSession);
+        if (!App.editingSession) App.clearEditPanel();
+        else App.populateEditPanel(App.editingSession);
     }
     App.cancelEdit = cancelEdit;
 
@@ -1785,17 +735,10 @@
         }
         var menu = document.getElementById("timeline-session-actions");
         if (menu && !anyAdvancedAllowed) {
-            closeTimelineAdvancedMenu({ restoreFocus: false });
+            App.closeTimelineAdvancedMenu({ restoreFocus: false });
         }
     }
     App.updateSessionActionButtons = updateSessionActionButtons;
-
-    function resetTimelineTransientUi() {
-        closeTimelineAdvancedMenu({ restoreFocus: false });
-        closeTimelineDrawer({ restoreFocus: false });
-        if (!App.editSaving) showEditStatus("", false);
-    }
-    App.resetTimelineTransientUi = resetTimelineTransientUi;
 
     var TIMELINE_OPERATIONS = Object.freeze({
         hide: Object.freeze({
@@ -1824,7 +767,7 @@
         options = options || {};
         var operation = TIMELINE_OPERATIONS[operationKey];
         if (!operation) return Promise.reject(new Error("unsupported_timeline_operation"));
-        dismissTimelineContextTransientUi();
+        App.dismissTimelineContextTransientUi();
         var key = App.selectedProjectionInstanceKey;
         var date = currentTimelineReportDate();
         var revision = App.selectedProjectionRevision || "";
@@ -1833,7 +776,7 @@
             ? findMergeTarget(key, options.direction)
             : null;
         if (operationKey === "merge" && !mergeTarget) {
-            showEditStatus("只能合并相邻时段。", true);
+            App.showEditStatus("只能合并相邻时段。", true);
             return Promise.resolve();
         }
         var owner = App.timelineRequestState.nextMutationOwner(
@@ -1871,7 +814,7 @@
         return operation.invoke.apply(null, args).then(function (result) {
             if (!App.timelineRequestState.isCurrentMutationOwner(owner)) return null;
             var data = App.handleResult(result, function (message) {
-                showEditStatus(message || "操作失败，请刷新后重试。", true);
+                App.showEditStatus(message || "操作失败，请刷新后重试。", true);
             });
             if (!data) {
                 App.timelineRequestState.releaseMutationOwner(owner, "confirmed_failure", result);
@@ -1880,9 +823,9 @@
             App.timelineRequestState.transitionMutation(owner, "confirmed_success", result);
             consumeMutationResult(result);
             App.timelineRequestState.releaseMutationOwner(owner, "confirmed_success", result);
-            showEditStatus("操作成功", false);
+            App.showEditStatus("操作成功", false);
             return refreshAfterConfirmedMutation().catch(function () {
-                showEditStatus("操作已保存，但刷新失败", true);
+                App.showEditStatus("操作已保存，但刷新失败", true);
             });
         }).catch(function () {
             if (App.timelineRequestState.isCurrentMutationOwner(owner)) markMutationUnknown(owner);
@@ -1950,7 +893,7 @@
         var list = document.getElementById("timeline-details-list");
         if (header) header.textContent = "选择左侧时段查看详情";
         if (list) list.innerHTML = "";
-        clearEditPanel();
+        App.clearEditPanel();
     }
     App.resetTimelineReportSelection = resetTimelineReportSelection;
 
@@ -2026,18 +969,18 @@
 
     function requestTimelineContextChange(actionFn, label) {
         var reason = label || "切换";
-        dismissTimelineContextTransientUi();
+        App.dismissTimelineContextTransientUi();
         if (App.mutationState === "unknown") {
-            showEditStatus("操作结果尚未确认，请先重试或刷新核对后再" + reason + "。", true);
+            App.showEditStatus("操作结果尚未确认，请先重试或刷新核对后再" + reason + "。", true);
             return Promise.resolve(false);
         }
         if (App.editSaving) {
             App.pendingContextChange = { action: actionFn, reason: reason };
-            showEditStatus("正在保存当前更改，保存完成后自动" + reason + "。", false);
+            App.showEditStatus("正在保存当前更改，保存完成后自动" + reason + "。", false);
             return Promise.resolve(false);
         }
-        if (isEditDirty()) {
-            showEditStatus("正在保存当前更改，保存完成后自动" + reason + "。", false);
+        if (App.isEditDirty()) {
+            App.showEditStatus("正在保存当前更改，保存完成后自动" + reason + "。", false);
             App.pendingContextChange = { action: actionFn, reason: reason };
             saveEdit();
             return Promise.resolve(false);
@@ -2051,7 +994,7 @@
         if (!pending) return;
         App.pendingContextChange = null;
         if (!saveSucceeded) {
-            showEditStatus("保存失败，未" + pending.reason + "，请重试或刷新核对。", true);
+            App.showEditStatus("保存失败，未" + pending.reason + "，请重试或刷新核对。", true);
             return;
         }
         try {
@@ -2206,10 +1149,8 @@
         App.timelineRequestToken = (App.timelineRequestToken || 0) + 1;
         App.timelineStructuralRefreshPending = false;
         App.suppressNextTimelineCollectionRefresh = false;
-        activeFDWorkFillTransaction = null;
-        App.fdWorkOpenPromise = null;
-        App.fdWorkStatusOverride = null;
-        resetTimelineTransientUi();
+        if (App.resetTimelineFDWorkState) App.resetTimelineFDWorkState();
+        App.resetTimelineTransientUi();
     }
     App.timeline = Object.freeze({
         applyLocalTick: applyTimelineLocalTick,
