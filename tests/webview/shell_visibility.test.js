@@ -46,11 +46,13 @@ function loadApp() {
     },
   };
   vm.createContext(context);
-  const source = fs.readFileSync(
-    path.join(__dirname, "../../worktrace/webview_ui/js/init_fd_work_v5.js"),
-    "utf8"
-  );
-  vm.runInContext(source, context);
+  for (const file of ["init_fd_work_v5.js", "shell_lifecycle.js"]) {
+    const source = fs.readFileSync(
+      path.join(__dirname, "../../worktrace/webview_ui/js", file),
+      "utf8"
+    );
+    vm.runInContext(source, context, { filename: file });
+  }
   return {
     App: context.window.WorkTraceApp,
     counts: () => ({ intervalCreates, intervalClears }),
@@ -75,6 +77,42 @@ test("shell visibility stops heartbeat and restores it once", async () => {
 
   assert.equal(revisionChecks, 1);
   assert.deepEqual(counts(), { intervalCreates: 2, intervalClears: 1 });
+});
+
+test("shell visibility dispatches presentation lifecycle exactly once", async () => {
+  const { App } = loadApp();
+  const calls = [];
+  App.uiPrimitives = {
+    onShellHidden: () => calls.push("ui:hidden"),
+    onShellVisible: () => calls.push("ui:visible"),
+  };
+  App.projectAutocomplete = {
+    onShellHidden: () => calls.push("autocomplete:hidden"),
+    onShellVisible: () => calls.push("autocomplete:visible"),
+  };
+  App.timelineTransientUi = {
+    onShellHidden: () => calls.push("timeline:hidden"),
+    onShellVisible: () => calls.push("timeline:visible"),
+  };
+  App.privacyNotice = {
+    closeView: (options) => calls.push(`privacy:${options.restoreFocus}`),
+  };
+  App.runRevisionCheck = () => Promise.resolve();
+
+  await App.setShellVisibility(false);
+  await App.setShellVisibility(false);
+  await App.setShellVisibility(true);
+  await App.setShellVisibility(true);
+
+  assert.deepEqual(calls, [
+    "ui:hidden",
+    "autocomplete:hidden",
+    "timeline:hidden",
+    "privacy:false",
+    "ui:visible",
+    "autocomplete:visible",
+    "timeline:visible",
+  ]);
 });
 
 test("hiding does not discard a queued timeline edit", () => {
