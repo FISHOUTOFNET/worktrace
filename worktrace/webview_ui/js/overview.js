@@ -206,6 +206,47 @@
     App.showRecent = function (payload) {
         renderRecent((payload && payload.recent) || []);
     };
+
+    function refreshOverview() {
+        var token = App.requestCoordinator.beginLatest("overview", "today");
+        return App.bridge.getOverview().then(function (result) {
+            if (!App.requestCoordinator.isCurrent(token)) return;
+            var bundle = App.handleResult(result, function (msg) { throw new Error(msg); });
+            if (!bundle || !App.acceptPagePayloadRuntime(bundle, "overview", bundle.date)) return;
+            var runtime = App.liveRuntimeStore.get();
+            var overview = Object.assign({}, bundle.overview || {});
+            overview.date = bundle.date || overview.date;
+            overview.current_activity = runtime ? runtime.currentActivity : {};
+            overview.current_session = bundle.current_session || null;
+            overview.project_distribution = bundle.project_distribution || {
+                total_seconds: 0,
+                segments: []
+            };
+            overview.recent = bundle.recent || [];
+            overview.kpi_live_targets = bundle.kpi_live_targets || {};
+            if (overview.today_total_seconds === undefined) {
+                overview.today_total_seconds = bundle.today_total_seconds || 0;
+            }
+            if (overview.classified_seconds === undefined) {
+                overview.classified_seconds = bundle.classified_seconds || 0;
+            }
+            if (overview.uncategorized_seconds === undefined) {
+                overview.uncategorized_seconds = bundle.uncategorized_seconds || 0;
+            }
+            showOverview(overview);
+        }).catch(function () {
+            if (App.requestCoordinator.isCurrent(token)) App.showError("刷新失败");
+        });
+    }
+    App.refreshOverview = refreshOverview;
+
+    function updateCurrentActivity(activity, options) {
+        if (!App.lastOverviewSnapshot) App.lastOverviewSnapshot = {};
+        App.lastOverviewSnapshot.current_activity = activity || {};
+        if (!options || options.render !== true || App.currentPage !== "overview") return;
+        var target = document.getElementById("current-activity");
+        if (target) App.renderCurrentActivityElement(target, activity || {}, "overview");
+    }
     function onOverviewRuntimeTransition(change) {
         change = change || {};
         if (change.source !== "refresh-state" || App.currentPage !== "overview") return;
@@ -216,11 +257,21 @@
     function onOverviewRefreshRequested(options) {
         options = options || {};
         if (options.automatic !== true) App.suppressNextOverviewCollectionRefresh = false;
+        return refreshOverview();
     }
 
     App.overview = Object.freeze({
+        refreshPolicy: Object.freeze({
+            entryGenerations: Object.freeze(["report_structure"]),
+            automaticGenerations: Object.freeze(["report_structure"]),
+            deferred: true
+        }),
+        hasLoadedData: function () { return !!App.lastOverviewSnapshot; },
+        refreshEvidence: function () { return App.lastOverviewSnapshot || null; },
+        onPageEntered: onOverviewRefreshRequested,
         onRefreshRequested: onOverviewRefreshRequested,
         onRuntimeTransition: onOverviewRuntimeTransition,
+        updateCurrentActivity: updateCurrentActivity,
         resetGeneration: function () {
             App.overviewRequestToken = (App.overviewRequestToken || 0) + 1;
             App.suppressNextOverviewCollectionRefresh = false;

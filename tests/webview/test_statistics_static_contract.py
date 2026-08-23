@@ -117,7 +117,7 @@ def test_draft_dates_stay_local_while_project_and_quick_ranges_query_immediately
     assert "start.getDay() + 6" in week
     assert 'type === "all"' in quick
     assert "beginStatisticsQuery(0)" in quick
-    buttons = func_body(read_js("init_fd_work_v5.js"), "initButtons")
+    buttons = func_body(source(), "bindStatisticsEvents")
     for name in ("today", "week", "month", "all"):
         assert f'App.applyStatisticsQuickRange("{name}")' in buttons
 

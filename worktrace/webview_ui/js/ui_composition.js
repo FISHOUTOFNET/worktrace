@@ -163,36 +163,6 @@
         };
     }
 
-    function navPageFromTarget(target) {
-        var node = target;
-        while (node && node !== document) {
-            if (typeof node.getAttribute === "function") {
-                var page = node.getAttribute("data-page");
-                if (page) return String(page);
-            }
-            node = node.parentNode;
-        }
-        return "";
-    }
-
-    function afterUiInteraction(event) {
-        var navPage = event && event.type === "click" ? navPageFromTarget(event.target) : "";
-        window.setTimeout(function () {
-            if (navPage && App.currentPage === navPage) {
-                if (navPage === "rules" && App.rules
-                    && typeof App.rules.onPageEntered === "function") {
-                    App.rules.onPageEntered();
-                } else if (navPage === "settings" && App.settings
-                    && typeof App.settings.onPageEntered === "function") {
-                    App.settings.onPageEntered();
-                }
-            }
-        }, 0);
-    }
-    if (document && typeof document.addEventListener === "function") {
-        document.addEventListener("click", afterUiInteraction);
-    }
-
     if (App.fdWork && typeof App.fdWork.bindStatusHost === "function") {
         App.fdWork.bindStatusHost({ onStatusChanged: syncFDWorkConsumers });
     }

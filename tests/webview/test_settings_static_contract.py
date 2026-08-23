@@ -368,7 +368,6 @@ def test_credentials_use_compact_rows_and_momentary_reveal_controls() -> None:
     ]
     styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     source = _settings_source()
-    init = read_js("init_fd_work_v5.js")
 
     assert section.count('class="credential-row"') == 3
     assert section.count('class="password-reveal-button"') == 3
@@ -397,7 +396,7 @@ def test_credentials_use_compact_rows_and_momentary_reveal_controls() -> None:
     assert 'event.key === "Escape"' in source
     assert "hideAllPasswordFields" in func_body(source, "setSettingsBackupControlsDisabled")
     assert "hideAllPasswordFields" in func_body(source, "resetSettingsTransientUi")
-    assert "App.initPasswordRevealControls" in init
+    assert "initPasswordRevealControls();" in func_body(source, "bindSettingsEvents")
 
 
 def test_danger_zone_removes_only_its_local_divider_and_status_gap() -> None:
@@ -454,7 +453,7 @@ def test_first_run_notice_is_fail_closed_and_mode_safe() -> None:
 
 
 def test_settings_buttons_are_bound_to_named_capabilities() -> None:
-    body = func_body(read_js("init_fd_work_v5.js"), "initButtons")
+    body = func_body(_settings_source(), "bindSettingsEvents")
     bindings = (
         ("settings-clipboard-toggle", "App.handleCaptureToggleChange"),
         ("settings-launch-at-login-toggle", "App.handleLaunchAtLoginToggleChange"),
@@ -462,8 +461,6 @@ def test_settings_buttons_are_bound_to_named_capabilities() -> None:
         ("settings-backup-manifest-btn", "App.previewEncryptedBackupManifest"),
         ("settings-backup-import-btn", "App.importEncryptedBackup"),
         ("settings-clear-local-data-btn", "App.clearAllLocalData"),
-        ("first-run-notice-accept-btn", "App.acceptFirstRunNotice"),
-        ("first-run-notice-retry-btn", "App.retryFirstRunNotice"),
         ("settings-privacy-notice-btn", "App.openPrivacyNoticeFromSettings"),
     )
     for dom_id, capability in bindings:
@@ -472,6 +469,11 @@ def test_settings_buttons_are_bound_to_named_capabilities() -> None:
     assert "first-run-notice-close-btn" in body
     assert "App.firstRunNoticeViewingFromSettings" in body
     assert "App.hideFirstRunNotice" in body
+    global_bindings = func_body(read_js("init_fd_work_v5.js"), "initButtons")
+    assert "first-run-notice-accept-btn" in global_bindings
+    assert "App.acceptFirstRunNotice" in global_bindings
+    assert "first-run-notice-retry-btn" in global_bindings
+    assert "App.retryFirstRunNotice" in global_bindings
 
 
 def test_settings_styles_are_scoped() -> None:

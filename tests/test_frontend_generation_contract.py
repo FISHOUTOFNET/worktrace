@@ -30,11 +30,7 @@ def test_client_generation_reset_delegates_page_state_to_fixed_owners():
     body = source[start:end]
     for required in (
         "bumpDataEpoch()",
-        "App.overview.resetGeneration()",
-        "App.timeline.resetGeneration()",
-        "App.statistics.resetGeneration()",
-        "App.rules.resetGeneration()",
-        "App.settings.resetGeneration()",
+        "App.pageLifecycle.resetGeneration()",
         "App.fdWork.resetGeneration()",
         "lastRefreshState = null",
         "activePageRefreshPending = null",
@@ -42,6 +38,14 @@ def test_client_generation_reset_delegates_page_state_to_fixed_owners():
         "_monotonicRenderState = {}",
     ):
         assert required in body
+    for retired_direct_hook in (
+        "App.overview.resetGeneration()",
+        "App.timeline.resetGeneration()",
+        "App.statistics.resetGeneration()",
+        "App.rules.resetGeneration()",
+        "App.settings.resetGeneration()",
+    ):
+        assert retired_direct_hook not in body
     for page_private_field in (
         "selectedProjectionInstanceKey",
         "detailsOwner",

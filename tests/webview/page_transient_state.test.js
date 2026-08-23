@@ -200,6 +200,12 @@ test("page switch resets only the page actually being left", () => {
     resetStatisticsTransientUi: () => calls.push("statistics"),
     resetSettingsTransientUi: () => calls.push("settings"),
   });
+  h.App.overview = {};
+  h.App.timeline = { onPageLeft: () => h.App.resetTimelineTransientUi() };
+  h.App.statistics = { onPageLeft: () => h.App.resetStatisticsTransientUi() };
+  h.App.rules = { onPageLeft: () => h.App.resetRulesTransientUi() };
+  h.App.settings = { onPageLeft: () => h.App.resetSettingsTransientUi() };
+  h.load("page_lifecycle.js");
   h.load("init_fd_work_v5.js");
   h.element("app-toast").textContent = "keep toast";
   h.element("global-alert").textContent = "keep alert";
@@ -218,6 +224,7 @@ test("client generation reset delegates transient ownership to fixed modules", (
     h.App[name] = { resetGeneration: () => calls.push(name) };
   }
   h.App.requestCoordinator = { bumpDataEpoch: () => calls.push("runtime") };
+  h.load("page_lifecycle.js");
   h.load("init_fd_work_v5.js");
 
   h.App.resetClientGeneration("replacement");

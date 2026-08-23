@@ -189,12 +189,7 @@ test("loaded settings refresh in the background on every page entry", async () =
   App.clearSettingsError = () => {};
   App.loadSettingsPrivacyStatus = () => Promise.resolve();
 
-  const target = {
-    parentNode: null,
-    getAttribute(name) { return name === "data-page" ? "settings" : null; },
-  };
-  listeners.click({ type: "click", target });
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await App.settings.onPageEntered();
 
   assert.equal(requests, 1);
   assert.equal(App.settingsRefreshPending, false);

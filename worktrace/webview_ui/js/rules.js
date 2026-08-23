@@ -198,11 +198,36 @@
         if (typeof App.resetRulesTransientUi === "function") {
             App.resetRulesTransientUi({ restoreFocus: false });
         }
+        App.setRulesLoading(false);
     }
+
+    function bindRulesEvents() {
+        if (App.initRulesPanelEvents) App.initRulesPanelEvents();
+    }
+
     App.rules = Object.freeze({
+        bindEvents: bindRulesEvents,
+        // Activity-backed last-used ordering makes report structure stale on entry,
+        // but only classification/privacy changes refresh an already-open page.
+        refreshPolicy: Object.freeze({
+            entryGenerations: Object.freeze([
+                "classification_catalog", "privacy_catalog", "report_structure"
+            ]),
+            automaticGenerations: Object.freeze([
+                "classification_catalog", "privacy_catalog"
+            ]),
+            deferred: false
+        }),
+        hasLoadedData: function () { return App.rulesLoaded === true; },
         onDataChanged: onRulesDataChanged,
         onPageEntered: onRulesPageEntered,
+        onPageLeft: function () {
+            if (typeof App.resetRulesTransientUi === "function") {
+                App.resetRulesTransientUi({ restoreFocus: false });
+            }
+        },
         onRefreshRequested: onRulesRefreshRequested,
+        refreshEvidence: function () { return App.lastProjectRulesData || null; },
         resetGeneration: resetRulesGeneration
     });
 })();

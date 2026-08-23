@@ -1,100 +1,34 @@
-// WorkTrace frontend — stateless page lifecycle capability boundary.
+// WorkTrace frontend — stateless page lifecycle capability registry.
 (function () {
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
+    var PAGE_NAMES = Object.freeze([
+        "overview", "timeline", "statistics", "rules", "settings"
+    ]);
 
-    function extendPage(name, capabilities) {
-        var existing = App[name] && typeof App[name] === "object" ? App[name] : {};
-        App[name] = Object.freeze(Object.assign({}, existing, capabilities));
+    function capability(name) {
+        var owner = App[String(name || "")];
+        return owner && typeof owner === "object" ? owner : null;
     }
 
-    extendPage("overview", {
-        hasLoadedData: function () {
-            return !!App.lastOverviewSnapshot;
-        },
-        refreshEvidence: function () {
-            return App.lastOverviewSnapshot || null;
-        },
-        updateCurrentActivity: function (activity) {
-            if (!App.lastOverviewSnapshot) App.lastOverviewSnapshot = {};
-            App.lastOverviewSnapshot.current_activity = activity || {};
-        }
-    });
+    function forEach(method, args) {
+        PAGE_NAMES.forEach(function (name) {
+            var owner = capability(name);
+            if (owner && typeof owner[method] === "function") {
+                owner[method].apply(owner, args || []);
+            }
+        });
+    }
 
-    extendPage("timeline", {
-        hasLoadedData: function () {
-            if (App.timelineLoaded !== true || !App.lastTimelineData) return false;
-            var requestedDate = String(App.timelineDate || "");
-            var loadedDate = String(App.lastTimelineData.date || "");
-            return !requestedDate || requestedDate === loadedDate;
+    App.pageLifecycle = Object.freeze({
+        names: PAGE_NAMES,
+        capability: capability,
+        forEach: forEach,
+        bindEvents: function () { forEach("bindEvents"); },
+        onPageLeft: function (name, options) {
+            var owner = capability(name);
+            if (owner && typeof owner.onPageLeft === "function") owner.onPageLeft(options || {});
         },
-        isLoading: function () {
-            return App.timelineLoading === true;
-        },
-        refreshEvidence: function () {
-            return App.lastTimelineData || null;
-        },
-        reportDate: function () {
-            return App.timelineDate || null;
-        },
-        isEditing: function () {
-            return typeof App._timelineEditingActive === "function"
-                && App._timelineEditingActive();
-        },
-        automaticRefreshAllowed: function (today) {
-            return String(App.timelineDate || "") === String(today || "");
-        },
-        refreshScopeKey: function () {
-            return "timeline|" + String(App.timelineDate || "");
-        },
-        updateCurrentActivity: function (activity) {
-            if (!App.lastTimelineData) App.lastTimelineData = {};
-            App.lastTimelineData.current_activity = activity || {};
-        }
-    });
-
-    extendPage("statistics", {
-        hasLoadedData: function () {
-            return App.statisticsLoaded === true;
-        },
-        refreshEvidence: function () {
-            return App.statisticsAcceptedPayload || null;
-        },
-        automaticRefreshAllowed: function (today) {
-            var selection = App.statisticsSelection;
-            if (!selection || selection.allTime === true) return true;
-            var from = String(selection.dateFrom || "");
-            var to = String(selection.dateTo || "");
-            return !!from && !!to && from <= today && to >= today;
-        },
-        refreshScopeKey: function () {
-            var selection = App.statisticsSelection || {};
-            var filter = document.getElementById("statistics-project-filter");
-            return [
-                "statistics",
-                selection.allTime === true ? "all" : "range",
-                String(selection.dateFrom || ""),
-                String(selection.dateTo || ""),
-                filter ? String(filter.value || "") : ""
-            ].join("|");
-        }
-    });
-
-    extendPage("rules", {
-        hasLoadedData: function () {
-            return App.rulesLoaded === true;
-        },
-        refreshEvidence: function () {
-            return App.lastProjectRulesData || null;
-        }
-    });
-
-    extendPage("settings", {
-        hasLoadedData: function () {
-            return App.settingsLoaded === true;
-        },
-        refreshEvidence: function () {
-            return App.lastSettingsStatus || null;
-        }
+        resetGeneration: function () { forEach("resetGeneration"); }
     });
 })();

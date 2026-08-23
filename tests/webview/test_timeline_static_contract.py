@@ -310,7 +310,6 @@ def test_timeline_duration_draft_preserves_exact_override_until_user_touches_fie
     dirty = func_body(source, "isEditDirty")
     save = func_body(source, "saveEdit")
     handler = func_body(source, "handleTimelineDurationChange")
-    init = _source("init_fd_work_v5.js")
 
     assert "App.timelineDurationDraftTouched = false" in populate
     assert "toFixed(1)" in populate
@@ -325,6 +324,6 @@ def test_timeline_duration_draft_preserves_exact_override_until_user_touches_fie
     assert "App.timelineDurationDraftTouched = true" in handler
     assert "scheduleTimelineAutosave(0)" in handler
     assert (
-        'bind("edit-duration-input", "change", '
-        "App.handleTimelineDurationChange)" in init
+        'bindTimelineControl("edit-duration-input", "change", '
+        "App.handleTimelineDurationChange)" in source
     )

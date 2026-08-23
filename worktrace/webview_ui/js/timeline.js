@@ -1063,11 +1063,82 @@
         if (change.liveChanged === true) App.suppressNextTimelineCollectionRefresh = true;
     }
 
-    function onTimelineRefreshRequested(options) {
+    function timelineHasLoadedData() {
+        if (App.timelineLoaded !== true || !App.lastTimelineData) return false;
+        var requestedDate = String(App.timelineDate || "");
+        var loadedDate = String(App.lastTimelineData.date || "");
+        return !requestedDate || requestedDate === loadedDate;
+    }
+
+    function updateTimelineCurrentActivity(activity, options) {
+        if (!App.lastTimelineData) App.lastTimelineData = {};
+        App.lastTimelineData.current_activity = activity || {};
+        if (!options || options.render !== true || App.currentPage !== "timeline") return;
+        var target = document.getElementById("timeline-current");
+        if (target) App.renderCurrentActivityElement(target, activity || {}, "timeline");
+    }
+
+    function onTimelineRefreshRequested(options, context) {
         options = options || {};
+        if (options.automatic !== true) App.suppressNextTimelineCollectionRefresh = false;
+        if (!timelineHasLoadedData() && App.timelineLoading !== true) {
+            return App.loadTimelineReport(App.timelineDate || null, { showLoading: true });
+        }
+        if (!timelineHasLoadedData()) return Promise.resolve(null);
+        if (timelineEditingActive()) {
+            if (context && context.runtime) {
+                updateTimelineCurrentActivity(context.runtime.currentActivity || {}, {});
+            }
+            return Promise.resolve(null);
+        }
         if (options.automatic === true) return refreshTimeline();
-        App.suppressNextTimelineCollectionRefresh = false;
         return refreshTimeline({ forceCollectionRefresh: true });
+    }
+
+    function bindTimelineControl(id, event, handler) {
+        var target = document.getElementById(id);
+        if (target) target.addEventListener(event, handler);
+    }
+
+    function bindTimelineEvents() {
+        bindTimelineControl("timeline-prev-btn", "click", App.goPrevDay);
+        bindTimelineControl("timeline-next-btn", "click", App.goNextDay);
+        bindTimelineControl("timeline-today-btn", "click", App.goToday);
+        bindTimelineControl("timeline-date-input", "change", function (event) {
+            App.goToDate(event.target.value || null);
+        });
+        [
+            ["timeline-merge-previous", "merge", "previous"],
+            ["timeline-merge-next", "merge", "next"],
+            ["timeline-split-session", "split"],
+            ["timeline-copy-session", "copy"]
+        ].forEach(function (action) {
+            bindTimelineControl(action[0], "click", function () {
+                App.runTimelineSessionOperation(
+                    action[1],
+                    action[2] ? { direction: action[2] } : undefined
+                );
+            });
+        });
+        bindTimelineControl("timeline-hide-session", "click", function (event) {
+            App.confirmTimelineDeletion("hide", {}, event.currentTarget);
+        });
+        bindTimelineControl("edit-project-select", "change", function () {
+            App.fdWorkStatusOverride = null;
+            App.updateFDWorkEntryButton();
+            App.scheduleTimelineAutosave(0);
+        });
+        bindTimelineControl("edit-note-text", "compositionstart", App.handleTimelineCompositionStart);
+        bindTimelineControl("edit-note-text", "compositionend", App.handleTimelineCompositionEnd);
+        bindTimelineControl("edit-note-text", "input", App.handleTimelineNoteInput);
+        bindTimelineControl("edit-note-text", "blur", App.handleTimelineNoteBlur);
+        bindTimelineControl("edit-duration-input", "change", App.handleTimelineDurationChange);
+        bindTimelineControl("fd-work-entry-btn", "click", App.openFDWorkEntryForSelection);
+        bindTimelineControl("timeline-project-filter", "change", App.applyTimelineProjectFilter);
+        bindTimelineControl("timeline-details-close", "click", App.closeTimelineDrawer);
+        bindTimelineControl("timeline-drawer-backdrop", "click", App.closeTimelineDrawer);
+        bindTimelineControl("timeline-advanced-toggle", "click", App.toggleTimelineAdvancedMenu);
+        if (App.initTimelineAccessibility) App.initTimelineAccessibility();
     }
 
     function applyTimelineLocalTick() {
@@ -1154,8 +1225,24 @@
     }
     App.timeline = Object.freeze({
         applyLocalTick: applyTimelineLocalTick,
+        automaticRefreshAllowed: function (today) {
+            return String(App.timelineDate || "") === String(today || "");
+        },
+        bindEvents: bindTimelineEvents,
+        refreshPolicy: Object.freeze({
+            entryGenerations: Object.freeze(["report_structure"]),
+            automaticGenerations: Object.freeze(["report_structure"]),
+            deferred: true
+        }),
+        hasLoadedData: timelineHasLoadedData,
+        onPageEntered: onTimelineRefreshRequested,
+        onPageLeft: function () { App.resetTimelineTransientUi({ restoreFocus: false }); },
         onRefreshRequested: onTimelineRefreshRequested,
         onRuntimeTransition: onTimelineRuntimeTransition,
+        refreshEvidence: function () { return App.lastTimelineData || null; },
+        refreshScopeKey: function () { return "timeline|" + String(App.timelineDate || ""); },
+        reportDate: function () { return App.timelineDate || null; },
+        updateCurrentActivity: updateTimelineCurrentActivity,
         resetGeneration: resetTimelineGeneration
     });
 })();

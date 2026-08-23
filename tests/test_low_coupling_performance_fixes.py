@@ -58,13 +58,16 @@ def test_navigation_performance_fix_contracts_remain_local():
     init = (root / "worktrace/webview_ui/js/init_fd_work_v5.js").read_text(encoding="utf-8")
     lifecycle = (root / "worktrace/webview_ui/js/page_lifecycle.js").read_text(encoding="utf-8")
     timeline = (root / "worktrace/webview_ui/js/timeline.js").read_text(encoding="utf-8")
+    statistics = (root / "worktrace/webview_ui/js/statistics.js").read_text(encoding="utf-8")
     view_model = (root / "worktrace/services/view_model_service.py").read_text(encoding="utf-8")
     report_as_of = (root / "worktrace/services/report_as_of_snapshot_service.py").read_text(encoding="utf-8")
 
-    assert 'preservePresentation: pageId === "statistics"' in init
+    assert "policy.preservePresentation === true" in init
+    assert "preservePresentation: true" in statistics
     assert '"timeline-navigation"' in timeline
     assert 'App.requestCoordinator.share(' in timeline
-    assert 'var loadedDate = String(App.lastTimelineData.date || "");' in lifecycle
+    assert 'var loadedDate = String(App.lastTimelineData.date || "");' in timeline
+    assert "App.lastTimelineData" not in lifecycle
     assert "build_top_activity_labels(" in view_model
 
     statistics_overlay = report_as_of.split(

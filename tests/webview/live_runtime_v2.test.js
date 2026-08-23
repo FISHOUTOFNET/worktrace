@@ -137,6 +137,11 @@ function harness() {
   App.settings = noOpLifecycle;
   App.fdWork = noOpLifecycle;
   vm.runInContext(
+    fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/page_lifecycle.js"), "utf8"),
+    context,
+    { filename: "page_lifecycle.js" }
+  );
+  vm.runInContext(
     fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/init_fd_work_v5.js"), "utf8"),
     context,
     { filename: "init_fd_work_v5.js" }

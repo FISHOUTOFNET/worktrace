@@ -4,8 +4,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-// Behavior tests for the privacy-gated startup orchestration in init_fd_work_v5.js.
-// Loads the REAL core.js, settings.js, and init_fd_work_v5.js; stubs only Bridge, DOM, timers.
+// Behavior tests for the privacy-gated startup orchestration through the shipping
+// Overview owner, page lifecycle registry, and init runtime coordinator.
 
 function flush() {
   return new Promise((resolve) => setImmediate(resolve));
@@ -130,7 +130,9 @@ function startupHarness() {
   };
 
   loadJs(context, "core.js");
+  loadJs(context, "overview.js");
   loadJs(context, "settings.js");
+  loadJs(context, "page_lifecycle.js");
   loadJs(context, "init_fd_work_v5.js");
 
   // Set the default page after loading so continueStartupAfterPrivacyGate

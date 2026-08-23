@@ -228,11 +228,10 @@ test("Rules ignores live-only runtime changes but refreshes on classification ge
 });
 
 test("Rules re-entry is a no-op until classification generation changes", async () => {
-  const { App, document, listeners, counters } = harness(runtime());
+  const { App, counters } = harness(runtime());
   App.currentPage = "rules";
 
-  listeners.click({ type: "click", target: navTarget("rules", document) });
-  await flushTimers();
+  await App.rules.onPageEntered();
   assert.equal(counters.rules(), 0);
 
   App.currentPage = "overview";
@@ -242,18 +241,16 @@ test("Rules re-entry is a no-op until classification generation changes", async 
   assert.equal(App.rulesRefreshPending, true);
 
   App.currentPage = "rules";
-  listeners.click({ type: "click", target: navTarget("rules", document) });
-  await flushTimers();
+  await App.rules.onPageEntered();
   assert.equal(counters.rules(), 1);
   assert.equal(App.rulesRefreshPending, false);
 });
 
 test("Settings re-entry refreshes status in the background without visible loading", async () => {
-  const { App, document, listeners, counters } = harness(runtime());
+  const { App, counters } = harness(runtime());
   App.currentPage = "settings";
 
-  listeners.click({ type: "click", target: navTarget("settings", document) });
-  await flushTimers();
+  await App.settings.onPageEntered();
   assert.equal(counters.settings(), 1);
   assert.equal(counters.visibleSettings(), 0);
   assert.equal(App.settingsRefreshPending, false);
@@ -265,8 +262,7 @@ test("Settings re-entry refreshes status in the background without visible loadi
   assert.equal(App.settingsRefreshPending, true);
 
   App.currentPage = "settings";
-  listeners.click({ type: "click", target: navTarget("settings", document) });
-  await flushTimers();
+  await App.settings.onPageEntered();
   assert.equal(counters.settings(), 2);
   assert.equal(counters.visibleSettings(), 0);
   assert.equal(App.settingsRefreshPending, false);

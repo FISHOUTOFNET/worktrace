@@ -1230,6 +1230,48 @@
     }
     App.openPrivacyNoticeFromSettings = openPrivacyNoticeFromSettings;
 
+    function bindSettingsControl(id, event, handler) {
+        var target = element(id);
+        if (target) target.addEventListener(event, handler);
+    }
+
+    function bindSettingsEvents() {
+        bindSettingsControl("settings-clipboard-toggle", "change", App.handleCaptureToggleChange);
+        bindSettingsControl(
+            "settings-launch-at-login-toggle", "change", App.handleLaunchAtLoginToggleChange
+        );
+        bindSettingsControl("settings-fd-work-toggle", "change", App.handleFDWorkToggleChange);
+        bindSettingsControl("settings-fd-work-reconnect", "click", App.reconnectFDWork);
+        bindSettingsControl("settings-backup-export-btn", "click", App.exportEncryptedBackup);
+        bindSettingsControl(
+            "settings-backup-manifest-btn", "click", App.previewEncryptedBackupManifest
+        );
+        bindSettingsControl("settings-backup-import-btn", "click", App.importEncryptedBackup);
+        bindSettingsControl("settings-clear-local-data-btn", "click", App.clearAllLocalData);
+        bindSettingsControl("settings-clear-all-btn", "click", App.clearAllLocalData);
+        bindSettingsControl(
+            "settings-privacy-notice-btn", "click", App.openPrivacyNoticeFromSettings
+        );
+        bindSettingsControl("settings-recovery-btn", "click", App.recoverDatabaseMaintenance);
+        bindSettingsControl("first-run-notice-close-btn", "click", function () {
+            if (App.firstRunNoticeViewingFromSettings) App.hideFirstRunNotice();
+        });
+        initSettingsCategories();
+        initPasswordRevealControls();
+    }
+
+    function settingsRuntimeRefreshIdentity(runtime) {
+        if (!runtime) return "";
+        var collector = runtime.collector || {};
+        return [
+            String(collector.status || ""),
+            collector.paused === true ? "paused" : "running",
+            String(collector.display || ""),
+            String(runtime.runtimePhase || ""),
+            (Array.isArray(runtime.errorCodes) ? runtime.errorCodes : []).join(",")
+        ].join("|");
+    }
+
     function resetSettingsGeneration() {
         App.settingsLoaded = false;
         App.settingsRefreshPending = false;
@@ -1238,12 +1280,23 @@
         App.firstRunNoticeLoading = false;
         App.settingsRequestToken = (App.settingsRequestToken || 0) + 1;
         resetSettingsTransientUi({ restoreFocus: false });
+        setSettingsLoading(false);
     }
     App.settings = Object.freeze({
+        bindEvents: bindSettingsEvents,
+        refreshPolicy: Object.freeze({
+            entryGenerations: Object.freeze(["settings", "privacy_catalog"]),
+            automaticGenerations: Object.freeze(["settings", "privacy_catalog"]),
+            deferred: false
+        }),
+        hasLoadedData: function () { return App.settingsLoaded === true; },
         onDataChanged: onSettingsDataChanged,
         onFDWorkStatusChanged: onFDWorkStatusChanged,
         onPageEntered: onSettingsPageEntered,
+        onPageLeft: function () { resetSettingsTransientUi({ restoreFocus: false }); },
         onRefreshRequested: onSettingsRefreshRequested,
+        refreshEvidence: function () { return App.lastSettingsStatus || null; },
+        runtimeRefreshIdentity: settingsRuntimeRefreshIdentity,
         resetGeneration: resetSettingsGeneration
     });
 })();
