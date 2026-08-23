@@ -70,6 +70,7 @@ def test_shipping_script_composition_contains_current_owners_in_order():
         "js/rules_rule_actions.js",
         "js/rules_delete_actions.js",
         "js/init_fd_work_v5.js",
+        "js/shell_lifecycle.js",
         "js/ui_composition.js",
     ]
     assert [name for name in scripts if name in required] == required
