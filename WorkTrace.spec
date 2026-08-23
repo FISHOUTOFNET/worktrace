@@ -51,6 +51,7 @@ datas = [
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'rules_delete_actions.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'page_lifecycle.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'init_fd_work_v5.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'shell_lifecycle.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'ui_composition.js'), 'worktrace/webview_ui/js'),
     (str(brand_icon), 'worktrace/assets'),
     (str(paused_brand_icon), 'worktrace/assets'),
