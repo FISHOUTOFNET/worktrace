@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
 
 function harness() {
   const elements = new Map();
@@ -23,6 +24,7 @@ function harness() {
         setAttribute() {}, removeAttribute() {}, getAttribute() { return ""; },
         querySelectorAll() { return []; },
         querySelector() { return null; },
+        appendChild() {},
         addEventListener() {},
       });
     }
@@ -78,7 +80,7 @@ function harness() {
   App.setLiveClockTarget = () => {};
   App.acceptLiveRuntimePayload = () => true;
 
-  for (const file of ["fd_work_v5.js", "timeline.js", "ui_composition.js"]) {
+  for (const file of ["fd_work_v5.js", ...TIMELINE_MODULES, "ui_composition.js"]) {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", file), "utf8"),
       context,
@@ -107,14 +109,10 @@ function configureReadySession(App, element) {
     can_edit_note: true,
     can_edit_duration: true,
   };
-  App.editingSession = session;
+  App.timelineEditorState.populate(session);
   App.currentSessions = [session];
-  App.timelineLastSaveFailed = false;
-  App.editSaving = false;
-  App.timelineCompositionActive = false;
   App.mutationState = "idle";
   App.fdWorkOpenPromise = null;
-  App.lastSettingsStatus = { fd_work: { supported: true, enabled: true } };
   const project = element("edit-project-select");
   project.value = "17";
   project.options = [{ textContent: "CASE-001" }];

@@ -81,54 +81,13 @@
     var automaticPageRefreshTimer = null;
     var automaticPageRefreshKey = "";
     var automaticPageRefreshDueAtEpochMs = 0;
-    var PAGE_REFRESH_POLICIES = Object.freeze({
-        overview: Object.freeze({
-            entryGenerations: Object.freeze(["report_structure"]),
-            automaticGenerations: Object.freeze(["report_structure"]),
-            deferred: true
-        }),
-        timeline: Object.freeze({
-            entryGenerations: Object.freeze(["report_structure"]),
-            automaticGenerations: Object.freeze(["report_structure"]),
-            deferred: true
-        }),
-        statistics: Object.freeze({
-            entryGenerations: Object.freeze(["report_structure"]),
-            automaticGenerations: Object.freeze(["report_structure"]),
-            deferred: true
-        }),
-        rules: Object.freeze({
-            // Activity changes affect last-used ordering, so remember the page is
-            // stale for the next entry. Do not rebuild Rules while the user is
-            // merely switching external apps.
-            entryGenerations: Object.freeze([
-                "classification_catalog", "privacy_catalog", "report_structure"
-            ]),
-            automaticGenerations: Object.freeze([
-                "classification_catalog", "privacy_catalog"
-            ]),
-            deferred: false
-        }),
-        settings: Object.freeze({
-            entryGenerations: Object.freeze(["settings", "privacy_catalog"]),
-            automaticGenerations: Object.freeze(["settings", "privacy_catalog"]),
-            deferred: false
-        })
+    var PAGE_NAMES = App.pageLifecycle ? App.pageLifecycle.names : Object.freeze([]);
+    var pageRefreshDirty = {};
+    var pageRefreshEpoch = {};
+    PAGE_NAMES.forEach(function (page) {
+        pageRefreshDirty[page] = true;
+        pageRefreshEpoch[page] = 0;
     });
-    var pageRefreshDirty = {
-        overview: true,
-        timeline: true,
-        statistics: true,
-        rules: true,
-        settings: true
-    };
-    var pageRefreshEpoch = {
-        overview: 0,
-        timeline: 0,
-        statistics: 0,
-        rules: 0,
-        settings: 0
-    };
 
     function nonNegativeInt(value, fallback) {
         return typeof value === "number" && Number.isInteger(value) && value >= 0
@@ -173,15 +132,19 @@
     }
 
     function markPagesDirtyForGenerationChanges(changedKeys) {
-        Object.keys(PAGE_REFRESH_POLICIES).forEach(function (page) {
-            var policy = PAGE_REFRESH_POLICIES[page];
+        PAGE_NAMES.forEach(function (page) {
+            var policy = pageRefreshPolicy(page);
             if (intersects(changedKeys, policy.entryGenerations)) markPageDirty(page);
         });
     }
 
     function pageCapability(page) {
-        var capability = App[page];
-        return capability && typeof capability === "object" ? capability : null;
+        return App.pageLifecycle ? App.pageLifecycle.capability(page) : null;
+    }
+
+    function pageRefreshPolicy(page) {
+        var capability = pageCapability(page);
+        return capability && capability.refreshPolicy ? capability.refreshPolicy : {};
     }
 
     function pageHasLoadedData(page) {
@@ -205,31 +168,6 @@
         return capability && typeof capability.reportDate === "function"
             ? capability.reportDate()
             : null;
-    }
-
-    function pageIsLoading(page) {
-        var capability = pageCapability(page);
-        return !!(
-            capability
-            && typeof capability.isLoading === "function"
-            && capability.isLoading()
-        );
-    }
-
-    function pageIsEditing(page) {
-        var capability = pageCapability(page);
-        return !!(
-            capability
-            && typeof capability.isEditing === "function"
-            && capability.isEditing()
-        );
-    }
-
-    function updatePageCurrentActivity(page, activity) {
-        var capability = pageCapability(page);
-        if (capability && typeof capability.updateCurrentActivity === "function") {
-            capability.updateCurrentActivity(activity || {});
-        }
     }
 
     function markPageFresh(page, expectedEpoch) {
@@ -298,38 +236,40 @@
             automaticPageRefreshDueAtEpochMs = 0;
             if (App.currentPage !== page || automaticRefreshScopeKey(page) !== scopeKey) return;
             if (!pageNeedsRefresh(page) || !automaticRefreshAllowedForPage(page)) return;
-            refreshCurrentPageData(null, {
-                automatic: true,
-                preservePresentation: page === "statistics"
-            });
+            refreshCurrentPageData(null, pageRefreshOptions(page, { automatic: true }));
         }, delay);
     }
 
-    function settingsRuntimeIdentity(runtime) {
-        if (!runtime) return "";
-        var collector = objectValue(runtime.collector);
-        return [
-            String(collector.status || ""),
-            collector.paused === true ? "paused" : "running",
-            String(collector.display || ""),
-            String(runtime.runtimePhase || ""),
-            (Array.isArray(runtime.errorCodes) ? runtime.errorCodes : []).join(",")
-        ].join("|");
+    function pageRefreshOptions(page, options) {
+        var result = Object.assign({}, options || {});
+        var policy = pageRefreshPolicy(page);
+        if (policy.preservePresentation === true
+            && (result.automatic === true || result.navigation === true)) {
+            result.preservePresentation = true;
+        }
+        return result;
     }
 
-    function dispatchAutomaticRefresh(changedKeys, settingsRuntimeChanged) {
+    function pageRuntimeRefreshChanged(page, previous, accepted) {
+        var capability = pageCapability(page);
+        if (!capability || typeof capability.runtimeRefreshIdentity !== "function") return false;
+        return !!previous
+            && capability.runtimeRefreshIdentity(previous)
+                !== capability.runtimeRefreshIdentity(accepted);
+    }
+
+    function dispatchAutomaticRefresh(changedKeys, previous, accepted) {
         var page = App.currentPage || "overview";
-        var policy = PAGE_REFRESH_POLICIES[page];
-        if (!policy) return;
+        var policy = pageRefreshPolicy(page);
         var semanticChange = intersects(changedKeys, policy.automaticGenerations);
-        if (page === "settings" && settingsRuntimeChanged) semanticChange = true;
+        if (pageRuntimeRefreshChanged(page, previous, accepted)) semanticChange = true;
         if (!semanticChange || !automaticRefreshAllowedForPage(page)) return;
         if (policy.deferred) {
             scheduleAutomaticPageRefresh();
             return;
         }
         clearScheduledAutomaticPageRefresh();
-        refreshCurrentPageData(null, { automatic: true });
+        refreshCurrentPageData(null, pageRefreshOptions(page, { automatic: true }));
     }
 
     function frozenRuntime(value) {
@@ -351,17 +291,6 @@
         if (!value || typeof value !== "object") return null;
         if (!value.runtime || typeof value.runtime !== "object") return null;
         return value.runtime;
-    }
-
-    function sameRuntimeContinuity(previous, next) {
-        if (!previous || !next) return false;
-        return !!(
-            previous.displaySpanId
-            && next.displaySpanId
-            && previous.displaySpanId === next.displaySpanId
-            && previous.stableLiveKeyHash
-            && previous.stableLiveKeyHash === next.stableLiveKeyHash
-        );
     }
 
     function normalizeRuntimeEnvelope(value, page, reportDate) {
@@ -426,7 +355,6 @@
         ].join("|");
     }
     App.runtimeVisualContinuityKey = runtimeVisualContinuityKey;
-    App.runtimeContinuityKey = runtimeVisualContinuityKey;
 
     var liveRuntimeStore = Object.freeze({
         get: function () { return runtimeState; },
@@ -460,34 +388,10 @@
         get: function () { return liveRuntimeStore.get(); }
     });
 
-    App.projectClockSeconds = function (clock, nowMs) {
-        return App.computeClockDurationNow(clock, nowMs);
-    };
-    App.sameLiveContinuity = function (previousClock, incomingClock) {
-        var previous = App.validateLiveClock(previousClock);
-        var incoming = App.validateLiveClock(incomingClock);
-        return sameRuntimeContinuity(
-            previous ? {
-                displaySpanId: previous.display_span_id,
-                stableLiveKeyHash: previous.stable_live_key_hash
-            } : null,
-            incoming ? {
-                displaySpanId: incoming.display_span_id,
-                stableLiveKeyHash: incoming.stable_live_key_hash
-            } : null
-        );
-    };
-
     function resetClientGeneration(reason) {
         if (App.requestCoordinator) App.requestCoordinator.bumpDataEpoch();
-        if (App.overview && App.overview.resetGeneration) App.overview.resetGeneration();
-        if (App.timeline && App.timeline.resetGeneration) App.timeline.resetGeneration();
-        if (App.statistics && App.statistics.resetGeneration) App.statistics.resetGeneration();
-        if (App.rules && App.rules.resetGeneration) App.rules.resetGeneration();
-        if (App.settings && App.settings.resetGeneration) App.settings.resetGeneration();
+        if (App.pageLifecycle) App.pageLifecycle.resetGeneration();
         if (App.fdWork && App.fdWork.resetGeneration) App.fdWork.resetGeneration();
-        if (typeof App.setRulesLoading === "function") App.setRulesLoading(false);
-        if (typeof App.setSettingsLoading === "function") App.setSettingsLoading(false);
         App.lastRefreshState = null;
         App.activePageRefreshInFlight = false;
         App.activePageRefreshPromise = null;
@@ -512,22 +416,6 @@
     }
     App.payloadReportDate = payloadReportDate;
 
-    function runtimeIdentityFromPayload(payload) {
-        var envelope = rawRuntimeEnvelope(payload);
-        if (!envelope || Number(envelope.schema_version) !== 2) return null;
-        var snapshot = objectValue(envelope.snapshot);
-        var revisions = objectValue(envelope.revisions);
-        var clock = App.validateLiveClock(envelope.clock);
-        return {
-            displaySpanId: clock ? clock.display_span_id : "",
-            stableLiveKeyHash: clock ? clock.stable_live_key_hash : "",
-            liveRevision: String(snapshot.revision || ""),
-            pageRevision: String(revisions.page || ""),
-            sampleId: String(snapshot.id || "")
-        };
-    }
-    App.runtimeIdentityFromPayload = runtimeIdentityFromPayload;
-
     function incomingRuntimeCompatible(payload, page, reportDate) {
         var envelope = rawRuntimeEnvelope(payload);
         if (!payload || payload.ok !== true || !envelope || Number(envelope.schema_version) !== 2) {
@@ -536,12 +424,8 @@
         var expectedPage = String(page || App.currentPage || "overview");
         var expectedDate = payloadReportDate(payload, expectedPage, reportDate);
         if (expectedPage !== String(App.currentPage || "overview")) return false;
-        if (expectedPage === "timeline") {
-            var currentDate = App.runtimeReportDateForPage("timeline", reportDate);
-            if (expectedDate && currentDate && expectedDate !== currentDate) return false;
-        } else if (expectedDate && expectedDate !== App.localTodayStr()) {
-            return false;
-        }
+        var currentDate = pageReportDate(expectedPage) || App.localTodayStr();
+        if (expectedDate && currentDate && expectedDate !== currentDate) return false;
         return true;
     }
     App.isPagePayloadCompatibleWithRuntime = incomingRuntimeCompatible;
@@ -605,10 +489,6 @@
         return acceptLiveRuntimePayload(payload, page, reportDate, { source: "page_model" });
     };
 
-    App.setLiveRuntimeScope = function (page, reportDate) {
-        liveRuntimeStore.setScope(page, reportDate);
-    };
-
     App.getActiveLiveClock = function () {
         var runtime = liveRuntimeStore.get();
         if (!runtime || runtime.page !== (App.currentPage || "overview")) return null;
@@ -663,13 +543,6 @@
         }
     };
 
-    function invalidateProjectCatalog() {
-        if (App.projectCatalog && typeof App.projectCatalog.invalidate === "function") {
-            App.projectCatalog.invalidate();
-        }
-    }
-    App.invalidateProjectCatalog = invalidateProjectCatalog;
-
     function refreshStatus() {
         var token = App.requestCoordinator.beginLatest("status", "current");
         return App.bridge.getStatus().then(function (result) {
@@ -692,101 +565,22 @@
         return Promise.resolve();
     }
 
-    function refreshStatusFromRefreshState(state) {
-        if (!state || state.ok !== true) return refreshStatus();
-        return refreshStatusFromRuntime(liveRuntimeStore.get());
-    }
-    App.refreshStatusFromRefreshState = refreshStatusFromRefreshState;
-
-    function refreshOverview() {
-        var token = App.requestCoordinator.beginLatest("overview", "today");
-        return App.bridge.getOverview().then(function (result) {
-            if (!App.requestCoordinator.isCurrent(token)) return;
-            var bundle = App.handleResult(result, function (msg) { throw new Error(msg); });
-            if (!bundle || !App.acceptPagePayloadRuntime(bundle, "overview", bundle.date)) return;
-            var runtime = liveRuntimeStore.get();
-            var overview = Object.assign({}, bundle.overview || {});
-            overview.date = bundle.date || overview.date;
-            overview.current_activity = runtime ? runtime.currentActivity : {};
-            overview.current_session = bundle.current_session || null;
-            overview.project_distribution = bundle.project_distribution || {
-                total_seconds: 0,
-                segments: []
-            };
-            overview.recent = bundle.recent || [];
-            overview.kpi_live_targets = bundle.kpi_live_targets || {};
-            if (overview.today_total_seconds === undefined) overview.today_total_seconds = bundle.today_total_seconds || 0;
-            if (overview.classified_seconds === undefined) overview.classified_seconds = bundle.classified_seconds || 0;
-            if (overview.uncategorized_seconds === undefined) overview.uncategorized_seconds = bundle.uncategorized_seconds || 0;
-            App.showOverview(overview);
-        }).catch(function () {
-            if (App.requestCoordinator.isCurrent(token)) App.showError("刷新失败");
-        });
-    }
-    App.refreshOverview = refreshOverview;
-
-    function refreshTimeline() {
-        return typeof App.refreshTimeline === "function" ? App.refreshTimeline() : Promise.resolve();
-    }
-
-    var ACTIVE_PAGE_REFRESHERS = Object.freeze({
-        overview: function (_acceptedState, options) {
-            var capability = pageCapability("overview");
-            if (capability && typeof capability.onRefreshRequested === "function") {
-                capability.onRefreshRequested(options || {});
-            }
-            return refreshOverview();
-        },
-        timeline: function (acceptedState, options) {
-            if (!pageHasLoadedData("timeline")
-                && !pageIsLoading("timeline")
-                && typeof App.loadTimelineReport === "function") {
-                return App.loadTimelineReport(pageReportDate("timeline"), { showLoading: true });
-            }
-            if (!pageHasLoadedData("timeline")) return Promise.resolve();
-            if (pageIsEditing("timeline")) {
-                refreshCurrentActivityFromState(acceptedState || App.lastRefreshState);
-                return Promise.resolve();
-            }
-            var capability = pageCapability("timeline");
-            return capability && typeof capability.onRefreshRequested === "function"
-                ? capability.onRefreshRequested(options || {})
-                : refreshTimeline();
-        },
-        statistics: function (_acceptedState, options) {
-            if (!pageHasLoadedData("statistics") && typeof App.initStatisticsDefaults === "function") {
-                App.initStatisticsDefaults();
-            }
-            return typeof App.loadStatisticsExportSummary === "function"
-                ? App.loadStatisticsExportSummary(
-                    options && options.preservePresentation === true
-                        ? { preservePresentation: true }
-                        : undefined
-                )
-                : Promise.resolve();
-        },
-        rules: function (_acceptedState, options) {
-            var capability = pageCapability("rules");
-            return capability && typeof capability.onRefreshRequested === "function"
-                ? capability.onRefreshRequested(options || {})
-                : Promise.resolve();
-        },
-        settings: function (_acceptedState, options) {
-            var capability = pageCapability("settings");
-            return capability && typeof capability.onRefreshRequested === "function"
-                ? capability.onRefreshRequested(options || {})
-                : Promise.resolve();
-        }
-    });
-
     function refreshActivePage(acceptedState, options, expectedPage) {
         var page = String(expectedPage || App.currentPage || "overview");
         if (App.currentPage !== page) return Promise.resolve(null);
-        var refresher = ACTIVE_PAGE_REFRESHERS[page];
-        if (typeof refresher !== "function") return Promise.resolve(null);
+        var capability = pageCapability(page);
+        if (!capability) return Promise.resolve(null);
+        options = pageRefreshOptions(page, options);
+        var method = options.navigation === true && typeof capability.onPageEntered === "function"
+            ? capability.onPageEntered
+            : capability.onRefreshRequested;
+        if (typeof method !== "function") return Promise.resolve(null);
         var refreshEpoch = nonNegativeInt(pageRefreshEpoch[page], 0);
         var beforeEvidence = pageRefreshEvidence(page);
-        return Promise.resolve(refresher(acceptedState, options)).then(function (result) {
+        return Promise.resolve(method.call(capability, options, {
+            acceptedState: acceptedState || null,
+            runtime: liveRuntimeStore.get()
+        })).then(function (result) {
             var accepted = App.currentPage === page
                 && pageHasLoadedData(page)
                 && pageRefreshEvidence(page) !== beforeEvidence;
@@ -803,9 +597,7 @@
         App.activePageRefreshInFlight = true;
         var statePromise = state && state.ok === true
             ? Promise.resolve(state)
-            : App.bridge.getRefreshState(
-                refreshPage === "timeline" ? pageReportDate("timeline") : null
-            ).then(function (result) {
+            : App.bridge.getRefreshState(pageReportDate(refreshPage)).then(function (result) {
                 return App.handleResult(result, function () { return null; });
             });
         return statePromise.then(function (acceptedState) {
@@ -816,7 +608,7 @@
             if (acceptedState && acceptedState.ok === true) App.acceptRefreshStateRuntime(acceptedState);
             var promises = [
                 acceptedState && acceptedState.ok === true
-                    ? refreshStatusFromRefreshState(acceptedState)
+                    ? refreshStatusFromRuntime(liveRuntimeStore.get())
                     : refreshStatus(),
                 refreshActivePage(acceptedState, options, refreshPage)
             ];
@@ -868,17 +660,10 @@
     }
     App.togglePause = togglePause;
 
-    var PAGE_LEAVE_RESETTERS = Object.freeze({
-        timeline: "resetTimelineTransientUi",
-        statistics: "resetStatisticsTransientUi",
-        rules: "resetRulesTransientUi",
-        settings: "resetSettingsTransientUi"
-    });
-
     function resetPageTransientUi(pageId) {
-        var resetterName = PAGE_LEAVE_RESETTERS[pageId];
-        var resetter = resetterName && App[resetterName];
-        if (typeof resetter === "function") resetter({ restoreFocus: false });
+        if (App.pageLifecycle) {
+            App.pageLifecycle.onPageLeft(pageId, { restoreFocus: false });
+        }
     }
     App.resetPageTransientUi = resetPageTransientUi;
 
@@ -903,14 +688,15 @@
         App.currentPage = pageId;
         liveRuntimeStore.setScope(
             pageId,
-            pageId === "timeline" ? pageReportDate("timeline") : null
+            pageReportDate(pageId)
         );
         refreshCurrentActivityFromState(App.lastRefreshState, { forceRender: true });
         if (!pageNeedsRefresh(pageId)) return;
-        refreshActivePage(App.lastRefreshState, {
-            navigation: true,
-            preservePresentation: pageId === "statistics"
-        }, pageId).catch(function () {
+        refreshActivePage(
+            App.lastRefreshState,
+            pageRefreshOptions(pageId, { navigation: true }),
+            pageId
+        ).catch(function () {
             App.showError("刷新失败");
         });
     }
@@ -934,75 +720,27 @@
     function initButtons() {
         bind("toggle-pause-btn", "click", togglePause);
         bind("refresh-btn", "click", App.refreshAll);
-        bind("timeline-prev-btn", "click", App.goPrevDay);
-        bind("timeline-next-btn", "click", App.goNextDay);
-        bind("timeline-today-btn", "click", App.goToday);
-        bind("timeline-date-input", "change", function (event) {
-            App.goToDate(event.target.value || null);
-        });
-        [
-            ["timeline-merge-previous", "merge", "previous"],
-            ["timeline-merge-next", "merge", "next"],
-            ["timeline-split-session", "split"],
-            ["timeline-copy-session", "copy"]
-        ].forEach(function (action) {
-            bind(action[0], "click", function () {
-                App.runTimelineSessionOperation(action[1], action[2] ? { direction: action[2] } : undefined);
+        if (App.pageLifecycle) App.pageLifecycle.bindEvents();
+        App.privacyNotice.bindEvents();
+        bind("first-run-notice-accept-btn", "click", function () {
+            return App.privacyNotice.acceptGate().then(function (ready) {
+                return ready ? continueStartupAfterPrivacyGate() : false;
             });
         });
-        bind("timeline-hide-session", "click", function (event) {
-            App.confirmTimelineDeletion("hide", {}, event.currentTarget);
+        bind("first-run-notice-retry-btn", "click", function () {
+            return App.privacyNotice.retryGate().then(function (ready) {
+                return ready ? continueStartupAfterPrivacyGate() : false;
+            });
         });
-        bind("edit-project-select", "change", function () {
-            App.fdWorkStatusOverride = null;
-            App.updateFDWorkEntryButton();
-            App.scheduleTimelineAutosave(0);
-        });
-        bind("edit-note-text", "compositionstart", App.handleTimelineCompositionStart);
-        bind("edit-note-text", "compositionend", App.handleTimelineCompositionEnd);
-        bind("edit-note-text", "input", App.handleTimelineNoteInput);
-        bind("edit-note-text", "blur", App.handleTimelineNoteBlur);
-        bind("edit-duration-input", "change", App.handleTimelineDurationChange);
-        bind("fd-work-entry-btn", "click", App.openFDWorkEntryForSelection);
-        bind("timeline-project-filter", "change", App.applyTimelineProjectFilter);
-        bind("timeline-details-close", "click", App.closeTimelineDrawer);
-        bind("timeline-drawer-backdrop", "click", App.closeTimelineDrawer);
-        bind("timeline-advanced-toggle", "click", App.toggleTimelineAdvancedMenu);
-        bind("statistics-today-btn", "click", function () { App.applyStatisticsQuickRange("today"); });
-        bind("statistics-week-btn", "click", function () { App.applyStatisticsQuickRange("week"); });
-        bind("statistics-month-btn", "click", function () { App.applyStatisticsQuickRange("month"); });
-        bind("statistics-all-btn", "click", function () { App.applyStatisticsQuickRange("all"); });
-        bind("statistics-apply-range-btn", "click", App.applyStatisticsDraftSelection);
-        bind("stats-export-action-btn", "click", App.exportStatisticsCsv);
-        bind("settings-clipboard-toggle", "change", App.handleCaptureToggleChange);
-        bind("settings-launch-at-login-toggle", "change", App.handleLaunchAtLoginToggleChange);
-        bind("settings-fd-work-toggle", "change", App.handleFDWorkToggleChange);
-        bind("settings-fd-work-reconnect", "click", App.reconnectFDWork);
-        bind("settings-backup-export-btn", "click", App.exportEncryptedBackup);
-        bind("settings-backup-manifest-btn", "click", App.previewEncryptedBackupManifest);
-        bind("settings-backup-import-btn", "click", App.importEncryptedBackup);
-        bind("settings-clear-local-data-btn", "click", App.clearAllLocalData);
-        bind("settings-clear-all-btn", "click", App.clearAllLocalData);
-        if (App.initRulesPanelEvents) App.initRulesPanelEvents();
-        if (App.initTimelineAccessibility) App.initTimelineAccessibility();
-        if (App.initSettingsCategories) App.initSettingsCategories();
-        if (App.initPasswordRevealControls) App.initPasswordRevealControls();
-        bind("first-run-notice-accept-btn", "click", App.acceptFirstRunNotice);
-        bind("first-run-notice-retry-btn", "click", App.retryFirstRunNotice);
-        bind("first-run-notice-close-btn", "click", function () {
-            if (App.firstRunNoticeViewingFromSettings) App.hideFirstRunNotice();
-        });
-        bind("settings-privacy-notice-btn", "click", App.openPrivacyNoticeFromSettings);
-        bind("settings-recovery-btn", "click", App.recoverDatabaseMaintenance);
     }
     App.initButtons = initButtons;
 
-    function updateCurrentActivityCacheFromRuntime(runtime) {
+    function updateCurrentActivityFromRuntime(runtime, options) {
         if (!runtime) return;
-        updatePageCurrentActivity(
-            App.currentPage || "overview",
-            runtime.currentActivity || {}
-        );
+        var capability = pageCapability(App.currentPage || "overview");
+        if (capability && typeof capability.updateCurrentActivity === "function") {
+            capability.updateCurrentActivity(runtime.currentActivity || {}, options || {});
+        }
     }
 
     function currentActivityRenderIdentity(runtime) {
@@ -1023,65 +761,37 @@
         var runtime = liveRuntimeStore.get();
         if (!runtime) return;
         options = options || {};
-        updateCurrentActivityCacheFromRuntime(runtime);
-        if (options.forceRender !== true) return;
-        var element = App.currentPage === "overview"
-            ? document.getElementById("current-activity")
-            : App.currentPage === "timeline"
-            ? document.getElementById("timeline-current")
-            : null;
-        if (element) App.renderCurrentActivityElement(element, runtime.currentActivity || {}, App.currentPage);
+        updateCurrentActivityFromRuntime(runtime, { render: options.forceRender === true });
     }
     App.refreshCurrentActivityFromState = refreshCurrentActivityFromState;
-    App.refreshTimelineCurrentActivityFromState = function (state) {
-        if (App.currentPage !== "timeline") return;
-        refreshCurrentActivityFromState(state, { forceRender: true });
-    };
-
     function runRevisionCheck() {
         if (App.refreshCheckInFlight) {
             return App.activePageRefreshPromise || Promise.resolve();
         }
         App.refreshCheckInFlight = true;
-        var timelineDate = pageReportDate("timeline");
+        var reportDate = pageReportDate(App.currentPage);
         var token = App.requestCoordinator.beginLatest(
             "heartbeat",
-            App.currentPage + "|" + (timelineDate || "")
+            App.currentPage + "|" + (reportDate || "")
         );
-        return App.bridge.getRefreshState(
-            App.currentPage === "timeline" ? timelineDate : null
-        ).then(function (result) {
+        return App.bridge.getRefreshState(reportDate).then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return;
             var state = App.handleResult(result, function () { return null; });
             if (!state) return;
             var previousRuntime = liveRuntimeStore.get();
             var envelope = rawRuntimeEnvelope(state);
             if (!envelope || Number(envelope.schema_version) !== 2) return;
-            var snapshot = objectValue(envelope.snapshot);
-            var incomingIdentity = runtimeIdentityFromPayload(state) || {};
-            var incomingCurrent = objectValue(envelope.current_activity);
-            var nextIdentity = [
-                incomingCurrent.active === true ? "active" : "inactive",
-                incomingIdentity.displaySpanId || "",
-                incomingIdentity.stableLiveKeyHash || "",
-                String(incomingCurrent.persisted_activity_id || incomingCurrent.activity_id || "")
-            ].join("|");
             var previousIdentity = currentActivityRenderIdentity(previousRuntime);
-            var liveStateChanged = !previousRuntime
-                || previousRuntime.liveRevision !== String(snapshot.revision || "");
-            var currentActivityIdentityChanged = previousIdentity !== nextIdentity;
             var changedGenerations = changedGenerationKeys(
                 previousRuntime ? previousRuntime.generations : null,
                 objectValue(envelope.generations)
             );
-            var previousSettingsRuntimeIdentity = settingsRuntimeIdentity(previousRuntime);
-            var renderCurrent = liveStateChanged
-                || currentActivityIdentityChanged
-                || App.liveClockContractRefreshRequested;
             if (!App.acceptRefreshStateRuntime(state)) return;
             var acceptedRuntime = liveRuntimeStore.get();
-            var settingsRuntimeChanged = !!previousRuntime
-                && previousSettingsRuntimeIdentity !== settingsRuntimeIdentity(acceptedRuntime);
+            var renderCurrent = !previousRuntime
+                || previousRuntime.liveRevision !== acceptedRuntime.liveRevision
+                || previousIdentity !== currentActivityRenderIdentity(acceptedRuntime)
+                || App.liveClockContractRefreshRequested;
             markPagesDirtyForGenerationChanges(changedGenerations);
             refreshCurrentActivityFromState(state, { forceRender: renderCurrent });
             refreshStatusFromRuntime(acceptedRuntime);
@@ -1092,7 +802,7 @@
                 refreshCurrentPageData(state, { automatic: true });
                 return;
             }
-            dispatchAutomaticRefresh(changedGenerations, settingsRuntimeChanged);
+            dispatchAutomaticRefresh(changedGenerations, previousRuntime, acceptedRuntime);
         }).finally(function () {
             if (App.requestCoordinator.isCurrent(token)) App.refreshCheckInFlight = false;
         });
@@ -1179,9 +889,7 @@
 
         App.startupAfterPrivacyPromise = Promise.resolve()
             .then(function () {
-                return App.bridge.getRefreshState(
-                    App.currentPage === "timeline" ? pageReportDate("timeline") : null
-                );
+                return App.bridge.getRefreshState(pageReportDate(App.currentPage));
             })
             .then(function (result) {
                 var state = App.handleResult(result, function () { return null; });
@@ -1209,31 +917,11 @@
     }
     App.continueStartupAfterPrivacyGate = continueStartupAfterPrivacyGate;
 
-    // Retry for privacy notice load failure; cannot bypass authorization.
-    function retryFirstRunNotice() {
-        if (App.firstRunNoticeLoading) return Promise.resolve(false);
-        App.firstRunNoticeLoaded = false;
-        return App.loadFirstRunNotice({ force: true }).then(function () {
-            if (App.privacyGateState === "accepted_ready") {
-                return continueStartupAfterPrivacyGate();
-            }
-            // acceptance_required: the gate is shown again by loadFirstRunNotice.
-            // load_failed: the blocking error is shown again. Either way, do
-            // not continue startup.
-            return false;
-        });
-    }
-    App.retryFirstRunNotice = retryFirstRunNotice;
-
     function init() {
         initNav();
         initButtons();
-        App.loadFirstRunNotice().then(function () {
-            // Only accepted_ready continues startup; other states stay fail-closed.
-            if (App.privacyGateState === "accepted_ready") {
-                return continueStartupAfterPrivacyGate();
-            }
-            return null;
+        App.privacyNotice.loadGate().then(function (ready) {
+            return ready ? continueStartupAfterPrivacyGate() : null;
         });
     }
     App.init = init;

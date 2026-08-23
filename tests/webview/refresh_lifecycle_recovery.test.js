@@ -41,6 +41,55 @@ function harness() {
     renderCurrentActivityElement() {},
     computeClockDurationNow() { return 0; },
   };
+  app.overview = {
+    refreshPolicy: { entryGenerations: ["report_structure"], automaticGenerations: ["report_structure"], deferred: true },
+    hasLoadedData: () => !!app.lastOverviewSnapshot,
+    refreshEvidence: () => app.lastOverviewSnapshot || null,
+    onRefreshRequested: () => Promise.resolve(null),
+    resetGeneration() {},
+  };
+  app.timeline = {
+    refreshPolicy: { entryGenerations: ["report_structure"], automaticGenerations: ["report_structure"], deferred: true },
+    hasLoadedData: () => app.timelineLoaded === true,
+    refreshEvidence: () => app.lastTimelineData || null,
+    reportDate: () => app.timelineDate || null,
+    onRefreshRequested: () => Promise.resolve(null),
+    resetGeneration() {},
+  };
+  app.statistics = {
+    refreshPolicy: { entryGenerations: ["report_structure"], automaticGenerations: ["report_structure"], deferred: true, preservePresentation: true },
+    hasLoadedData: () => app.statisticsLoaded === true,
+    refreshEvidence: () => app.statisticsAcceptedPayload || null,
+    automaticRefreshAllowed: () => true,
+    refreshScopeKey: () => {
+      const selection = app.statisticsSelection || {};
+      return `statistics|${selection.allTime === true ? "all" : "range"}|${selection.dateFrom || ""}|${selection.dateTo || ""}`;
+    },
+    onRefreshRequested: (options) => app.loadStatisticsExportSummary(options),
+    resetGeneration() {
+      app.statisticsLoaded = false;
+      app.statisticsAcceptedPayload = null;
+    },
+  };
+  app.rules = {
+    refreshPolicy: { entryGenerations: ["classification_catalog", "privacy_catalog", "report_structure"], automaticGenerations: ["classification_catalog", "privacy_catalog"], deferred: false },
+    hasLoadedData: () => app.rulesLoaded === true,
+    refreshEvidence: () => app.lastProjectRulesData || null,
+    onPageEntered: () => app.loadProjectRules(),
+    onRefreshRequested: () => app.loadProjectRules(),
+    resetGeneration() {
+      if (typeof app.setRulesLoading === "function") app.setRulesLoading(false);
+    },
+  };
+  app.settings = {
+    refreshPolicy: { entryGenerations: ["settings", "privacy_catalog"], automaticGenerations: ["settings", "privacy_catalog"], deferred: false },
+    hasLoadedData: () => app.settingsLoaded === true,
+    refreshEvidence: () => app.lastSettingsStatus || null,
+    onRefreshRequested: () => Promise.resolve(null),
+    resetGeneration() {
+      if (typeof app.setSettingsLoading === "function") app.setSettingsLoading(false);
+    },
+  };
 
   const document = {
     readyState: "loading",
@@ -100,13 +149,6 @@ function harness() {
     "utf8"
   );
   vm.runInNewContext(source, context, { filename: "init_fd_work_v5.js" });
-  app.rules = Object.assign({}, app.rules, {
-    onRefreshRequested() {
-      return typeof app.loadProjectRules === "function"
-        ? app.loadProjectRules()
-        : Promise.resolve(null);
-    },
-  });
   return { app, timers };
 }
 

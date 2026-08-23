@@ -27,10 +27,23 @@ def _trigger_block(source: str) -> str:
 
 
 def test_standard_ci_runs_the_full_non_benchmark_python_suite() -> None:
-    source = _source("_validation.yml")
-    assert "name: Python 3.11 full suite" in source
+    source = _source("ci.yml")
+    assert "name: Standard validation / Python 3.11 full suite" in source
     assert "scripts/run_pytest_ci.py" in source
     assert '-m "not benchmark"' in source
+
+
+def test_only_three_long_lived_workflows_exist() -> None:
+    workflows = {
+        path.name
+        for path in WORKFLOWS.iterdir()
+        if path.suffix in {".yml", ".yaml"}
+    }
+    assert workflows == {
+        "ci.yml",
+        "installer-validation.yml",
+        "performance-validation.yml",
+    }
 
 
 def test_performance_validation_is_opt_in_or_scheduled() -> None:
@@ -63,7 +76,7 @@ def test_expensive_workflows_cancel_duplicate_runs(
 
 
 def test_installer_runtime_lifecycle_stays_out_of_standard_ci() -> None:
-    standard = _source("_validation.yml")
+    standard = _source("ci.yml")
     installer = _source("installer-validation.yml")
 
     assert "./.github/actions/build-windows-package" in standard
@@ -74,7 +87,7 @@ def test_installer_runtime_lifecycle_stays_out_of_standard_ci() -> None:
 @pytest.mark.parametrize(
     "workflow",
     [
-        "_validation.yml",
+        "ci.yml",
         "installer-validation.yml",
         "performance-validation.yml",
     ],

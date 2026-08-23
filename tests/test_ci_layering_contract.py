@@ -9,7 +9,6 @@ pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
 
 ROOT = Path(__file__).resolve().parents[1]
 CI_YML = ROOT / ".github" / "workflows" / "ci.yml"
-VALIDATION_YML = ROOT / ".github" / "workflows" / "_validation.yml"
 INSTALLER_YML = ROOT / ".github" / "workflows" / "installer-validation.yml"
 PACKAGE_ACTION_YML = ROOT / ".github" / "actions" / "build-windows-package" / "action.yml"
 RELEASE_BUILD = ROOT / "scripts" / "build_windows_release.ps1"
@@ -17,29 +16,31 @@ INSTALLER_SMOKE = ROOT / "scripts" / "ci" / "installer_runtime_smoke.ps1"
 
 
 class TestStandardCiLayer:
-    def test_ci_has_one_orchestration_job(self) -> None:
+    def test_ci_has_three_inline_validation_jobs(self) -> None:
         source = CI_YML.read_text(encoding="utf-8")
-        assert re.search(r"^  validate:\s*$", source, re.MULTILINE)
+        for job in ("python311", "node", "build"):
+            assert re.search(rf"^  {job}:\s*$", source, re.MULTILINE)
+        assert "uses: ./.github/workflows/" not in source
         assert not re.search(r"^  typography:\s*$", source, re.MULTILINE)
 
     def test_standard_ci_keeps_full_non_benchmark_suite(self) -> None:
-        source = VALIDATION_YML.read_text(encoding="utf-8")
+        source = CI_YML.read_text(encoding="utf-8")
         assert '-m "not benchmark"' in source
         assert "scripts/run_pytest_ci.py" in source
 
     def test_standard_package_smoke_runs_on_pull_requests_only(self) -> None:
         source = CI_YML.read_text(encoding="utf-8")
-        assert "run_build_smoke: ${{ github.event_name == 'pull_request' }}" in source
+        assert "if: github.event_name == 'pull_request'" in source
 
     def test_standard_package_smoke_is_build_only(self) -> None:
-        source = VALIDATION_YML.read_text(encoding="utf-8")
+        source = CI_YML.read_text(encoding="utf-8")
         assert "Build Windows executable and installer" in source
         assert "installer_runtime_smoke.ps1" not in source
         assert "smoke_installed_launch.ps1" not in source
         assert "Exercise installer runtime" not in source
 
     def test_typography_reuses_webview_runner(self) -> None:
-        source = VALIDATION_YML.read_text(encoding="utf-8")
+        source = CI_YML.read_text(encoding="utf-8")
         assert "Run WebView Node tests" in source
         assert "Run FD Work Edge DOM fixture" in source
         assert "Render typography acceptance" in source
@@ -51,7 +52,7 @@ class TestSharedPackageBuild:
         assert PACKAGE_ACTION_YML.is_file()
 
     def test_standard_and_installer_layers_use_same_build_action(self) -> None:
-        validation = VALIDATION_YML.read_text(encoding="utf-8")
+        validation = CI_YML.read_text(encoding="utf-8")
         installer = INSTALLER_YML.read_text(encoding="utf-8")
         shared = "uses: ./.github/actions/build-windows-package"
         assert shared in validation

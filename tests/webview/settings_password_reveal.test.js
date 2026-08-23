@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { loadSettingsModules } = require("./settings_test_helpers");
 
 function harness() {
   const elements = new Map();
@@ -79,14 +80,7 @@ function harness() {
   Object.assign(App, {
     handleResult(result) { return result; },
   });
-  vm.runInContext(
-    fs.readFileSync(
-      path.join(__dirname, "../../worktrace/webview_ui/js/settings.js"),
-      "utf8"
-    ),
-    context,
-    { filename: "settings.js" }
-  );
+  loadSettingsModules(context);
   App.initPasswordRevealControls();
   return {
     App,

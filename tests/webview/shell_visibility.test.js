@@ -79,11 +79,15 @@ test("shell visibility stops heartbeat and restores it once", async () => {
 
 test("hiding does not discard a queued timeline edit", () => {
   const { App } = loadApp();
-  App.editingSession = { projection_instance_key: "session-1" };
-  App.timelineSaveQueued = true;
+  const editor = {
+    currentSession: () => ({ projection_instance_key: "session-1" }),
+    hasQueuedAutosave: () => true,
+  };
+  App.timelineEditorState = editor;
 
   App.setShellVisibility(false);
 
-  assert.equal(App.editingSession.projection_instance_key, "session-1");
-  assert.equal(App.timelineSaveQueued, true);
+  assert.equal(App.timelineEditorState, editor);
+  assert.equal(App.timelineEditorState.currentSession().projection_instance_key, "session-1");
+  assert.equal(App.timelineEditorState.hasQueuedAutosave(), true);
 });

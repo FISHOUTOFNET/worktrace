@@ -10,7 +10,8 @@ def test_statistics_background_refresh_is_single_owner_silent_and_incremental():
     composition = (js_dir / "ui_composition.js").read_text(encoding="utf-8")
     init = (js_dir / "init_fd_work_v5.js").read_text(encoding="utf-8")
 
-    assert 'preservePresentation: page === "statistics"' in init
+    assert "policy.preservePresentation === true" in init
+    assert "preservePresentation: true" in statistics
     assert "if (!preservePresentation) setStatisticsLoading(true);" in statistics
     assert "reconcileStatisticsPresentation(data.summary);" in statistics
     assert "App.suspendStatisticsLiveTicker" in statistics

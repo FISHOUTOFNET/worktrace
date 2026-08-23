@@ -27,10 +27,8 @@ from static_helpers import (  # noqa: E402
 )
 
 SETTINGS_BRIDGE_METHODS = {
-    "acceptFirstRunNotice",
     "clearAllLocalData",
     "exportEncryptedBackup",
-    "getFirstRunNotice",
     "getSettingsPrivacyStatus",
     "importEncryptedBackup",
     "previewEncryptedBackupManifest",
@@ -38,12 +36,43 @@ SETTINGS_BRIDGE_METHODS = {
     "setClipboardCaptureEnabled",
     "setFDWorkEnabled",
     "setLaunchAtLogin",
-    "showFDWorkLogin",
 }
+
+SETTINGS_OWNER_FILES = (
+    "settings_presentation.js",
+    "settings_transient_ui.js",
+    "settings_data_operations.js",
+    "settings_backup_recovery.js",
+    "settings.js",
+)
 
 
 def _settings_source() -> str:
     return read_js("settings.js")
+
+
+def _presentation_source() -> str:
+    return read_js("settings_presentation.js")
+
+
+def _transient_source() -> str:
+    return read_js("settings_transient_ui.js")
+
+
+def _operations_source() -> str:
+    return read_js("settings_data_operations.js")
+
+
+def _backup_recovery_source() -> str:
+    return read_js("settings_backup_recovery.js")
+
+
+def _privacy_source() -> str:
+    return read_js("privacy_notice.js")
+
+
+def _all_settings_sources() -> str:
+    return "\n".join(read_js(filename) for filename in SETTINGS_OWNER_FILES)
 
 
 def _app_function_is_exposed(source: str, name: str) -> bool:
@@ -61,8 +90,16 @@ def _app_function_is_exposed(source: str, name: str) -> bool:
 def test_settings_page_resources_and_controls_are_complete() -> None:
     index = (WEBVIEW_UI_DIR / "index_fd_work_v5.html").read_text(encoding="utf-8")
     section = html_section_by_id(index, "page-settings")
-    assert (WEBVIEW_UI_DIR / "js" / "settings.js").is_file()
-    assert re.search(r'src="js/settings\.js\?v=[0-9a-f]+"', index)
+    positions = []
+    for filename in SETTINGS_OWNER_FILES:
+        assert (WEBVIEW_UI_DIR / "js" / filename).is_file()
+        match = re.search(
+            r'src="js/' + re.escape(filename) + r'\?v=[0-9a-f]+"',
+            index,
+        )
+        assert match is not None
+        positions.append(match.start())
+    assert positions == sorted(positions)
     assert "设置与隐私" in section
     assert "管理本地数据、采集和备份" not in section
     for category in ("常规", "隐私", "数据与备份", "高级"):
@@ -123,7 +160,7 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
 def test_settings_toggle_layout_and_copy_contract() -> None:
     index = (WEBVIEW_UI_DIR / "index_fd_work_v5.html").read_text(encoding="utf-8")
     styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
-    source = _settings_source()
+    source = _presentation_source()
 
     for status_id, checkbox_id in (
         (
@@ -164,11 +201,12 @@ def test_settings_toggle_layout_and_copy_contract() -> None:
 
 def test_settings_resource_is_packaged() -> None:
     spec = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
-    assert "settings.js" in spec
+    for filename in SETTINGS_OWNER_FILES:
+        assert filename in spec
 
 
 def test_settings_uses_only_fixed_allowed_bridge_capabilities() -> None:
-    source = _settings_source()
+    source = _all_settings_sources()
     calls = set(re.findall(r"\bApp\.bridge\.([A-Za-z0-9_]+)\s*\(", source))
     assert calls == SETTINGS_BRIDGE_METHODS
     assert "App.callBridge" not in source
@@ -177,7 +215,7 @@ def test_settings_uses_only_fixed_allowed_bridge_capabilities() -> None:
 
 
 def test_settings_has_no_network_storage_or_unsafe_dom_paths() -> None:
-    source = _settings_source()
+    source = _all_settings_sources()
     for forbidden in (
         "fetch(",
         "XMLHttpRequest",
@@ -193,13 +231,14 @@ def test_settings_has_no_network_storage_or_unsafe_dom_paths() -> None:
         "e.message",
     ):
         assert forbidden not in source
-    assert "textContent" in source
+    assert "textContent" in _presentation_source()
 
 
 def test_settings_operation_state_has_one_cross_operation_guard() -> None:
-    core = read_js("core.js")
-    source = _settings_source()
-    flags = (
+    source = _all_settings_sources()
+    operations = _operations_source()
+    backup = _backup_recovery_source()
+    retired_flags = (
         "settingsLoading",
         "settingsWriteInProgress",
         "launchAtLoginWriteInProgress",
@@ -209,12 +248,14 @@ def test_settings_operation_state_has_one_cross_operation_guard() -> None:
         "settingsClearAllInProgress",
         "recoveryInProgress",
     )
-    for flag in flags:
-        assert "App." + flag in core or flag == "recoveryInProgress"
+    for flag in retired_flags:
+        assert "App." + flag not in source
 
-    guard = func_body(source, "anySettingsOperationInProgress")
-    for flag in flags:
-        assert "App." + flag in guard
+    assert "var activeOperations = {};" in operations
+    assert 'var blockingOperation = "";' in operations
+    assert "function runExclusive" in operations
+    assert "exclusive && isBusy()" in operations
+    assert "activeOperations" not in backup
 
     for operation in (
         "exportEncryptedBackup",
@@ -222,44 +263,49 @@ def test_settings_operation_state_has_one_cross_operation_guard() -> None:
         "importEncryptedBackup",
         "clearAllLocalData",
     ):
-        assert "anySettingsOperationInProgress()" in func_body(source, operation)
+        body = func_body(backup, operation)
+        assert "operations.isUnavailable()" in body
+        assert "operations.runExclusive" in body
 
-    recovery = func_body(source, "recoverDatabaseMaintenance")
-    assert "App.recoveryInProgress = true" in recovery
-    assert "setSettingsControlsDisabled(anySettingsOperationInProgress())" in recovery
+    recovery = func_body(backup, "recoverDatabaseMaintenance")
+    assert 'operations.runExclusive("recovery"' in recovery
+    assert "requestAuthoritativeRecoveryRefresh" in recovery
 
 
 def test_settings_loading_and_clipboard_controls_have_separate_semantics() -> None:
     source = _settings_source()
+    presentation = _presentation_source()
+    operations = _operations_source()
     load_body = func_body(source, "loadSettingsPrivacyStatus")
     assert "var showLoading" in load_body
-    assert "if (showLoading) setSettingsLoading(true)" in load_body
-    assert "App.settingsLoadPromise" in load_body
-    assert "App.settingsRequestToken" in load_body
+    assert "if (showLoading)" in load_body
+    assert "settingsLoading = true" in load_body
+    assert "settingsLoadPromise" in load_body
+    assert "settingsRequestToken" in load_body
     assert "App.bridge.getSettingsPrivacyStatus()" in load_body
-    assert "renderSettingsStatus" in load_body
+    assert "acceptSettingsSnapshot" in load_body
 
-    controls = func_body(source, "setSettingsControlsDisabled")
-    assert "!App.settingsLoaded" in controls
-    backup_controls = func_body(source, "setSettingsBackupControlsDisabled")
-    danger_controls = func_body(source, "setSettingsDangerControlsDisabled")
+    controls = func_body(presentation, "setSettingsControlsState")
+    assert "!loaded" in controls
+    backup_controls = func_body(presentation, "setSettingsBackupControlsDisabled")
+    danger_controls = func_body(presentation, "setSettingsDangerControlsDisabled")
     assert "settingsLoaded" not in backup_controls
     assert "settingsLoaded" not in danger_controls
     assert "disabled" in backup_controls
     assert "disabled" in danger_controls
 
-    toggle = func_body(source, "setCaptureEnabled")
-    assert "App.settingsWriteInProgress" in toggle
+    toggle = func_body(operations, "setCaptureEnabled")
+    assert 'runMutation("clipboard_write"' in toggle
     assert "App.bridge.setClipboardCaptureEnabled" in toggle
-    assert "App.launchAtLoginWriteInProgress" not in toggle
-    launch_toggle = func_body(source, "setLaunchAtLoginEnabled")
-    assert "App.launchAtLoginWriteInProgress" in launch_toggle
+    assert 'operationIs("launch_at_login_write")' not in toggle
+    launch_toggle = func_body(operations, "setLaunchAtLoginEnabled")
+    assert 'runMutation("launch_at_login_write"' in launch_toggle
     assert "App.bridge.setLaunchAtLogin" in launch_toggle
-    assert "App.settingsWriteInProgress" not in launch_toggle
+    assert 'operationIs("clipboard_write")' not in launch_toggle
 
 
 def test_settings_status_and_manifest_render_through_safe_helpers() -> None:
-    source = _settings_source()
+    source = _presentation_source()
     status_line = func_body(source, "setStatusLine")
     assert "textContent" in status_line
     assert "hidden" in status_line
@@ -275,17 +321,22 @@ def test_settings_status_and_manifest_render_through_safe_helpers() -> None:
         "setSettingsImportStatus",
         "setSettingsClearStatus",
         "renderBackupManifest",
+        "setSettingsDangerControlsDisabled",
+    ):
+        assert name in source
+
+    backup = _backup_recovery_source()
+    for name in (
         "exportEncryptedBackup",
         "previewEncryptedBackupManifest",
         "importEncryptedBackup",
         "clearAllLocalData",
-        "setSettingsDangerControlsDisabled",
     ):
-        assert _app_function_is_exposed(source, name)
+        assert "function " + name in backup
 
 
 def test_settings_exposes_transient_reset_without_clearing_authoritative_state() -> None:
-    source = _settings_source()
+    source = _transient_source()
     assert _app_function_is_exposed(source, "resetSettingsTransientUi")
     reset = func_body(source, "resetSettingsTransientUi")
     for dom_id in (
@@ -293,15 +344,11 @@ def test_settings_exposes_transient_reset_without_clearing_authoritative_state()
         "settings-backup-passphrase-confirm",
         "settings-backup-import-passphrase",
         "settings-clear-confirm",
-        "settings-backup-status",
-        "settings-backup-import-status",
-        "settings-clear-status",
-        "settings-recovery-status",
     ):
         assert dom_id in reset
     assert "renderBackupManifest(null" in reset
-    assert "firstRunNoticeViewingFromSettings" in reset
-    assert "hideFirstRunNotice" in reset
+    assert "privacyNoticeMode" not in reset
+    assert "hideFirstRunNotice" not in reset
     for preserved in (
         "settingsLoaded =",
         "lastSettingsStatus =",
@@ -309,14 +356,13 @@ def test_settings_exposes_transient_reset_without_clearing_authoritative_state()
         "settingsBackupImportInProgress =",
         "settingsClearAllInProgress =",
         "recoveryInProgress =",
-        "firstRunNoticeRequired =",
         "privacyGateState =",
     ):
         assert preserved not in reset
 
 
 def test_backup_export_keeps_passphrases_local_and_clears_inputs() -> None:
-    body = func_body(_settings_source(), "exportEncryptedBackup")
+    body = func_body(_backup_recovery_source(), "exportEncryptedBackup")
     assert "var passphrase" in body
     assert "var confirmation" in body
     assert "App.bridge.exportEncryptedBackup(passphrase, confirmation)" in body
@@ -328,29 +374,36 @@ def test_backup_export_keeps_passphrases_local_and_clears_inputs() -> None:
 
 
 def test_import_and_clear_replace_data_through_one_generation_reset() -> None:
-    source = _settings_source()
+    source = _backup_recovery_source()
     for name, bridge_method in (
         ("importEncryptedBackup", "importEncryptedBackup"),
         ("clearAllLocalData", "clearAllLocalData"),
     ):
         body = func_body(source, name)
         assert "App.bridge." + bridge_method in body
-        assert 'App.resetClientGeneration("database_replacement")' in body
-        assert "loadSettingsPrivacyStatus()" in body
-        assert "App.refreshAll" in body
-        assert "renderBackupManifest(null" in body
+        assert "deps.afterDataReplacement()" in body
+        assert "cancelManifestPreview()" in body
+
+    replacement = func_body(_settings_source(), "afterDataReplacement")
+    assert 'App.resetClientGeneration("database_replacement")' in replacement
+    assert "requestSettingsRefresh()" in replacement
+    assert "App.refreshAll" in replacement
 
     import_body = func_body(source, "importEncryptedBackup")
     assert 'passInput.value = ""' in import_body
     assert "App.openConfirmDialog" in import_body
     assert "IMPORT_CONFIRM_LITERAL" in import_body
-    assert "confirmInput" not in import_body
+    import_section = source[
+        source.index("function importEncryptedBackup") :
+        source.index("function clearAllLocalData")
+    ]
+    assert "confirmInput" not in import_section
     clear_body = func_body(source, "clearAllLocalData")
     assert 'confirmInput.value = ""' in clear_body
 
 
 def test_destructive_operations_require_explicit_confirmation_literals() -> None:
-    source = _settings_source()
+    source = _backup_recovery_source()
     assert 'IMPORT_CONFIRM_LITERAL = "导入并替换"' in source
     assert 'CLEAR_CONFIRM_LITERAL = "清空本地数据"' in source
     import_body = func_body(source, "importEncryptedBackup")
@@ -367,8 +420,7 @@ def test_credentials_use_compact_rows_and_momentary_reveal_controls() -> None:
         index.index('id="settings-recovery-card"')
     ]
     styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
-    source = _settings_source()
-    init = read_js("init_fd_work_v5.js")
+    source = _transient_source()
 
     assert section.count('class="credential-row"') == 3
     assert section.count('class="password-reveal-button"') == 3
@@ -395,9 +447,10 @@ def test_credentials_use_compact_rows_and_momentary_reveal_controls() -> None:
     ):
         assert event_name in source
     assert 'event.key === "Escape"' in source
-    assert "hideAllPasswordFields" in func_body(source, "setSettingsBackupControlsDisabled")
     assert "hideAllPasswordFields" in func_body(source, "resetSettingsTransientUi")
-    assert "App.initPasswordRevealControls" in init
+    assert "initPasswordRevealControls();" in func_body(source, "bindEvents")
+    coordinator = _settings_source()
+    assert "transientUi.hideAllPasswordFields()" in coordinator
 
 
 def test_danger_zone_removes_only_its_local_divider_and_status_gap() -> None:
@@ -419,59 +472,70 @@ def test_danger_zone_removes_only_its_local_divider_and_status_gap() -> None:
 
 
 def test_first_run_notice_is_fail_closed_and_mode_safe() -> None:
-    source = _settings_source()
-    render = func_body(source, "renderFirstRunNotice")
+    source = _privacy_source()
+    render = func_body(source, "renderNotice")
     assert 'mode === "view"' in render
     assert 'mode !== "view"' in render
     assert ".hidden" in render
     assert "textContent" in render
     assert "first-run-notice-retry-btn" in render
 
-    blocking = func_body(source, "showFirstRunNoticeBlockingError")
+    blocking = func_body(source, "renderBlockingError")
     assert 'textContent = ""' in blocking
     assert "disabled = true" in blocking
     assert "hidden = true" in blocking
     assert "first-run-notice-retry-btn" in blocking
 
-    load = func_body(source, "loadFirstRunNotice")
+    load = func_body(source, "loadGate")
     assert "App.bridge.getFirstRunNotice()" in load
-    assert "showFirstRunNoticeBlockingError" in load
-    assert 'setPrivacyGateState("acceptance_required")' in load
+    assert "showBlockingError" in load
+    assert 'setGateState("acceptance_required")' in load
 
-    gate = func_body(source, "setPrivacyGateState")
-    assert "App.privacyGateState = state" in gate
-    assert 'App.firstRunNoticeRequired = state === "acceptance_required"' in gate
+    gate = func_body(source, "setGateState")
+    assert "gateState = String" in gate
+    assert "App." not in gate
 
-    hide = func_body(source, "hideFirstRunNotice")
+    hide = func_body(source, "hideNotice")
     assert "App.bridge" not in hide
-    assert "App.firstRunNoticeViewingFromSettings = false" in hide
+    assert 'noticeMode = ""' in hide
 
-    accept = func_body(source, "acceptFirstRunNotice")
+    accept = func_body(source, "acceptGate")
     assert "App.bridge.acceptFirstRunNotice()" in accept
-    assert "App.firstRunNoticeAcceptInProgress" in accept
-    assert "App.continueStartupAfterPrivacyGate" in accept
-    assert "loadSettingsPrivacyStatus()" in accept
+    assert "noticeAccepting" in accept
+    assert "App.continueStartupAfterPrivacyGate" not in accept
+    assert "loadSettingsPrivacyStatus" not in accept
 
 
 def test_settings_buttons_are_bound_to_named_capabilities() -> None:
-    body = func_body(read_js("init_fd_work_v5.js"), "initButtons")
-    bindings = (
-        ("settings-clipboard-toggle", "App.handleCaptureToggleChange"),
-        ("settings-launch-at-login-toggle", "App.handleLaunchAtLoginToggleChange"),
-        ("settings-backup-export-btn", "App.exportEncryptedBackup"),
-        ("settings-backup-manifest-btn", "App.previewEncryptedBackupManifest"),
-        ("settings-backup-import-btn", "App.importEncryptedBackup"),
-        ("settings-clear-local-data-btn", "App.clearAllLocalData"),
-        ("first-run-notice-accept-btn", "App.acceptFirstRunNotice"),
-        ("first-run-notice-retry-btn", "App.retryFirstRunNotice"),
-        ("settings-privacy-notice-btn", "App.openPrivacyNoticeFromSettings"),
-    )
-    for dom_id, capability in bindings:
-        assert dom_id in body
-        assert capability in body
-    assert "first-run-notice-close-btn" in body
-    assert "App.firstRunNoticeViewingFromSettings" in body
-    assert "App.hideFirstRunNotice" in body
+    coordinator = func_body(_settings_source(), "bindSettingsEvents")
+    assert "operations.bindEvents()" in coordinator
+    assert "backupRecovery.bindEvents()" in coordinator
+    assert "transientUi.bindEvents" in coordinator
+    operations = func_body(_operations_source(), "bindEvents")
+    for dom_id in (
+        "settings-clipboard-toggle",
+        "settings-launch-at-login-toggle",
+        "settings-fd-work-toggle",
+        "settings-fd-work-reconnect",
+    ):
+        assert dom_id in operations
+    backup = func_body(_backup_recovery_source(), "bindEvents")
+    for dom_id in (
+        "settings-backup-export-btn",
+        "settings-backup-manifest-btn",
+        "settings-backup-import-btn",
+        "settings-clear-local-data-btn",
+        "settings-recovery-btn",
+    ):
+        assert dom_id in backup
+    transient = func_body(_transient_source(), "bindEvents")
+    assert "settings-privacy-notice-btn" in transient
+    assert "first-run-notice-close-btn" not in transient
+    global_bindings = func_body(read_js("init_fd_work_v5.js"), "initButtons")
+    assert "first-run-notice-accept-btn" in global_bindings
+    assert "App.privacyNotice.acceptGate" in global_bindings
+    assert "first-run-notice-retry-btn" in global_bindings
+    assert "App.privacyNotice.retryGate" in global_bindings
 
 
 def test_settings_styles_are_scoped() -> None:

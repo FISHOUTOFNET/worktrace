@@ -53,7 +53,8 @@ def test_switch_page_delegates_data_refresh_without_page_fetch_knowledge():
     init = INIT.read_text(encoding="utf-8")
     switch = between(init, "    function switchPage(pageId) {", "    App.switchPage = switchPage;")
     assert "pageNeedsRefresh(pageId)" in switch
-    assert "refreshActivePage(App.lastRefreshState" in switch
+    assert "refreshActivePage(" in switch
+    assert "pageRefreshOptions(pageId, { navigation: true })" in switch
     assert "refreshCurrentPageData(" not in switch
     for direct_fetch in (
         "loadTimelineReport(",
@@ -70,7 +71,7 @@ def test_revision_check_owns_periodic_business_refresh():
     heartbeat = between(init, "    function startHeartbeat() {", "    App.startHeartbeat = startHeartbeat;")
     assert "changedGenerationKeys(" in revision
     assert "markPagesDirtyForGenerationChanges(changedGenerations);" in revision
-    assert "dispatchAutomaticRefresh(changedGenerations, settingsRuntimeChanged);" in revision
+    assert "dispatchAutomaticRefresh(changedGenerations, previousRuntime, acceptedRuntime);" in revision
     assert "App.liveClockContractRefreshRequested" in revision
     assert "runRevisionCheck();" in heartbeat
     for direct_fetch in (
@@ -83,23 +84,29 @@ def test_revision_check_owns_periodic_business_refresh():
         assert direct_fetch not in heartbeat
 
 
-def test_active_page_registry_keeps_fetches_at_one_dispatch_boundary():
+def test_active_page_capabilities_keep_fetches_out_of_init_dispatch():
     init = INIT.read_text(encoding="utf-8")
-    registry = between(
+    dispatch = between(
         init,
-        "    var ACTIVE_PAGE_REFRESHERS = Object.freeze({",
         "    function refreshActivePage(acceptedState, options, expectedPage) {",
+        "    App.refreshActivePage = refreshActivePage;",
     )
-    for page in ("overview", "timeline", "statistics", "rules", "settings"):
-        assert f"{page}: function" in registry
-    assert "refreshOverview()" in registry
-    assert "App.loadTimelineReport(" in registry
-    assert "App.loadStatisticsExportSummary(" in registry
-    assert 'pageCapability("rules")' in registry
-    assert "capability.onRefreshRequested(options || {})" in registry
-    assert "App.loadProjectRules()" not in registry
-    assert 'pageCapability("settings")' in registry
-    assert "App.loadSettingsPrivacyStatus()" not in registry
+    assert "pageCapability(page)" in dispatch
+    assert "capability.onPageEntered" in dispatch
+    assert "capability.onRefreshRequested" in dispatch
+    assert "method.call(capability, options" in dispatch
+    for direct_fetch in (
+        "refreshOverview(",
+        "loadTimelineReport(",
+        "loadStatisticsExportSummary(",
+        "loadProjectRules(",
+        "loadSettingsPrivacyStatus(",
+    ):
+        assert direct_fetch not in dispatch
+
+    for owner_name in ("overview", "timeline", "statistics", "rules", "settings"):
+        owner = (JS_DIR / f"{owner_name}.js").read_text(encoding="utf-8")
+        assert "onRefreshRequested" in owner
 
 
 def test_rules_read_does_not_invalidate_catalog_but_write_reload_does():

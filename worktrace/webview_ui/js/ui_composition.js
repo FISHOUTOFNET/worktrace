@@ -27,31 +27,6 @@
     }
     App.syncFDWorkConsumers = syncFDWorkConsumers;
 
-    function reconnectFDWorkThroughSharedSession() {
-        if (!App.fdWork || typeof App.fdWork.ensureSession !== "function") {
-            if (typeof App.showSettingsError === "function") {
-                App.showSettingsError("打开 FD Work 失败");
-            }
-            return Promise.resolve(false);
-        }
-        return App.fdWork.ensureSession().then(function (result) {
-            if (!result || result.ok !== true) {
-                if (typeof App.showSettingsError === "function") {
-                    App.showSettingsError(result && result.message || "打开 FD Work 失败");
-                }
-                return false;
-            }
-            if (typeof App.clearSettingsError === "function") App.clearSettingsError();
-            return true;
-        }).catch(function () {
-            if (typeof App.showSettingsError === "function") {
-                App.showSettingsError("打开 FD Work 失败");
-            }
-            return false;
-        });
-    }
-    App.reconnectFDWork = reconnectFDWorkThroughSharedSession;
-
     function nonNegativeInt(value) {
         var parsed = parseInt(value, 10);
         return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
@@ -161,36 +136,6 @@
             App.lastStatusRenderSignature = signature;
             return baseShowStatus.apply(App, arguments);
         };
-    }
-
-    function navPageFromTarget(target) {
-        var node = target;
-        while (node && node !== document) {
-            if (typeof node.getAttribute === "function") {
-                var page = node.getAttribute("data-page");
-                if (page) return String(page);
-            }
-            node = node.parentNode;
-        }
-        return "";
-    }
-
-    function afterUiInteraction(event) {
-        var navPage = event && event.type === "click" ? navPageFromTarget(event.target) : "";
-        window.setTimeout(function () {
-            if (navPage && App.currentPage === navPage) {
-                if (navPage === "rules" && App.rules
-                    && typeof App.rules.onPageEntered === "function") {
-                    App.rules.onPageEntered();
-                } else if (navPage === "settings" && App.settings
-                    && typeof App.settings.onPageEntered === "function") {
-                    App.settings.onPageEntered();
-                }
-            }
-        }, 0);
-    }
-    if (document && typeof document.addEventListener === "function") {
-        document.addEventListener("click", afterUiInteraction);
     }
 
     if (App.fdWork && typeof App.fdWork.bindStatusHost === "function") {

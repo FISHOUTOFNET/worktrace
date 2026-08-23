@@ -758,6 +758,38 @@
     }
     App.initStatisticsDefaults = initStatisticsDefaults;
 
+    function bindStatisticsControl(id, event, handler) {
+        var target = element(id);
+        if (target) target.addEventListener(event, handler);
+    }
+
+    function bindStatisticsEvents() {
+        bindStatisticsControl("statistics-today-btn", "click", function () {
+            App.applyStatisticsQuickRange("today");
+        });
+        bindStatisticsControl("statistics-week-btn", "click", function () {
+            App.applyStatisticsQuickRange("week");
+        });
+        bindStatisticsControl("statistics-month-btn", "click", function () {
+            App.applyStatisticsQuickRange("month");
+        });
+        bindStatisticsControl("statistics-all-btn", "click", function () {
+            App.applyStatisticsQuickRange("all");
+        });
+        bindStatisticsControl(
+            "statistics-apply-range-btn", "click", App.applyStatisticsDraftSelection
+        );
+        bindStatisticsControl("stats-export-action-btn", "click", App.exportStatisticsCsv);
+    }
+
+    function onStatisticsRefreshRequested(options) {
+        options = options || {};
+        if (App.statisticsLoaded !== true) initStatisticsDefaults();
+        return loadStatisticsExportSummary(
+            options.preservePresentation === true ? { preservePresentation: true } : undefined
+        );
+    }
+
     function setStatisticsExportStatus(message, kind) {
         var status = element("stats-export-status");
         if (!status) return;
@@ -823,7 +855,37 @@
     }
     App.statistics = Object.freeze({
         applyLocalTick: applyStatisticsLocalTicker,
+        automaticRefreshAllowed: function (today) {
+            var selection = App.statisticsSelection;
+            if (!selection || selection.allTime === true) return true;
+            var from = String(selection.dateFrom || "");
+            var to = String(selection.dateTo || "");
+            return !!from && !!to && from <= today && to >= today;
+        },
+        bindEvents: bindStatisticsEvents,
+        refreshPolicy: Object.freeze({
+            entryGenerations: Object.freeze(["report_structure"]),
+            automaticGenerations: Object.freeze(["report_structure"]),
+            deferred: true,
+            preservePresentation: true
+        }),
+        hasLoadedData: function () { return App.statisticsLoaded === true; },
+        onPageEntered: onStatisticsRefreshRequested,
+        onPageLeft: resetStatisticsTransientUi,
+        onRefreshRequested: onStatisticsRefreshRequested,
         onRuntimeTransition: onStatisticsRuntimeTransition,
+        refreshEvidence: function () { return App.statisticsAcceptedPayload || null; },
+        refreshScopeKey: function () {
+            var selection = App.statisticsSelection || {};
+            var filter = element("statistics-project-filter");
+            return [
+                "statistics",
+                selection.allTime === true ? "all" : "range",
+                String(selection.dateFrom || ""),
+                String(selection.dateTo || ""),
+                filter ? String(filter.value || "") : ""
+            ].join("|");
+        },
         resetGeneration: resetStatisticsGeneration
     });
 })();

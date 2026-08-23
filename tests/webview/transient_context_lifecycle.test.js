@@ -3,6 +3,8 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
+const { SETTINGS_MODULES } = require("./settings_test_helpers");
 
 function deferred() {
   let resolve;
@@ -222,11 +224,6 @@ function prepareTimeline() {
   const h = createHarness();
   Object.assign(h.App, {
     mutationState: "idle",
-    editSaving: false,
-    editingSession: null,
-    timelineDurationDraftTouched: false,
-    timelineDurationDraftInvalid: false,
-    timelineAutosaveQueued: false,
     detailsInFlight: {},
     currentSessions: [],
     timelineDate: "2026-08-18",
@@ -238,7 +235,7 @@ function prepareTimeline() {
       load: () => Promise.resolve({ editingProjects: [], filterProjects: [] }),
     },
   });
-  h.load("timeline.js");
+  for (const file of TIMELINE_MODULES) h.load(file);
   h.element("timeline-session-actions").hidden = true;
   h.element("timeline-advanced-toggle").setAttribute("aria-expanded", "false");
   return h;
@@ -260,9 +257,9 @@ test("timeline context changes dismiss the advanced menu before the new action",
   assert.equal(h.element("timeline-advanced-toggle").getAttribute("aria-expanded"), "false");
 });
 
-test("timeline menu dismisses immediately even when a context change waits for save", async () => {
+test("timeline menu dismisses immediately when an unknown mutation blocks context change", async () => {
   const h = prepareTimeline();
-  h.App.editSaving = true;
+  h.App.mutationState = "unknown";
   h.element("timeline-session-actions").hidden = false;
   h.element("timeline-advanced-toggle").setAttribute("aria-expanded", "true");
 
@@ -270,7 +267,7 @@ test("timeline menu dismisses immediately even when a context change waits for s
 
   assert.equal(result, false);
   assert.equal(h.element("timeline-session-actions").hidden, true);
-  assert.equal(h.App.pendingContextChange.reason, "切换时间段");
+  assert.equal(h.App.pendingContextChange || null, null);
 });
 
 test("timeline advanced menu dismisses on outside pointer or focus but not inside interaction", () => {
@@ -317,9 +314,6 @@ function prepareSettings() {
   const h = createHarness();
   Object.assign(h.App, {
     currentPage: "settings",
-    settingsLoaded: true,
-    recoveryInProgress: false,
-    firstRunNoticeViewingFromSettings: false,
     handleResult: (result) => result,
     extractBridgeError: (result, fallback) => result && result.error || fallback,
     clearGlobalAlert() {},
@@ -328,8 +322,9 @@ function prepareSettings() {
   });
   h.element("first-run-notice-overlay").hidden = true;
   h.element("first-run-notice-close-btn").hidden = true;
-  h.load("settings.js");
+  SETTINGS_MODULES.forEach(h.load);
   h.App.initSettingsCategories();
+  h.App.privacyNotice.bindEvents();
   return h;
 }
 
@@ -345,28 +340,31 @@ test("settings privacy notice view supports Escape, backdrop close, and focus re
     }),
   };
 
-  assert.equal(await h.App.openPrivacyNoticeFromSettings(), true);
+  assert.equal(await h.App.privacyNotice.openFromSettings(), true);
   assert.equal(overlay.hidden, false);
   assert.equal(h.activeElement(), close);
   h.dispatchDocument("keydown", { key: "Escape" });
   assert.equal(overlay.hidden, true);
   assert.equal(h.activeElement(), trigger);
 
-  assert.equal(await h.App.openPrivacyNoticeFromSettings(), true);
+  assert.equal(await h.App.privacyNotice.openFromSettings(), true);
   overlay.dispatch("click", { target: overlay });
   assert.equal(overlay.hidden, true);
   assert.equal(h.activeElement(), trigger);
 });
 
-test("startup privacy gate stays fail-closed under Escape and backdrop clicks", () => {
+test("startup privacy gate stays fail-closed under Escape and backdrop clicks", async () => {
   const h = prepareSettings();
   const overlay = h.element("first-run-notice-overlay");
+  h.App.bridge = {
+    getFirstRunNotice: () => Promise.resolve({
+      ok: true,
+      notice: { accepted: false, title: "隐私说明", text: "内容", highlights: [] },
+    }),
+  };
 
-  h.App.showFirstRunNotice(
-    { accepted: false, title: "隐私说明", text: "内容", highlights: [] },
-    "gate"
-  );
-  assert.equal(h.App.firstRunNoticeViewingFromSettings, false);
+  await h.App.privacyNotice.loadGate();
+  assert.equal(h.App.privacyNotice.state(), "acceptance_required");
   assert.equal(overlay.hidden, false);
 
   h.dispatchDocument("keydown", { key: "Escape" });
@@ -375,14 +373,14 @@ test("startup privacy gate stays fail-closed under Escape and backdrop clicks", 
   assert.equal(overlay.hidden, false);
 });
 
-test("stale settings privacy notice completion cannot reopen after page reset", async () => {
+test("stale settings privacy notice completion cannot reopen after settings page leave", async () => {
   const h = prepareSettings();
   const pending = deferred();
   const overlay = h.element("first-run-notice-overlay");
   h.App.bridge = { getFirstRunNotice: () => pending.promise };
 
-  const opening = h.App.openPrivacyNoticeFromSettings();
-  h.App.resetSettingsTransientUi({ restoreFocus: false });
+  const opening = h.App.privacyNotice.openFromSettings();
+  h.App.settings.onPageLeft();
   pending.resolve({
     ok: true,
     notice: { accepted: true, title: "旧请求", text: "内容", highlights: [] },
@@ -390,7 +388,6 @@ test("stale settings privacy notice completion cannot reopen after page reset", 
 
   assert.equal(await opening, false);
   assert.equal(overlay.hidden, true);
-  assert.equal(h.App.firstRunNoticeViewingFromSettings, false);
 });
 
 test("leaving a settings category clears presentation state without discarding form drafts", () => {

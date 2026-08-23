@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
 
 function classList() {
   const values = new Set();
@@ -102,14 +103,7 @@ function harness() {
     payloadReportDate() { return "2026-07-30"; },
   });
 
-  vm.runInContext(
-    fs.readFileSync(
-      path.join(__dirname, "../../worktrace/webview_ui/js/timeline.js"),
-      "utf8"
-    ),
-    context,
-    { filename: "timeline.js" }
-  );
+  loadTimelineModules(context, __dirname);
   return { App, element };
 }
 

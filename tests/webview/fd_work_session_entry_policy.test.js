@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
 
 function source(name) {
   return fs.readFileSync(
@@ -32,6 +33,7 @@ function harness() {
         setAttribute() {}, removeAttribute() {}, getAttribute() { return ""; },
         querySelectorAll() { return []; },
         querySelector() { return null; },
+        appendChild() {},
         addEventListener() {},
       });
     }
@@ -80,7 +82,7 @@ function harness() {
   };
 
   vm.runInContext(source("fd_work_v5.js"), context, { filename: "fd_work_v5.js" });
-  vm.runInContext(source("timeline.js"), context, { filename: "timeline.js" });
+  loadTimelineModules(context, __dirname);
 
   return {
     App,
@@ -129,16 +131,11 @@ function configureValidSelection(App, element) {
     can_edit_duration: true,
   };
   App.timelineDate = "2026-08-11";
-  App.editingSession = session;
+  App.timelineEditorState.populate(session);
   App.currentSessions = [session];
   App.selectedProjectionInstanceKey = session.projection_instance_key;
   App.selectedProjectionRevision = session.projection_revision;
   App.projectsCache = [{ id: 17, name: "CASE-001", fd_work_bound: true }];
-  App.timelineLastSaveFailed = false;
-  App.editSaving = false;
-  App.timelineCompositionActive = false;
-  App.timelineDurationDraftTouched = false;
-  App.timelineDurationDraftInvalid = false;
   App.mutationState = "idle";
 
   const project = element("edit-project-select");
@@ -233,11 +230,8 @@ test("after login the next click fills using the latest projection revision", as
 
 test("Settings composition delegates reconnect to the shared FD Work session action", () => {
   const composition = source("ui_composition.js");
-  assert.match(composition, /App\.fdWork\.ensureSession\(\)/);
-  assert.match(composition, /App\.reconnectFDWork\s*=\s*reconnectFDWorkThroughSharedSession/);
-  const adapter = composition.slice(
-    composition.indexOf("function reconnectFDWorkThroughSharedSession"),
-    composition.indexOf("App.reconnectFDWork = reconnectFDWorkThroughSharedSession")
-  );
-  assert.doesNotMatch(adapter, /App\.bridge\.showFDWorkLogin/);
+  const operations = source("settings_data_operations.js");
+  assert.doesNotMatch(composition, /App\.reconnectFDWork\s*=/);
+  assert.match(operations, /App\.fdWork\.ensureSession\(\)/);
+  assert.doesNotMatch(operations, /App\.bridge\.showFDWorkLogin/);
 });

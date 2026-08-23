@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { loadSettingsModules } = require("./settings_test_helpers");
 
 function formatDuration(value) {
   value = Math.max(0, Number(value) || 0);
@@ -52,6 +53,15 @@ function harness(initialRuntime) {
   let runtimeState = initialRuntime || runtime();
   const listeners = {};
   const elements = {};
+  let visibleSettingsLoads = 0;
+  elements["settings-loading"] = {
+    _hidden: true,
+    get hidden() { return this._hidden; },
+    set hidden(value) {
+      this._hidden = !!value;
+      if (value === false) visibleSettingsLoads += 1;
+    },
+  };
   const document = {
     activeElement: null,
     addEventListener(name, handler) { listeners[name] = handler; },
@@ -66,7 +76,6 @@ function harness(initialRuntime) {
   let rulesRequests = 0;
   let statisticsRequests = 0;
   let settingsRequests = 0;
-  let visibleSettingsLoads = 0;
   let tokenId = 0;
   const currentTokens = new Map();
   const requestCoordinator = {
@@ -84,9 +93,6 @@ function harness(initialRuntime) {
     rulesLoading: false,
     statisticsLoaded: true,
     statisticsLoading: false,
-    settingsLoaded: true,
-    settingsLoading: false,
-    settingsRequestToken: 0,
     requestCoordinator,
     bridge: {
       getProjectRules() {
@@ -117,11 +123,6 @@ function harness(initialRuntime) {
     refreshTimeline() { baseTimelineRefreshes += 1; return Promise.resolve("timeline"); },
     loadProjectRules() { return Promise.resolve(null); },
     loadStatisticsExportSummary() { return Promise.resolve(null); },
-    loadSettingsPrivacyStatus() {
-      visibleSettingsLoads += 1;
-      return Promise.resolve(null);
-    },
-    anySettingsOperationInProgress() { return false; },
     overview: {
       onRuntimeTransition(change) { overviewTransitions.push(change); },
     },
@@ -169,7 +170,15 @@ function harness(initialRuntime) {
     clearTimeout,
   };
   vm.createContext(context);
-  ["rules.js", "settings.js", "timeline.js", "statistics.js"].forEach((name) => {
+  ["rules.js"].forEach((name) => {
+    vm.runInContext(
+      fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", name), "utf8"),
+      context,
+      { filename: name }
+    );
+  });
+  loadSettingsModules(context);
+  ["timeline.js", "statistics.js"].forEach((name) => {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", name), "utf8"),
       context,
@@ -228,11 +237,10 @@ test("Rules ignores live-only runtime changes but refreshes on classification ge
 });
 
 test("Rules re-entry is a no-op until classification generation changes", async () => {
-  const { App, document, listeners, counters } = harness(runtime());
+  const { App, counters } = harness(runtime());
   App.currentPage = "rules";
 
-  listeners.click({ type: "click", target: navTarget("rules", document) });
-  await flushTimers();
+  await App.rules.onPageEntered();
   assert.equal(counters.rules(), 0);
 
   App.currentPage = "overview";
@@ -242,34 +250,31 @@ test("Rules re-entry is a no-op until classification generation changes", async 
   assert.equal(App.rulesRefreshPending, true);
 
   App.currentPage = "rules";
-  listeners.click({ type: "click", target: navTarget("rules", document) });
-  await flushTimers();
+  await App.rules.onPageEntered();
   assert.equal(counters.rules(), 1);
   assert.equal(App.rulesRefreshPending, false);
 });
 
 test("Settings re-entry refreshes status in the background without visible loading", async () => {
-  const { App, document, listeners, counters } = harness(runtime());
+  const { App, counters } = harness(runtime());
   App.currentPage = "settings";
 
-  listeners.click({ type: "click", target: navTarget("settings", document) });
-  await flushTimers();
+  await App.settings.onPageEntered();
   assert.equal(counters.settings(), 1);
-  assert.equal(counters.visibleSettings(), 0);
-  assert.equal(App.settingsRefreshPending, false);
+  assert.equal(counters.visibleSettings(), 1, "first entry owns one visible loading state");
+  assert.equal(App.settings.refreshPending(), false);
 
   App.currentPage = "overview";
   App.acceptRefreshStateRuntime({ nextRuntime: runtime({ settings: 2 }) });
   await flush();
   assert.equal(counters.settings(), 1);
-  assert.equal(App.settingsRefreshPending, true);
+  assert.equal(App.settings.refreshPending(), true);
 
   App.currentPage = "settings";
-  listeners.click({ type: "click", target: navTarget("settings", document) });
-  await flushTimers();
+  await App.settings.onPageEntered();
   assert.equal(counters.settings(), 2);
-  assert.equal(counters.visibleSettings(), 0);
-  assert.equal(App.settingsRefreshPending, false);
+  assert.equal(counters.visibleSettings(), 1, "loaded re-entry stays background-only");
+  assert.equal(App.settings.refreshPending(), false);
 });
 
 test("Settings generation refresh while visible is background-only", async () => {
@@ -281,13 +286,16 @@ test("Settings generation refresh while visible is background-only", async () =>
 
   assert.equal(counters.settings(), 1);
   assert.equal(counters.visibleSettings(), 0);
-  assert.equal(App.settingsRefreshPending, false);
+  assert.equal(App.settings.refreshPending(), false);
 });
 
 test("Timeline consumes one live-only collection refresh but preserves structural refreshes", async () => {
   const { App, counters } = harness(runtime());
   App.currentPage = "timeline";
-  App._timelineEditingActive = () => false;
+  App.timelineEditorState = {
+    currentSession: () => null,
+    isDirty: () => false,
+  };
 
   App.acceptRefreshStateRuntime({ nextRuntime: runtime({ live: "l2" }) });
   await App.refreshTimeline();

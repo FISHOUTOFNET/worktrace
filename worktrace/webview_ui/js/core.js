@@ -46,11 +46,6 @@
     App.overviewRequestToken = 0;
     App.recentRequestToken = 0;
     App.currentSessions = [];
-    App.editingSession = null;
-    App.editSaving = false;
-    App.timelineCompositionActive = false;
-    App.timelineDurationDraftTouched = false;
-    App.timelineDurationDraftInvalid = false;
     App.statisticsLoaded = false;
     App.statisticsLoading = false;
     App.statisticsRequestToken = 0;
@@ -58,23 +53,7 @@
     App.statisticsSelection = null;
     App.statisticsDraftSelection = null;
     App.statisticsDraftDirty = false;
-    App.settingsLoaded = false;
-    App.settingsLoading = false;
-    App.settingsRequestToken = 0;
-    App.settingsWriteInProgress = false;
-    App.launchAtLoginWriteInProgress = false;
-    App.fdWorkSettingsWriteInProgress = false;
     App.fdWorkStatus = null;
-    App.settingsBackupExportInProgress = false;
-    App.settingsBackupManifestInProgress = false;
-    App.settingsBackupImportInProgress = false;
-    App.settingsClearAllInProgress = false;
-    App.firstRunNoticeLoaded = false;
-    App.firstRunNoticeLoading = false;
-    App.firstRunNoticeRequired = false;
-    App.firstRunNoticeAcceptInProgress = false;
-    App.firstRunNoticeViewingFromSettings = false;
-    App.privacyGateState = "loading";
     App.rulesLoaded = false;
     App.rulesLoading = false;
     App.rulesRequestToken = 0;
@@ -669,13 +648,4 @@
             && targetClock.stable_live_key_hash === runtimeClock.stable_live_key_hash;
     };
 
-    App._timelineEditingActive = function () {
-        return App.editSaving
-            || App.mutationState === "unknown"
-            || !!(
-                App.editingSession
-                && typeof App.isEditDirty === "function"
-                && App.isEditDirty()
-            );
-    };
 })();

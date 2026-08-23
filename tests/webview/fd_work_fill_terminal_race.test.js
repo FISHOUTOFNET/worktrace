@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
 
 function deferred() {
   let resolve;
@@ -30,6 +31,7 @@ function harness() {
         setAttribute() {}, removeAttribute() {}, getAttribute() { return ""; },
         querySelectorAll() { return []; },
         querySelector() { return null; },
+        appendChild() {},
         addEventListener() {},
       });
     }
@@ -66,7 +68,7 @@ function harness() {
     openFDWorkCasePicker: bridgeCall("open_fd_work_case_picker"),
   };
 
-  for (const file of ["fd_work_v5.js", "timeline.js", "ui_composition.js"]) {
+  for (const file of ["fd_work_v5.js", ...TIMELINE_MODULES, "ui_composition.js"]) {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", file), "utf8"),
       context,
@@ -98,7 +100,7 @@ function configureFDWorkSession(App, element) {
     can_edit_duration: true,
   };
   App.timelineDate = "2026-07-12";
-  App.editingSession = session;
+  App.timelineEditorState.populate(session);
   App.selectedProjectionInstanceKey = session.projection_instance_key;
   App.selectedProjectionRevision = session.projection_revision;
   App.currentSessions = [session];
@@ -107,11 +109,7 @@ function configureFDWorkSession(App, element) {
     structure_revision: "source-a",
     entries: [session],
   };
-  App.lastSettingsStatus = { fd_work: { supported: true, enabled: true } };
   App.projectsCache = [{ id: 17, name: "CASE-001", fd_work_bound: true }];
-  App.timelineLastSaveFailed = false;
-  App.editSaving = false;
-  App.timelineCompositionActive = false;
   App.mutationState = "idle";
   element("edit-project-select").value = "17";
   element("edit-note-text").value = session.session_note;

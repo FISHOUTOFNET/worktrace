@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
 
 function harness() {
   let editing = false;
@@ -15,7 +16,7 @@ function harness() {
   const App = {
     currentPage: "timeline",
     timelineDate: "2026-08-22",
-    _timelineEditingActive() { return editing; },
+    mutationState: "idle",
   };
   const window = {
     WorkTraceApp: App,
@@ -38,11 +39,7 @@ function harness() {
     clearTimeout,
   };
   vm.createContext(context);
-  vm.runInContext(
-    fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/timeline.js"), "utf8"),
-    context,
-    { filename: "timeline.js" }
-  );
+  loadTimelineModules(context, __dirname);
   App.loadTimelineReport = () => {
     refreshes += 1;
     return refreshFailure ? Promise.reject(refreshFailure) : Promise.resolve();
@@ -50,7 +47,10 @@ function harness() {
   return {
     App,
     refreshes: () => refreshes,
-    setEditing(value) { editing = value; },
+    setEditing(value) {
+      editing = value;
+      App.mutationState = editing ? "unknown" : "idle";
+    },
     failRefresh(error) { refreshFailure = error; },
   };
 }

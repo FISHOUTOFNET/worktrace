@@ -15,7 +15,7 @@ pytestmark = [pytest.mark.contract, pytest.mark.integration, pytest.mark.paralle
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCER = ROOT / "scripts" / "pytest_diagnostics.py"
 PYTEST_RUNNER = ROOT / "scripts" / "run_pytest_ci.py"
-WORKFLOW = ROOT / ".github" / "workflows" / "_validation.yml"
+WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 
 def _write_junit(path: Path) -> None:

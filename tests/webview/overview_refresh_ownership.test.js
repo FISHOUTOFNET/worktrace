@@ -32,6 +32,24 @@ function harness() {
     formatProjectLabel(name) { return name || ""; },
     formatStartTimeOnly() { return ""; },
     escapeHtml(value) { return String(value == null ? "" : value); },
+    requestCoordinator: {
+      beginLatest() { return 1; },
+      isCurrent() { return true; },
+    },
+    bridge: {
+      getOverview() {
+        return Promise.resolve({
+          ok: true,
+          overview: bundle("requested"),
+          date: "2026-08-23",
+          runtime: { schema_version: 2 },
+        });
+      },
+    },
+    handleResult(result) { return result; },
+    acceptPagePayloadRuntime() { return true; },
+    liveRuntimeStore: { get() { return null; } },
+    showError() {},
   };
   const window = { WorkTraceApp: App, document };
   const context = {
@@ -76,7 +94,7 @@ test("Overview consumes live-only collection suppression once", () => {
   assert.equal(App.lastOverviewSnapshot.marker, "accepted");
 });
 
-test("Overview structural and manual refreshes bypass live suppression", () => {
+test("Overview structural and manual refreshes bypass live suppression", async () => {
   const { App } = harness();
   App.overview.onRuntimeTransition({ source: "refresh-state", liveChanged: true });
   App.overview.onRuntimeTransition({
@@ -88,7 +106,7 @@ test("Overview structural and manual refreshes bypass live suppression", () => {
   assert.equal(App.lastOverviewSnapshot.marker, "structural");
 
   App.overview.onRuntimeTransition({ source: "refresh-state", liveChanged: true });
-  App.overview.onRefreshRequested({ automatic: false });
+  await App.overview.onRefreshRequested({ automatic: false });
   App.showOverview(bundle("manual"));
   assert.equal(App.lastOverviewSnapshot.marker, "manual");
 });

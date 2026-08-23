@@ -57,7 +57,6 @@ def test_frontend_live_identity_excludes_candidate_metadata_and_retired_states()
         )
 
     declared_owners = {
-        "runtimeIdentityFromPayload": read_js("init_fd_work_v5.js"),
         "runtimeVisualContinuityKey": read_js("init_fd_work_v5.js"),
     }
     assigned_owners = {
@@ -201,7 +200,6 @@ def test_runtime_transport_and_clock_have_one_frontend_owner():
     ):
         assert retired not in core
     for required in (
-        "runtimeIdentityFromPayload",
         "acceptLiveRuntimePayload",
         "acceptRefreshStateRuntime",
         "acceptPagePayloadRuntime",

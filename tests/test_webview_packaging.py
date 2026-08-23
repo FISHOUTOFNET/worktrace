@@ -35,7 +35,7 @@ INDEX_HTML_PATH = REPO_ROOT / "worktrace" / "webview_ui" / "index_fd_work_v5.htm
 ENTRY_PATH = REPO_ROOT / "scripts" / "pyinstaller_entry.py"
 MAIN_PATH = REPO_ROOT / "worktrace" / "main.py"
 REQUIREMENTS_PATH = REPO_ROOT / "requirements.txt"
-VALIDATION_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "_validation.yml"
+VALIDATION_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 ICON_GENERATOR_PATH = REPO_ROOT / "scripts" / "generate_brand_icon.py"
 
 

@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { loadSettingsModules } = require("./settings_test_helpers");
 
 function formatDuration(value) {
   value = Math.max(0, Number(value) || 0);
@@ -60,7 +61,15 @@ function harness() {
     clearTimeout,
   };
   vm.createContext(context);
-  ["rules.js", "settings.js", "timeline.js", "statistics.js"].forEach((name) => {
+  ["rules.js"].forEach((name) => {
+    vm.runInContext(
+      fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", name), "utf8"),
+      context,
+      { filename: name }
+    );
+  });
+  loadSettingsModules(context);
+  ["timeline.js", "statistics.js"].forEach((name) => {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", name), "utf8"),
       context,
@@ -174,10 +183,6 @@ test("loaded settings refresh in the background on every page entry", async () =
   const { App, listeners } = harness();
   let requests = 0;
   App.currentPage = "settings";
-  App.settingsLoaded = true;
-  App.settingsLoading = false;
-  App.settingsRefreshPending = false;
-  App.settingsRequestToken = 0;
   App.bridge = {
     getSettingsPrivacyStatus() {
       requests += 1;
@@ -187,17 +192,12 @@ test("loaded settings refresh in the background on every page entry", async () =
   App.handleResult = (result) => result;
   App.renderSettingsStatus = () => {};
   App.clearSettingsError = () => {};
-  App.loadSettingsPrivacyStatus = () => Promise.resolve();
 
-  const target = {
-    parentNode: null,
-    getAttribute(name) { return name === "data-page" ? "settings" : null; },
-  };
-  listeners.click({ type: "click", target });
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await App.settings.onPageEntered();
+  await App.settings.onPageEntered();
 
-  assert.equal(requests, 1);
-  assert.equal(App.settingsRefreshPending, false);
+  assert.equal(requests, 2);
+  assert.equal(App.settings.refreshPending(), false);
 });
 
 test("timeline structural refresh is held while editing and drains when clean", async () => {
@@ -206,7 +206,10 @@ test("timeline structural refresh is held while editing and drains when clean", 
   let refreshes = 0;
   App.currentPage = "timeline";
   App.timelineStructuralRefreshPending = true;
-  App._timelineEditingActive = () => editing;
+  App.timelineEditorState = {
+    currentSession: () => editing ? { projection_instance_key: "session-1" } : null,
+    isDirty: () => editing,
+  };
   App.loadTimelineReport = () => { refreshes += 1; return Promise.resolve(); };
 
   assert.equal(await App.timeline.applyLocalTick(), false);

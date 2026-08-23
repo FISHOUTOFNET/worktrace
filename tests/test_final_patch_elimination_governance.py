@@ -106,14 +106,24 @@ def test_maintenance_dto_is_single_exact_contract_across_backend_and_ui() -> Non
     assert backend_fields == MAINTENANCE_FIELDS
 
     html = _source("worktrace/webview_ui/index_fd_work_v5.html")
-    javascript = _source("worktrace/webview_ui/js/settings.js")
+    javascript = _source("worktrace/webview_ui/js/settings_presentation.js")
     for field in MAINTENANCE_FIELDS:
         assert f'"{field}"' in javascript
         assert f'data-settings-key="{field}"' not in html
     assert "技术诊断" not in html
     assert "diagnostic-list" not in html
     assert "secure_import_in_progress" not in html
-    assert "secure_import_in_progress" not in javascript
+    settings_sources = "\n".join(
+        _source(f"worktrace/webview_ui/js/{name}")
+        for name in (
+            "settings_presentation.js",
+            "settings_transient_ui.js",
+            "settings_data_operations.js",
+            "settings_backup_recovery.js",
+            "settings.js",
+        )
+    )
+    assert "secure_import_in_progress" not in settings_sources
 
 
 def test_failed_closed_is_distinct_from_active_maintenance() -> None:

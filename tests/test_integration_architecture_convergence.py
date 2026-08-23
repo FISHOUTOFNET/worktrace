@@ -117,14 +117,15 @@ def test_generation_reset_delegates_page_state_to_static_lifecycle_hooks() -> No
         "settingsLoaded",
     ):
         assert private_state not in body
-    for lifecycle in (
+    assert "App.pageLifecycle.resetGeneration()" in body
+    assert "App.fdWork.resetGeneration" in body
+    for page_private_hook in (
         "App.timeline.resetGeneration",
         "App.statistics.resetGeneration",
         "App.rules.resetGeneration",
         "App.settings.resetGeneration",
-        "App.fdWork.resetGeneration",
     ):
-        assert lifecycle in body
+        assert page_private_hook not in body
 
 
 def test_project_rules_uses_narrow_identity_editor_boundary() -> None:

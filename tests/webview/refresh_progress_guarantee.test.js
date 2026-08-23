@@ -10,55 +10,100 @@ const initSource = fs.readFileSync(
 );
 
 function schedulerHarness() {
-  const start = initSource.indexOf("    function clearScheduledAutomaticPageRefresh()");
-  const end = initSource.indexOf("    function settingsRuntimeIdentity", start);
-  assert.ok(start >= 0 && end > start, "scheduler source boundary");
-
   let now = 1000;
   let nextTimerId = 1;
   const timers = [];
-  const App = { currentPage: "overview" };
-  const context = {
-    App,
-    Date: { now() { return now; } },
-    window: {
-      setTimeout(fn, ms) {
-        const timer = { id: nextTimerId++, fn, ms, cancelled: false };
-        timers.push(timer);
-        return timer.id;
-      },
-      clearTimeout(id) {
-        const timer = timers.find((item) => item.id === id);
-        if (timer) timer.cancelled = true;
-      },
+  const App = {
+    currentPage: "overview",
+    heartbeatTimer: null,
+    shellVisible: true,
+    localTodayStr: () => "2026-08-22",
+    runtimeReportDateForPage: (_page, date) => date || "2026-08-22",
+    handleResult: (result) => result,
+    requestCoordinator: {
+      beginLatest: () => ({}),
+      isCurrent: () => true,
+      bumpDataEpoch() {},
     },
-    nonNegativeInt(value, fallback) {
-      return typeof value === "number" && Number.isInteger(value) && value >= 0
-        ? value
-        : (fallback || 0);
-    },
-    automaticRefreshScopeKey(page) { return `${page}|scope`; },
-    pageNeedsRefresh() { return true; },
-    automaticRefreshAllowedForPage() { return true; },
-    refreshCurrentPageData() {},
+    validateLiveClock: () => null,
+    recordLiveClockContractViolation() {},
+    readLiveClockTarget: () => null,
+    clearLiveClockTarget() {},
+    liveTargetCompatibleWithRuntime: () => true,
+    renderLiveDurationTarget() {},
+    showStatus() {},
+    showError() {},
+    clearError() {},
+    showGlobalAlert() {},
+    clearGlobalAlert() {},
   };
+  let rejectRefresh = false;
+  App.overview = {
+    refreshPolicy: {
+      entryGenerations: ["report_structure"],
+      automaticGenerations: ["report_structure"],
+      deferred: true,
+    },
+    hasLoadedData: () => true,
+    refreshEvidence: () => null,
+    automaticRefreshAllowed: () => true,
+    refreshScopeKey: () => "overview|scope",
+    applyLocalTick: () => ({ refreshRequired: true }),
+    onRefreshRequested: () => rejectRefresh
+      ? Promise.reject(new Error("refresh failed"))
+      : Promise.resolve(null),
+    resetGeneration() {},
+  };
+  for (const page of ["timeline", "statistics", "rules", "settings"]) {
+    App[page] = { resetGeneration() {} };
+  }
+  const pageRoot = { querySelectorAll: () => [] };
+  const context = {
+    Promise, Error, String, Number, Boolean, Array, Object, Math, JSON, parseInt,
+    Date: { now() { return now; } },
+    document: {
+      readyState: "loading",
+      addEventListener() {},
+      getElementById: (id) => id === "page-overview" ? pageRoot : null,
+      querySelectorAll: () => [],
+    },
+    setTimeout(fn, ms) {
+      const timer = { id: nextTimerId++, fn, ms, cancelled: false };
+      timers.push(timer);
+      return timer.id;
+    },
+    clearTimeout(id) {
+      const timer = timers.find((item) => item.id === id);
+      if (timer) timer.cancelled = true;
+    },
+    setInterval: () => 1,
+    clearInterval() {},
+  };
+  context.window = context;
+  context.WorkTraceApp = App;
+  context.pywebview = { api: {
+    get_refresh_state: () => Promise.resolve(null),
+    get_status: () => Promise.resolve({ ok: true, status: "running", paused: false }),
+  } };
+  context.addEventListener = () => {};
+  context.removeEventListener = () => {};
   vm.createContext(context);
-  vm.runInContext(
-    [
-      "var AUTOMATIC_PAGE_REFRESH_DELAY_MS = 1500;",
-      "var automaticPageRefreshTimer = null;",
-      "var automaticPageRefreshKey = '';",
-      "var automaticPageRefreshDueAtEpochMs = 0;",
-      initSource.slice(start, end),
-      "this.scheduleForTest = scheduleAutomaticPageRefresh;",
-    ].join("\n"),
-    context,
-    { filename: "refresh_scheduler_extract.js" }
-  );
+  for (const file of ["page_lifecycle.js", "init_fd_work_v5.js"]) {
+    vm.runInContext(
+      fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", file), "utf8"),
+      context,
+      { filename: file }
+    );
+  }
   return {
     App,
     timers,
-    schedule: context.scheduleForTest,
+    schedule: () => App.applyLocalTicker(),
+    scheduleRetry: async () => {
+      rejectRefresh = true;
+      await App.refreshCurrentPageData(null, { automatic: true });
+      rejectRefresh = false;
+    },
     setNow(value) { now = value; },
   };
 }
@@ -84,10 +129,10 @@ test("same-scope deferred changes cannot postpone the first refresh deadline", (
   assert.equal(pendingTimers(timers)[0].ms, 1500);
 });
 
-test("an earlier normal refresh preempts a later failure retry", () => {
-  const { timers, schedule, setNow } = schedulerHarness();
+test("an earlier normal refresh preempts a later failure retry", async () => {
+  const { timers, schedule, scheduleRetry, setNow } = schedulerHarness();
 
-  schedule(5000);
+  await scheduleRetry();
   assert.equal(pendingTimers(timers)[0].ms, 5000);
 
   setNow(2000);
@@ -99,10 +144,10 @@ test("an earlier normal refresh preempts a later failure retry", () => {
   assert.equal(pendingTimers(timers)[0].ms, 1500);
 });
 
-test("an already-earlier retry is not delayed by a later normal request", () => {
-  const { timers, schedule, setNow } = schedulerHarness();
+test("an already-earlier retry is not delayed by a later normal request", async () => {
+  const { timers, schedule, scheduleRetry, setNow } = schedulerHarness();
 
-  schedule(5000);
+  await scheduleRetry();
   setNow(5000);
   schedule(1500);
 

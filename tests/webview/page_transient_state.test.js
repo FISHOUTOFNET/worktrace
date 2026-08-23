@@ -3,6 +3,8 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
+const { SETTINGS_MODULES } = require("./settings_test_helpers");
 
 function flush() {
   return new Promise((resolve) => setImmediate(resolve));
@@ -190,7 +192,6 @@ test("page switch resets only the page actually being left", () => {
   Object.assign(h.App, {
     currentPage: "rules",
     rulesLoaded: true,
-    settingsLoaded: true,
     timelineLoaded: true,
     statisticsLoaded: true,
     timelineDate: "2026-07-29",
@@ -199,6 +200,12 @@ test("page switch resets only the page actually being left", () => {
     resetStatisticsTransientUi: () => calls.push("statistics"),
     resetSettingsTransientUi: () => calls.push("settings"),
   });
+  h.App.overview = {};
+  h.App.timeline = { onPageLeft: () => h.App.resetTimelineTransientUi() };
+  h.App.statistics = { onPageLeft: () => h.App.resetStatisticsTransientUi() };
+  h.App.rules = { onPageLeft: () => h.App.resetRulesTransientUi() };
+  h.App.settings = { onPageLeft: () => h.App.resetSettingsTransientUi() };
+  h.load("page_lifecycle.js");
   h.load("init_fd_work_v5.js");
   h.element("app-toast").textContent = "keep toast";
   h.element("global-alert").textContent = "keep alert";
@@ -217,6 +224,7 @@ test("client generation reset delegates transient ownership to fixed modules", (
     h.App[name] = { resetGeneration: () => calls.push(name) };
   }
   h.App.requestCoordinator = { bumpDataEpoch: () => calls.push("runtime") };
+  h.load("page_lifecycle.js");
   h.load("init_fd_work_v5.js");
 
   h.App.resetClientGeneration("replacement");
@@ -429,73 +437,99 @@ test("folder picker cancellation preserves the path and failure uses the panel e
   assert.equal(h.element("rules-panel-status").className.includes("is-error"), true);
 });
 
-test("page resetters clear only transient page UI and preserve authoritative state", () => {
+test("page resetters clear only transient page UI and preserve authoritative state", async () => {
   const timeline = createHarness();
   Object.assign(timeline.App, {
     selectedProjectionInstanceKey: "selection",
-    timelineAutosaveTimer: { live: true },
-    timelineAutosaveQueued: true,
-    submittedDraft: { note: "draft" },
-    editSaving: false,
   });
   timeline.element("timeline-session-actions").hidden = false;
   timeline.element("timeline-advanced-toggle").setAttribute("aria-expanded", "true");
   timeline.element("timeline-details-pane").classList.add("drawer-open");
   timeline.element("timeline-drawer-backdrop").hidden = false;
   timeline.element("edit-status").textContent = "saved";
-  timeline.load("timeline.js");
+  for (const file of TIMELINE_MODULES) timeline.load(file);
+  const editingSession = {
+    projection_instance_key: "selection",
+    projection_revision: "r1",
+    session_note: "original",
+    can_edit_project: false,
+    can_edit_note: true,
+    can_edit_duration: false,
+  };
+  timeline.App.timelineEditorState.populate(editingSession);
+  timeline.element("edit-note-text").value = "draft";
+  timeline.App.timelineEditorState.queueAutosave();
   timeline.App.resetTimelineTransientUi();
   assert.equal(timeline.element("timeline-session-actions").hidden, true);
   assert.equal(timeline.element("timeline-details-pane").classList.contains("drawer-open"), false);
   assert.equal(timeline.App.selectedProjectionInstanceKey, "selection");
-  assert.deepEqual(timeline.App.timelineAutosaveTimer, { live: true });
-  assert.equal(timeline.App.timelineAutosaveQueued, true);
-  assert.deepEqual(timeline.App.submittedDraft, { note: "draft" });
-  timeline.App.editSaving = true;
+  assert.equal(timeline.App.timelineEditorState.currentSession(), editingSession);
+  assert.equal(timeline.App.timelineEditorState.hasQueuedAutosave(), true);
+  assert.equal(timeline.App.timelineEditorState.isDirty(), true);
+  timeline.App.timelineEditMutation = Object.freeze({ isSaving: () => true });
   timeline.element("edit-status").textContent = "正在保存…";
   timeline.App.resetTimelineTransientUi();
   assert.equal(timeline.element("edit-status").textContent, "正在保存…");
 
   const settings = createHarness();
   Object.assign(settings.App, {
-    settingsLoaded: true,
-    lastSettingsStatus: { recovery_blocked: true },
-    settingsBackupExportInProgress: true,
-    recoveryInProgress: false,
-    firstRunNoticeViewingFromSettings: true,
-    firstRunNoticeRequired: false,
+    currentPage: "settings",
+    bridge: {
+      getFirstRunNotice: () => Promise.resolve({
+        ok: true,
+        notice: { accepted: true, title: "隐私", highlights: [] },
+      }),
+      getSettingsPrivacyStatus: () => Promise.resolve({ ok: true, status: { recovery_blocked: true } }),
+    },
+    handleResult: (result) => result,
   });
   settings.element("settings-backup-passphrase").value = "secret";
   settings.element("settings-clear-confirm").value = "clear";
   settings.element("settings-backup-status").textContent = "temporary";
   settings.element("settings-diagnostics").open = true;
-  settings.element("first-run-notice-overlay").hidden = false;
-  settings.load("settings.js");
-  settings.App.resetSettingsTransientUi();
+  SETTINGS_MODULES.forEach(settings.load);
+  await settings.App.settings.onPageEntered();
+  await settings.App.privacyNotice.openFromSettings();
+  settings.App.settings.onPageLeft();
   assert.equal(settings.element("settings-backup-passphrase").value, "");
   assert.equal(settings.element("settings-clear-confirm").value, "");
   assert.equal(settings.element("settings-backup-status").textContent, "");
   assert.equal(settings.element("settings-diagnostics").open, false);
   assert.equal(settings.element("first-run-notice-overlay").hidden, true);
-  assert.equal(settings.App.settingsLoaded, true);
-  assert.deepEqual(settings.App.lastSettingsStatus, { recovery_blocked: true });
-  assert.equal(settings.App.settingsBackupExportInProgress, true);
+  assert.equal(settings.App.settings.hasLoadedData(), true);
+  assert.deepEqual(settings.App.settings.snapshot(), { recovery_blocked: true });
 
   const forcedPrivacy = createHarness();
+  const recovery = deferred();
   Object.assign(forcedPrivacy.App, {
-    firstRunNoticeViewingFromSettings: false,
-    firstRunNoticeRequired: true,
-    privacyGateState: "acceptance_required",
-    recoveryInProgress: true,
+    currentPage: "settings",
+    bridge: {
+      getFirstRunNotice: () => Promise.resolve({
+        ok: true,
+        notice: { accepted: false, title: "隐私", highlights: [] },
+      }),
+      getSettingsPrivacyStatus: () => Promise.resolve({ ok: true, status: { recovery_blocked: true } }),
+      recoverDatabaseMaintenance: () => recovery.promise,
+    },
+    clearGlobalAlert() {},
+    extractBridgeError: (result, fallback) => result && result.message || fallback,
+    handleResult: (result) => result,
   });
-  forcedPrivacy.element("first-run-notice-overlay").hidden = false;
-  forcedPrivacy.element("settings-recovery-status").textContent = "正在恢复…";
-  forcedPrivacy.load("settings.js");
-  forcedPrivacy.App.resetSettingsTransientUi();
+  SETTINGS_MODULES.forEach(forcedPrivacy.load);
+  await forcedPrivacy.App.settings.onPageEntered();
+  await forcedPrivacy.App.privacyNotice.loadGate();
+  forcedPrivacy.App.recoverDatabaseMaintenance();
+  await flush();
+  forcedPrivacy.App.settings.onPageLeft();
   assert.equal(forcedPrivacy.element("first-run-notice-overlay").hidden, false);
-  assert.equal(forcedPrivacy.App.firstRunNoticeRequired, true);
-  assert.equal(forcedPrivacy.App.privacyGateState, "acceptance_required");
-  assert.equal(forcedPrivacy.element("settings-recovery-status").textContent, "正在恢复…");
+  assert.equal(forcedPrivacy.App.privacyNotice.requiresAcceptance(), true);
+  assert.equal(forcedPrivacy.App.privacyNotice.state(), "acceptance_required");
+  assert.equal(
+    forcedPrivacy.element("settings-recovery-status").textContent,
+    "正在尝试恢复，请勿关闭应用……"
+  );
+  recovery.resolve({ ok: false, message: "恢复失败" });
+  await flush();
 
   const statistics = createHarness();
   let timerFired = false;

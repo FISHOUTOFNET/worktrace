@@ -55,29 +55,32 @@ def test_focus_drawer_dialog_and_toast_are_shared_accessible_primitives() -> Non
 
 
 def test_timeline_keeps_liveclock_attributes_and_uses_autosave_owner() -> None:
-    source = read_js("timeline.js")
-    init_source = read_js("init_fd_work_v5.js")
-    assert "App.liveClockDataAttributes" in source
-    assert "App.timelineRequestState.nextMutationOwner" in source
-    assert 'bind("edit-note-text", "compositionstart", App.handleTimelineCompositionStart)' in init_source
-    assert 'bind("edit-note-text", "compositionend", App.handleTimelineCompositionEnd)' in init_source
-    assert 'bind("edit-note-text", "input", App.handleTimelineNoteInput)' in init_source
-    assert "scheduleTimelineAutosave(650)" in source
-    assert "timelineAutosaveQueued" in source
-    assert "markMutationUnknown" in source
-    assert "refreshAfterConfirmedMutation" in source
-    assert "window.confirm" not in source
+    coordinator = read_js("timeline.js")
+    presentation = read_js("timeline_presentation.js")
+    editor = read_js("timeline_editor_state.js")
+    assert "App.liveClockDataAttributes" in coordinator
+    assert "App.timelineRequestState.nextMutationOwner" in coordinator
+    assert "App.timelineEditorState.bindEvents()" in coordinator
+    assert 'note.addEventListener("compositionstart", handleCompositionStart)' in editor
+    assert 'note.addEventListener("compositionend", handleCompositionEnd)' in editor
+    assert 'note.addEventListener("input", handleNoteInput)' in editor
+    assert "scheduleAutosave(650)" in editor
+    assert "autosaveQueued" in editor
+    assert "markMutationUnknown" in coordinator
+    assert "refreshAfterConfirmedMutation" in coordinator
+    assert "window.confirm" not in coordinator + presentation + editor
 
 
 def test_timeline_list_and_compact_inspector_have_keyboard_semantics() -> None:
     html = read_resource("index_fd_work_v5.html")
-    source = read_js("timeline.js")
+    coordinator = read_js("timeline.js")
+    transient = read_js("timeline_transient_ui.js")
     styles = read_resource("styles.css")
     assert 'role="listbox"' in html
-    assert 'role="option"' in source and 'aria-selected="' in source
-    assert 'event.key !== "ArrowDown"' in source and 'event.key !== "ArrowUp"' in source
+    assert 'role="option"' in coordinator and 'aria-selected="' in coordinator
+    assert 'event.key !== "ArrowDown"' in coordinator and 'event.key !== "ArrowUp"' in coordinator
     assert ".timeline-inspector.drawer-open" in styles
-    assert "App.trapFocus" in source and "closeTimelineDrawer" in source
+    assert "App.trapFocus" in transient and "closeTimelineDrawer" in transient
 
 
 def test_direct_deletions_use_shared_dialog_and_wait_for_backend_refresh() -> None:

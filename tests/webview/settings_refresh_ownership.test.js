@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { loadSettingsModules } = require("./settings_test_helpers");
 
 function deferred() {
   let resolve;
@@ -23,17 +24,6 @@ function harness() {
   };
   const App = {
     currentPage: "overview",
-    settingsLoaded: false,
-    settingsLoading: false,
-    settingsRequestToken: 0,
-    settingsWriteInProgress: false,
-    launchAtLoginWriteInProgress: false,
-    fdWorkSettingsWriteInProgress: false,
-    settingsBackupExportInProgress: false,
-    settingsBackupManifestInProgress: false,
-    settingsBackupImportInProgress: false,
-    settingsClearAllInProgress: false,
-    recoveryInProgress: false,
     bridge: {
       getSettingsPrivacyStatus() {
         statusRequests += 1;
@@ -69,11 +59,7 @@ function harness() {
     Boolean,
   };
   vm.createContext(context);
-  vm.runInContext(
-    fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/settings.js"), "utf8"),
-    context,
-    { filename: "settings.js" }
-  );
+  loadSettingsModules(context);
   return {
     App,
     loading,
@@ -90,60 +76,62 @@ test("Settings first entry is visible and loaded re-entry is silent", async () =
   statusResponses.push(initial);
 
   const initialLoad = App.settings.onPageEntered();
-  assert.equal(App.settingsLoading, true);
+  assert.equal(App.settings.isLoading(), true);
   assert.equal(loading.hidden, false);
   initial.resolve({ ok: true, status: { collector_running: true } });
   await initialLoad;
-  assert.equal(App.settingsLoading, false);
+  assert.equal(App.settings.isLoading(), false);
   assert.equal(loading.hidden, true);
 
   const silent = deferred();
   statusResponses.push(silent);
   const reentry = App.settings.onPageEntered();
-  assert.equal(App.settingsLoading, false);
+  assert.equal(App.settings.isLoading(), false);
   silent.resolve({ ok: true, status: { collector_running: false } });
   await reentry;
 
   assert.equal(statusRequests(), 2);
-  assert.deepEqual(App.lastSettingsStatus, { collector_running: false });
+  assert.deepEqual(App.settings.snapshot(), { collector_running: false });
 });
 
 test("Settings defers hidden invalidation and silently refreshes on re-entry", async () => {
   const { App, statusRequests } = harness();
-  App.settingsLoaded = true;
+  App.currentPage = "settings";
+  await App.settings.onPageEntered();
+  App.currentPage = "overview";
 
   await App.settings.onDataChanged({ source: "refresh-state", settingsChanged: true });
-  assert.equal(statusRequests(), 0);
-  assert.equal(App.settingsRefreshPending, true);
+  assert.equal(statusRequests(), 1);
+  assert.equal(App.settings.refreshPending(), true);
 
   App.currentPage = "settings";
   await App.settings.onPageEntered();
-  assert.equal(statusRequests(), 1);
-  assert.equal(App.settingsRefreshPending, false);
-  assert.equal(App.settingsLoading, false);
+  assert.equal(statusRequests(), 2);
+  assert.equal(App.settings.refreshPending(), false);
+  assert.equal(App.settings.isLoading(), false);
 });
 
 test("Settings keeps refresh pending during a write and drains after the write settles", async () => {
   const { App, writeResponses, statusRequests } = harness();
   App.currentPage = "settings";
-  App.settingsLoaded = true;
+  await App.settings.onPageEntered();
   const write = deferred();
   writeResponses.push(write);
 
   const operation = App.setCaptureEnabled(true);
-  assert.equal(App.settingsWriteInProgress, true);
+  assert.equal(App.settings.operationName(), "clipboard_write");
   await App.settings.onDataChanged({ source: "refresh-state", settingsChanged: true });
-  assert.equal(statusRequests(), 0);
-  assert.equal(App.settingsRefreshPending, true);
+  assert.equal(statusRequests(), 1);
+  assert.equal(App.settings.refreshPending(), true);
 
   write.resolve({ ok: true, status: { clipboard_capture_enabled: true } });
   await operation;
   await Promise.resolve();
 
-  assert.equal(App.settingsWriteInProgress, false);
-  assert.equal(statusRequests(), 1);
-  assert.equal(App.settingsRefreshPending, false);
-  assert.equal(App.settingsLoading, false);
+  assert.equal(App.settings.operationName(), "");
+  assert.equal(statusRequests(), 2);
+  assert.equal(App.settings.refreshPending(), false);
+  assert.equal(App.settings.isLoading(), false);
 });
 
 test("Settings request token rejects a result from the previous generation", async () => {
@@ -161,6 +149,6 @@ test("Settings request token rejects a result from the previous generation", asy
   stale.resolve({ ok: true, status: { marker: "stale" } });
   await staleLoad;
 
-  assert.deepEqual(App.lastSettingsStatus, { marker: "current" });
+  assert.deepEqual(App.settings.snapshot(), { marker: "current" });
 });
 

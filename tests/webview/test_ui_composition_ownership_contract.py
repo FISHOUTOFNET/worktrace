@@ -64,11 +64,11 @@ def test_timeline_owns_structural_pending_and_live_suppression():
 
 def test_timeline_refresh_coordinator_forwards_refresh_options():
     init = source("init_fd_work_v5.js")
+    timeline = source("timeline.js")
 
-    timeline_refresher = init.split(
-        "        timeline: function (acceptedState, options) {", 1
-    )[1].split("        statistics: function", 1)[0]
-    assert "capability.onRefreshRequested(options || {})" in timeline_refresher
+    assert "method.call(capability, options" in init
+    assert "function onTimelineRefreshRequested(options, context)" in timeline
+    assert "options.automatic === true" in timeline
 
 
 def test_overview_owns_live_collection_suppression():
@@ -87,7 +87,7 @@ def test_init_dispatches_the_existing_local_tick_to_the_active_page():
 
     assert "App.applyLocalTicker =" not in composition
     local_ticker = init.split("    App.applyLocalTicker = function () {", 1)[1].split(
-        "    function invalidateProjectCatalog()", 1
+        "    function refreshStatus()", 1
     )[0]
     assert "pageCapability(tickerPage)" in local_ticker
     assert 'typeof capability.applyLocalTick === "function"' in local_ticker
@@ -156,3 +156,12 @@ def test_composition_has_no_page_data_reads_monkey_patches_or_private_dom_ids():
         "settings-loading",
     ):
         assert private_dom_id not in composition
+
+
+def test_page_entry_has_one_orchestration_path():
+    composition = source("ui_composition.js")
+    init = source("init_fd_work_v5.js")
+
+    assert "afterUiInteraction" not in composition
+    assert 'document.addEventListener("click"' not in composition
+    assert "capability.onPageEntered" in init
