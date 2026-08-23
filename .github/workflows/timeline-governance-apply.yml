@@ -6,12 +6,15 @@ on:
     paths:
       - scripts/refactor_timeline_governance.py
       - .github/workflows/timeline-governance-apply.yml
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
   apply:
+    if: github.event_name == 'push' || github.head_ref == 'codex/timeline-js-governance'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
