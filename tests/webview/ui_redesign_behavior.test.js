@@ -749,7 +749,7 @@ test("6a. 1.5 edited hours submits 5400 integer seconds", async () => {
   App.callBridge = (method, ...args) => {
     if (method === "save_timeline_session_edit") {
       payloads.push(args);
-      submittedDurationTouched = App.submittedDraft.durationTouched;
+      submittedDurationTouched = args[5];
     }
     return Promise.resolve(successfulTimelineEdit());
   };
@@ -812,7 +812,7 @@ test("6a3. unknown duration save retry preserves exact intent and request id", a
   };
 
   await App.saveEdit();
-  assert.equal(App.timelineDurationDraftTouched, true);
+  assert.equal(App.timelineEditorState.captureSaveIntent().durationTouched, true);
   await App.saveEdit();
   await flush();
   await flush();
@@ -937,7 +937,7 @@ test("6d. duration edit during an in-flight save queues against the rebased revi
   App.saveEdit();
   element("edit-duration-input").value = "1.5";
   App.handleTimelineDurationChange();
-  assert.equal(App.timelineAutosaveQueued, true);
+  assert.equal(App.timelineEditorState.hasQueuedAutosave(), true);
   first.resolve(successfulTimelineEdit("rev-2"));
   await new Promise((resolve) => setTimeout(resolve, 30));
   await flush();
@@ -954,7 +954,7 @@ test("6. continuous autosave: S1 uses R1, S2 uses R2 after rebase", async () => 
   const { App, element } = timelineHarness();
   const sessions = [session("base:a", "rev-1", "2026-07-12T09:00:00")];
   App.currentSessions = sessions;
-  App.editingSession = sessions[0];
+  App.timelineEditorState.populate(sessions[0]);
   element("edit-note-text").value = "A";
   element("edit-project-select").value = "1";
   element("edit-duration-input").value = "0.2";
@@ -986,14 +986,14 @@ test("6. continuous autosave: S1 uses R1, S2 uses R2 after rebase", async () => 
   assert.equal(saveCalls[0].revision, "rev-1", "S1 must use R1");
   assert.equal(saveCalls[1].revision, "rev-2", "S2 must use the rebased R2");
   assert.equal(saveCalls[1].note, "B", "S2 must save the post-submit note B");
-  assert.equal(App.editSaving, false);
+  assert.equal(App.timelineEditMutation.isSaving(), false);
 });
 
 test("7. multi-field edits during save are not overwritten by stale response", async () => {
   const { App, element } = timelineHarness();
   const sessions = [session("base:a", "rev-1", "2026-07-12T09:00:00")];
   App.currentSessions = sessions;
-  App.editingSession = sessions[0];
+  App.timelineEditorState.populate(sessions[0]);
   element("edit-project-select").value = "1";
   element("edit-note-text").value = "note-1";
   element("edit-duration-input").value = "0.2";
@@ -1027,7 +1027,7 @@ test("7b. composition input never submits intermediate text and saves only final
   const { App, element, context } = timelineHarness();
   const source = session("base:a", "rev-1", "2026-07-12T09:00:00");
   App.currentSessions = [source];
-  App.editingSession = source;
+  App.timelineEditorState.populate(source);
   element("edit-project-select").value = "1";
   element("edit-duration-input").value = "0.2";
 
@@ -1059,7 +1059,7 @@ test("7b. composition input never submits intermediate text and saves only final
   App.handleTimelineNoteInput({ isComposing: true });
   App.saveEdit();
   assert.equal(submitted.length, 0, "composition must block direct/timer save");
-  assert.equal(App.timelineAutosaveQueued, true);
+  assert.equal(App.timelineEditorState.hasQueuedAutosave(), true);
 
   element("edit-note-text").value = "中文";
   App.handleTimelineCompositionEnd();
@@ -1077,7 +1077,7 @@ test("7c. editable fields stay enabled and focused while autosave is in flight",
   const { App, element } = timelineHarness();
   const source = session("base:a", "rev-1", "2026-07-12T09:00:00");
   App.currentSessions = [source];
-  App.editingSession = source;
+  App.timelineEditorState.populate(source);
   element("edit-project-select").value = "1";
   element("edit-note-text").value = "first";
   element("edit-duration-input").value = "0.2";
@@ -1087,7 +1087,7 @@ test("7c. editable fields stay enabled and focused while autosave is in flight",
   App.callBridge = () => pending.promise;
 
   App.saveEdit();
-  assert.equal(App.editSaving, true);
+  assert.equal(App.timelineEditMutation.isSaving(), true);
   assert.equal(element("edit-project-select").disabled, false);
   assert.equal(element("edit-note-text").disabled, false);
   assert.equal(element("edit-duration-input").disabled, false);
@@ -1107,7 +1107,7 @@ test("7d. 200-character limit applies only when the description changed", async 
   const historical = "旧".repeat(250);
   const source = session("base:a", "rev-1", "2026-07-12T09:00:00", { project_id: 1, session_note: historical });
   App.currentSessions = [source];
-  App.editingSession = source;
+  App.timelineEditorState.populate(source);
   element("edit-project-select").value = "2";
   element("edit-note-text").value = historical;
   element("edit-duration-input").value = "0.2";
@@ -1122,8 +1122,7 @@ test("7d. 200-character limit applies only when the description changed", async 
   assert.equal(submitted.length, 1, "unchanged historical long text must not block project edit");
   assert.equal(submitted[0][7], historical);
 
-  App.editingSession = source;
-  App.editSaving = false;
+  App.timelineEditorState.populate(source);
   element("edit-note-text").value = "新".repeat(201);
   App.saveEdit();
   assert.equal(submitted.length, 1, "changed description over 200 must be rejected");
@@ -1134,7 +1133,7 @@ test("8. context switch preserves dirty draft (save first, then switch)", async 
   const { App, element } = timelineHarness();
   const sessions = [session("base:a", "rev-1", "2026-07-12T09:00:00")];
   App.currentSessions = sessions;
-  App.editingSession = sessions[0];
+  App.timelineEditorState.populate(sessions[0]);
   element("edit-note-text").value = "dirty";
   element("edit-project-select").value = "1";
 
@@ -1170,7 +1169,7 @@ test("8c. context switch during save in flight queues and executes after success
   const { App, element } = timelineHarness();
   const sessions = [session("base:a", "rev-1", "2026-07-12T09:00:00")];
   App.currentSessions = sessions;
-  App.editingSession = sessions[0];
+  App.timelineEditorState.populate(sessions[0]);
   element("edit-note-text").value = "dirty";
   element("edit-project-select").value = "1";
 

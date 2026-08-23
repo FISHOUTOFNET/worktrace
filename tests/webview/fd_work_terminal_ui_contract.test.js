@@ -24,6 +24,7 @@ function harness() {
         setAttribute() {}, removeAttribute() {}, getAttribute() { return ""; },
         querySelectorAll() { return []; },
         querySelector() { return null; },
+        appendChild() {},
         addEventListener() {},
       });
     }
@@ -108,11 +109,8 @@ function configureReadySession(App, element) {
     can_edit_note: true,
     can_edit_duration: true,
   };
-  App.editingSession = session;
+  App.timelineEditorState.populate(session);
   App.currentSessions = [session];
-  App.timelineLastSaveFailed = false;
-  App.editSaving = false;
-  App.timelineCompositionActive = false;
   App.mutationState = "idle";
   App.fdWorkOpenPromise = null;
   const project = element("edit-project-select");

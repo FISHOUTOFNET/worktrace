@@ -184,8 +184,6 @@ def test_frontend_state_is_namespaced() -> None:
         "projectsCache",
         "projectsLoading",
         "currentSessions",
-        "editingSession",
-        "editSaving",
         "statisticsLoaded",
         "statisticsLoading",
         "statisticsRequestToken",

@@ -152,7 +152,7 @@
     App.renderTimelineProjectFilter = renderTimelineProjectFilter;
 
     function renderSessionDetails(data) {
-        if (typeof App._timelineEditingActive === "function" && App._timelineEditingActive()) return;
+        if (App.timeline && App.timeline.isEditingActive()) return;
         if (App.lastTimelineData) {
             App.lastTimelineData.current_activity = data.current_activity
                 || App.lastTimelineData.current_activity

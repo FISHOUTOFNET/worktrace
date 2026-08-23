@@ -60,11 +60,12 @@ def test_timeline_keeps_liveclock_attributes_and_uses_autosave_owner() -> None:
     editor = read_js("timeline_editor_state.js")
     assert "App.liveClockDataAttributes" in coordinator
     assert "App.timelineRequestState.nextMutationOwner" in coordinator
-    assert 'bindTimelineControl("edit-note-text", "compositionstart", App.handleTimelineCompositionStart)' in coordinator
-    assert 'bindTimelineControl("edit-note-text", "compositionend", App.handleTimelineCompositionEnd)' in coordinator
-    assert 'bindTimelineControl("edit-note-text", "input", App.handleTimelineNoteInput)' in coordinator
-    assert "scheduleTimelineAutosave(650)" in editor
-    assert "timelineAutosaveQueued" in editor
+    assert "App.timelineEditorState.bindEvents()" in coordinator
+    assert 'note.addEventListener("compositionstart", handleCompositionStart)' in editor
+    assert 'note.addEventListener("compositionend", handleCompositionEnd)' in editor
+    assert 'note.addEventListener("input", handleNoteInput)' in editor
+    assert "scheduleAutosave(650)" in editor
+    assert "autosaveQueued" in editor
     assert "markMutationUnknown" in coordinator
     assert "refreshAfterConfirmedMutation" in coordinator
     assert "window.confirm" not in coordinator + presentation + editor

@@ -24,9 +24,10 @@ function harness() {
         textContent: "",
         innerHTML: "",
         className: "",
-        classList: { add() {}, remove() {}, contains() { return false; } },
+        classList: { add() {}, remove() {}, contains() { return false; }, toggle() {} },
         setAttribute() {}, removeAttribute() {}, getAttribute() { return ""; },
         querySelectorAll() { return []; },
+        appendChild() {},
         addEventListener() {},
       });
     }
@@ -648,7 +649,7 @@ function configureFDWorkSession(App, element, overrides = {}) {
     can_edit_note: true,
     can_edit_duration: true,
   }, overrides);
-  App.editingSession = session;
+  App.timelineEditorState.populate(session);
   App.selectedProjectionInstanceKey = session.projection_instance_key;
   App.selectedProjectionRevision = session.projection_revision;
   App.currentSessions = [session];
@@ -666,6 +667,18 @@ function configureFDWorkSession(App, element, overrides = {}) {
   element("edit-duration-input").value = "1.4";
   return session;
 }
+
+test("read-only editor preview preserves the authoritative duration override", () => {
+  const { App, element } = harness();
+  configureFDWorkSession(App, element, {
+    duration_seconds: 5040,
+    adjusted_duration_seconds: 3600,
+    has_duration_override: true,
+    can_edit_duration: false,
+  });
+
+  assert.equal(App.timelineEditorState.preview().durationSeconds, 3600);
+});
 
 test("FD Work bridge receives only current timeline identity and versions", async () => {
   const { App, element } = harness();
@@ -895,7 +908,7 @@ test("FD Work area is fail-closed and one availability model renders the reason"
     ready: true, login_required: false, error_code: null,
   });
   element("edit-note-text").value = "";
-  const availability = App.getFDWorkAvailability(App.editingSession);
+  const availability = App.getFDWorkAvailability(App.timelineEditorState.currentSession());
   App.updateFDWorkEntryButton();
   assert.equal(availability.state, "disabled");
   assert.match(availability.reason, /请先填写描述/);
@@ -911,7 +924,7 @@ test("closed idle helper remains actionable so the next fill can prepare it", ()
     ready: false, login_required: false, error_code: null,
   });
 
-  const availability = App.getFDWorkAvailability(App.editingSession);
+  const availability = App.getFDWorkAvailability(App.timelineEditorState.currentSession());
   App.updateFDWorkEntryButton();
 
   assert.equal(availability.state, "ready");

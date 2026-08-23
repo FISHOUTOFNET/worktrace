@@ -292,7 +292,10 @@ test("Settings generation refresh while visible is background-only", async () =>
 test("Timeline consumes one live-only collection refresh but preserves structural refreshes", async () => {
   const { App, counters } = harness(runtime());
   App.currentPage = "timeline";
-  App._timelineEditingActive = () => false;
+  App.timelineEditorState = {
+    currentSession: () => null,
+    isDirty: () => false,
+  };
 
   App.acceptRefreshStateRuntime({ nextRuntime: runtime({ live: "l2" }) });
   await App.refreshTimeline();

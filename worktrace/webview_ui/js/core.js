@@ -46,11 +46,6 @@
     App.overviewRequestToken = 0;
     App.recentRequestToken = 0;
     App.currentSessions = [];
-    App.editingSession = null;
-    App.editSaving = false;
-    App.timelineCompositionActive = false;
-    App.timelineDurationDraftTouched = false;
-    App.timelineDurationDraftInvalid = false;
     App.statisticsLoaded = false;
     App.statisticsLoading = false;
     App.statisticsRequestToken = 0;
@@ -653,13 +648,4 @@
             && targetClock.stable_live_key_hash === runtimeClock.stable_live_key_hash;
     };
 
-    App._timelineEditingActive = function () {
-        return App.editSaving
-            || App.mutationState === "unknown"
-            || !!(
-                App.editingSession
-                && typeof App.isEditDirty === "function"
-                && App.isEditDirty()
-            );
-    };
 })();

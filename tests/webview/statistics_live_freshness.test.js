@@ -206,7 +206,10 @@ test("timeline structural refresh is held while editing and drains when clean", 
   let refreshes = 0;
   App.currentPage = "timeline";
   App.timelineStructuralRefreshPending = true;
-  App._timelineEditingActive = () => editing;
+  App.timelineEditorState = {
+    currentSession: () => editing ? { projection_instance_key: "session-1" } : null,
+    isDirty: () => editing,
+  };
   App.loadTimelineReport = () => { refreshes += 1; return Promise.resolve(); };
 
   assert.equal(await App.timeline.applyLocalTick(), false);

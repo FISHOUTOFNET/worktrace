@@ -95,7 +95,9 @@
     function resetTimelineTransientUi() {
         closeTimelineAdvancedMenu({ restoreFocus: false });
         closeTimelineDrawer({ restoreFocus: false });
-        if (!App.editSaving) App.showEditStatus("", false);
+        if (!App.timelineEditMutation || !App.timelineEditMutation.isSaving()) {
+            App.timelineEditorState.showStatus("", false);
+        }
     }
     App.resetTimelineTransientUi = resetTimelineTransientUi;
 })();

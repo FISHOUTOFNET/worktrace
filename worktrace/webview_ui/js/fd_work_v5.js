@@ -530,10 +530,10 @@
     }
 
     function selectedTimelineProject() {
-        var session = App.editingSession;
+        var preview = App.timelineEditorState ? App.timelineEditorState.preview() : null;
+        var session = preview && preview.session;
         if (!validProjectSessionForFDWorkGate(session)) return null;
-        var select = document.getElementById("edit-project-select");
-        var projectId = parseInt(select && select.value || session.project_id || 0, 10);
+        var projectId = parseInt(preview.projectId || session.project_id || 0, 10);
         if (!(projectId > 0)) return null;
         var projects = App.projectCatalog
             ? App.projectCatalog.getEditing()

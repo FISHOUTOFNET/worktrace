@@ -224,11 +224,6 @@ function prepareTimeline() {
   const h = createHarness();
   Object.assign(h.App, {
     mutationState: "idle",
-    editSaving: false,
-    editingSession: null,
-    timelineDurationDraftTouched: false,
-    timelineDurationDraftInvalid: false,
-    timelineAutosaveQueued: false,
     detailsInFlight: {},
     currentSessions: [],
     timelineDate: "2026-08-18",
@@ -262,9 +257,9 @@ test("timeline context changes dismiss the advanced menu before the new action",
   assert.equal(h.element("timeline-advanced-toggle").getAttribute("aria-expanded"), "false");
 });
 
-test("timeline menu dismisses immediately even when a context change waits for save", async () => {
+test("timeline menu dismisses immediately when an unknown mutation blocks context change", async () => {
   const h = prepareTimeline();
-  h.App.editSaving = true;
+  h.App.mutationState = "unknown";
   h.element("timeline-session-actions").hidden = false;
   h.element("timeline-advanced-toggle").setAttribute("aria-expanded", "true");
 
@@ -272,7 +267,7 @@ test("timeline menu dismisses immediately even when a context change waits for s
 
   assert.equal(result, false);
   assert.equal(h.element("timeline-session-actions").hidden, true);
-  assert.equal(h.App.pendingContextChange.reason, "切换时间段");
+  assert.equal(h.App.pendingContextChange || null, null);
 });
 
 test("timeline advanced menu dismisses on outside pointer or focus but not inside interaction", () => {

@@ -117,23 +117,19 @@
         var narrative = String(session.session_note || "").trim();
         var durationSeconds = Math.max(0, parseInt(session.duration_seconds, 10) || 0);
         if (options.authoritative !== true) {
-            var project = document.getElementById("edit-project-select");
-            var selected = project && project.options
-                ? project.options[project.selectedIndex]
-                : null;
-            projectName = selected
-                ? String(selected.textContent || "").trim()
-                : projectName;
-            var note = document.getElementById("edit-note-text");
-            narrative = String(note ? note.value : narrative).trim();
-            var duration = document.getElementById("edit-duration-input");
-            var normalized = App.normalizeTimelineDurationInput(
-                duration ? duration.value : (durationSeconds / 3600).toFixed(1)
-            );
-            if (!normalized.valid) {
-                return { enabled: true, state: "disabled", reason: normalized.reason };
+            var preview = App.timelineEditorState.preview();
+            if (
+                preview
+                && preview.session
+                && preview.session.projection_instance_key === session.projection_instance_key
+            ) {
+                if (!preview.valid) {
+                    return { enabled: true, state: "disabled", reason: preview.reason };
+                }
+                projectName = preview.projectName;
+                narrative = preview.narrative;
+                durationSeconds = preview.durationSeconds;
             }
-            if (!normalized.cleared) durationSeconds = normalized.seconds;
         }
         if (!projectName) {
             return { enabled: true, state: "disabled", reason: "请先为时间段选择项目" };
@@ -147,10 +143,13 @@
         if (durationSeconds > 86040) {
             return { enabled: true, state: "disabled", reason: "该时间段超过 FD Work 允许的 23.9 小时" };
         }
-        if (App.timelineLastSaveFailed === true) {
+        if (App.timelineEditMutation.lastFailed()) {
             return { enabled: true, state: "error", reason: "上次更改保存失败，请重试" };
         }
-        if (!options.ignoreBusy && (App.editSaving || App.timelineCompositionActive === true)) {
+        if (!options.ignoreBusy && (
+            App.timelineEditMutation.isSaving()
+            || App.timelineEditorState.isComposing()
+        )) {
             return { enabled: true, state: "busy", reason: "正在保存时间段" };
         }
         if (!options.ignoreBusy && App.mutationState === "unknown") {
@@ -185,7 +184,7 @@
         var button = document.getElementById("fd-work-entry-btn");
         var area = document.getElementById("fd-work-entry-area");
         var status = document.getElementById("fd-work-status");
-        var availability = getFDWorkAvailability(App.editingSession);
+        var availability = getFDWorkAvailability(App.timelineEditorState.currentSession());
         if (area) area.hidden = availability.state === "hidden";
         if (button) button.disabled = availability.state !== "ready";
         if (status) {
@@ -200,34 +199,34 @@
     App.updateFDWorkEntryButton = updateFDWorkEntryButton;
 
     function flushTimelineEditsForFDWork() {
-        App.timelineEditorState.cancelAutosaveTimer();
-        if (App.timelineCompositionActive === true) {
+        App.timelineEditorState.cancelAutosave();
+        if (App.timelineEditorState.isComposing()) {
             showFDWorkStatus("请先完成当前文字输入", true);
             return Promise.resolve(false);
         }
-        if (App.editSaving) {
+        if (App.timelineEditMutation.isSaving()) {
             showFDWorkStatus("正在保存时间段…", false);
-            return (App.timelineSavePromise || Promise.resolve(false)).then(function (ok) {
+            return (App.timelineEditMutation.pendingPromise() || Promise.resolve(false)).then(function (ok) {
                 if (!ok) return false;
                 return flushTimelineEditsForFDWork();
             });
         }
-        if (App.timelineAutosaveQueued || App.isEditDirty()) {
-            App.timelineAutosaveQueued = false;
+        if (App.timelineEditorState.hasQueuedAutosave() || App.timelineEditorState.isDirty()) {
+            App.timelineEditorState.consumeQueuedAutosave();
             showFDWorkStatus("正在保存时间段…", false);
-            return App.saveEdit().then(function (ok) {
+            return App.timelineEditMutation.save().then(function (ok) {
                 if (!ok) return false;
                 return flushTimelineEditsForFDWork();
             });
         }
-        return Promise.resolve(App.timelineLastSaveFailed !== true);
+        return Promise.resolve(!App.timelineEditMutation.lastFailed());
     }
     App.flushTimelineEditsForFDWork = flushTimelineEditsForFDWork;
 
     function openFDWorkEntryForSelection() {
         if (App.fdWorkOpenPromise) return App.fdWorkOpenPromise;
         App.fdWorkStatusOverride = null;
-        var availability = getFDWorkAvailability(App.editingSession);
+        var availability = getFDWorkAvailability(App.timelineEditorState.currentSession());
         if (availability.state !== "ready") {
             updateFDWorkEntryButton();
             if (availability.state !== "hidden") showFDWorkStatus(availability.reason, true);
@@ -273,7 +272,8 @@
         }
         var transaction = beginFDWorkFillTransaction();
         showFDWorkStatus(
-            App.isEditDirty() || App.editSaving ? "正在保存时间段…" : "正在填入 FD Work…",
+            App.timelineEditorState.isDirty() || App.timelineEditMutation.isSaving()
+                ? "正在保存时间段…" : "正在填入 FD Work…",
             false
         );
         var operation = flushTimelineEditsForFDWork().then(function (saved) {

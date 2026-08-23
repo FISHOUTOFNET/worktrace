@@ -306,24 +306,19 @@ def test_activity_details_divider_only_appears_for_a_valid_selection():
 
 def test_timeline_duration_draft_preserves_exact_override_until_user_touches_field():
     source = _timeline_source()
-    populate = func_body(source, "populateEditPanel")
-    dirty = func_body(source, "isEditDirty")
-    save = func_body(source, "saveEdit")
-    handler = func_body(source, "handleTimelineDurationChange")
+    populate = func_body(source, "populate")
+    dirty = func_body(source, "isDirty")
+    intent = func_body(source, "captureSaveIntent")
+    handler = func_body(source, "handleDurationChange")
 
-    assert "App.timelineDurationDraftTouched = false" in populate
+    assert "durationDraftTouched = false" in populate
     assert "toFixed(1)" in populate
-    assert "App.timelineDurationDraftTouched" in dirty
-    assert "App.timelineDurationDraftTouched" in save
-    assert "normalizeTimelineDurationInput" in save
-    assert "normalizedDuration.seconds" in save
-    assert "session.adjusted_duration_seconds" in save
-    assert "durationTouched" in save
-    assert "durationTouched: durationTouched" in save
-    assert "durationTouched," in save
-    assert "App.timelineDurationDraftTouched = true" in handler
-    assert "scheduleTimelineAutosave(0)" in handler
-    assert (
-        'bindTimelineControl("edit-duration-input", "change", '
-        "App.handleTimelineDurationChange)" in source
-    )
+    assert "durationDraftTouched" in dirty
+    assert "durationDraftTouched" in intent
+    assert "normalizeTimelineDurationInput" in intent
+    assert "normalized.seconds" in intent
+    assert "existingDurationOverride" in intent
+    assert "durationTouched: durationTouched" in intent
+    assert "durationDraftTouched = true" in handler
+    assert "scheduleAutosave(0)" in handler
+    assert 'duration.addEventListener("change", handleDurationChange)' in source

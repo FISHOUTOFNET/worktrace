@@ -441,10 +441,6 @@ test("page resetters clear only transient page UI and preserve authoritative sta
   const timeline = createHarness();
   Object.assign(timeline.App, {
     selectedProjectionInstanceKey: "selection",
-    timelineAutosaveTimer: { live: true },
-    timelineAutosaveQueued: true,
-    submittedDraft: { note: "draft" },
-    editSaving: false,
   });
   timeline.element("timeline-session-actions").hidden = false;
   timeline.element("timeline-advanced-toggle").setAttribute("aria-expanded", "true");
@@ -452,14 +448,25 @@ test("page resetters clear only transient page UI and preserve authoritative sta
   timeline.element("timeline-drawer-backdrop").hidden = false;
   timeline.element("edit-status").textContent = "saved";
   for (const file of TIMELINE_MODULES) timeline.load(file);
+  const editingSession = {
+    projection_instance_key: "selection",
+    projection_revision: "r1",
+    session_note: "original",
+    can_edit_project: false,
+    can_edit_note: true,
+    can_edit_duration: false,
+  };
+  timeline.App.timelineEditorState.populate(editingSession);
+  timeline.element("edit-note-text").value = "draft";
+  timeline.App.timelineEditorState.queueAutosave();
   timeline.App.resetTimelineTransientUi();
   assert.equal(timeline.element("timeline-session-actions").hidden, true);
   assert.equal(timeline.element("timeline-details-pane").classList.contains("drawer-open"), false);
   assert.equal(timeline.App.selectedProjectionInstanceKey, "selection");
-  assert.deepEqual(timeline.App.timelineAutosaveTimer, { live: true });
-  assert.equal(timeline.App.timelineAutosaveQueued, true);
-  assert.deepEqual(timeline.App.submittedDraft, { note: "draft" });
-  timeline.App.editSaving = true;
+  assert.equal(timeline.App.timelineEditorState.currentSession(), editingSession);
+  assert.equal(timeline.App.timelineEditorState.hasQueuedAutosave(), true);
+  assert.equal(timeline.App.timelineEditorState.isDirty(), true);
+  timeline.App.timelineEditMutation = Object.freeze({ isSaving: () => true });
   timeline.element("edit-status").textContent = "正在保存…";
   timeline.App.resetTimelineTransientUi();
   assert.equal(timeline.element("edit-status").textContent, "正在保存…");

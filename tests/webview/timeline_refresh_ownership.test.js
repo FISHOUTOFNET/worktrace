@@ -16,7 +16,7 @@ function harness() {
   const App = {
     currentPage: "timeline",
     timelineDate: "2026-08-22",
-    _timelineEditingActive() { return editing; },
+    mutationState: "idle",
   };
   const window = {
     WorkTraceApp: App,
@@ -47,7 +47,10 @@ function harness() {
   return {
     App,
     refreshes: () => refreshes,
-    setEditing(value) { editing = value; },
+    setEditing(value) {
+      editing = value;
+      App.mutationState = editing ? "unknown" : "idle";
+    },
     failRefresh(error) { refreshFailure = error; },
   };
 }

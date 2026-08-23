@@ -33,6 +33,7 @@ function harness() {
         setAttribute() {}, removeAttribute() {}, getAttribute() { return ""; },
         querySelectorAll() { return []; },
         querySelector() { return null; },
+        appendChild() {},
         addEventListener() {},
       });
     }
@@ -130,16 +131,11 @@ function configureValidSelection(App, element) {
     can_edit_duration: true,
   };
   App.timelineDate = "2026-08-11";
-  App.editingSession = session;
+  App.timelineEditorState.populate(session);
   App.currentSessions = [session];
   App.selectedProjectionInstanceKey = session.projection_instance_key;
   App.selectedProjectionRevision = session.projection_revision;
   App.projectsCache = [{ id: 17, name: "CASE-001", fd_work_bound: true }];
-  App.timelineLastSaveFailed = false;
-  App.editSaving = false;
-  App.timelineCompositionActive = false;
-  App.timelineDurationDraftTouched = false;
-  App.timelineDurationDraftInvalid = false;
   App.mutationState = "idle";
 
   const project = element("edit-project-select");
