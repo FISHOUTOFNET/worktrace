@@ -47,7 +47,7 @@ jobs:
         run: python scripts/refactor_timeline_governance.py
       - name: Sync WebView asset revisions
         if: steps.pending.outputs.apply == 'true'
-        run: python scripts/sync_webview_asset_revisions.py
+        run: python scripts/sync_webview_asset_revisions.py --write
       - name: Syntax check extracted JavaScript owners
         if: steps.pending.outputs.apply == 'true'
         run: |
