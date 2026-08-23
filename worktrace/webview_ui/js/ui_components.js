@@ -12,6 +12,11 @@
     var dialogState = null;
     var toastTimer = null;
     var tooltipTarget = null;
+    var tooltipPendingTarget = null;
+    var tooltipTimer = null;
+    var inputModality = "none";
+    var transientFocusSuppressed = false;
+    var TOOLTIP_HOVER_DELAY_MS = 450;
 
     function isWithinHiddenAncestor(element) {
         var node = element;
@@ -63,9 +68,40 @@
     }
     App.trapFocus = trapFocus;
 
+    function cancelPendingTooltip() {
+        if (tooltipTimer !== null) clearTimeout(tooltipTimer);
+        tooltipTimer = null;
+        tooltipPendingTarget = null;
+    }
+
+    function hideTooltip() {
+        cancelPendingTooltip();
+        tooltipTarget = null;
+        if (!tooltip) return;
+        tooltip.hidden = true;
+        tooltip.textContent = "";
+    }
+    App.hideTooltip = hideTooltip;
+
+    function focusWithoutTransientUi(target) {
+        if (!target || typeof target.focus !== "function") return;
+        var previous = transientFocusSuppressed;
+        transientFocusSuppressed = true;
+        hideTooltip();
+        try {
+            target.focus();
+        } finally {
+            transientFocusSuppressed = previous;
+        }
+    }
+    App.focusWithoutTransientUi = focusWithoutTransientUi;
+    App.isTransientFocusSuppressed = function () { return transientFocusSuppressed; };
+    App.transientInputModality = function () { return inputModality; };
+
     function restoreFocus(target) {
-        if (target && document.documentElement.contains(target)
-                && typeof target.focus === "function") target.focus();
+        if (target && document.documentElement.contains(target)) {
+            focusWithoutTransientUi(target);
+        }
     }
 
     App.openManagedDrawer = function (layer, trigger, initialFocus, options) {
@@ -76,7 +112,7 @@
             ? options.requestClose : null;
         layer.hidden = false;
         var target = initialFocus || focusable(layer)[0];
-        if (target) target.focus();
+        if (target) focusWithoutTransientUi(target);
     };
 
     App.closeManagedDrawer = function (layer, options) {
@@ -169,15 +205,16 @@
             "danger",
             second || (options.twoStep !== true && options.danger === true)
         );
-        dialogSecondary.focus();
+        focusWithoutTransientUi(dialogSecondary);
     }
 
-    function finishDialog(confirmed) {
+    function finishDialog(confirmed, options) {
         if (!dialogState) return;
+        options = options || {};
         var state = dialogState;
         dialogState = null;
-        dialogLayer.hidden = true;
-        restoreFocus(state.returnFocus);
+        if (dialogLayer) dialogLayer.hidden = true;
+        if (options.restoreFocus !== false) restoreFocus(state.returnFocus);
         if (!confirmed) {
             state.resolve(false);
             return;
@@ -235,14 +272,25 @@
         if (event.target === dialogLayer) finishDialog(false);
     });
 
+    function clearToast() {
+        if (toastTimer !== null) clearTimeout(toastTimer);
+        toastTimer = null;
+        var toast = document.getElementById("app-toast");
+        if (!toast) return;
+        toast.hidden = true;
+        toast.textContent = "";
+    }
+    App.clearToast = clearToast;
+
     App.showToast = function (message) {
         var toast = document.getElementById("app-toast");
         if (!toast) return;
-        clearTimeout(toastTimer);
+        clearToast();
         var copy = String(message || "");
         toast.textContent = copy;
         toast.hidden = !copy;
         if (copy) toastTimer = setTimeout(function () {
+            toastTimer = null;
             toast.hidden = true;
             toast.textContent = "";
         }, 3200);
@@ -253,11 +301,8 @@
         return target.closest("[data-tooltip]");
     }
 
-    function hideTooltip() {
-        tooltipTarget = null;
-        if (!tooltip) return;
-        tooltip.hidden = true;
-        tooltip.textContent = "";
+    function tooltipDisclosureAllowed() {
+        return App.shellVisible !== false && transientFocusSuppressed !== true;
     }
 
     function positionTooltip(target) {
@@ -277,7 +322,8 @@
     }
 
     function showTooltip(target) {
-        if (!tooltip || !target || target.disabled) return;
+        cancelPendingTooltip();
+        if (!tooltip || !target || !tooltipDisclosureAllowed()) return;
         var text = String(target.getAttribute("data-tooltip") || "").trim();
         if (!text) return;
         tooltipTarget = target;
@@ -286,30 +332,93 @@
         positionTooltip(target);
     }
 
-    function enteredTooltipTarget(event) {
+    function scheduleTooltip(target) {
+        if (!target || !tooltipDisclosureAllowed()) return;
+        if (tooltipPendingTarget === target && tooltipTimer !== null) return;
+        cancelPendingTooltip();
+        tooltipPendingTarget = target;
+        tooltipTimer = setTimeout(function () {
+            tooltipTimer = null;
+            if (tooltipPendingTarget !== target || inputModality !== "pointer") return;
+            tooltipPendingTarget = null;
+            showTooltip(target);
+        }, TOOLTIP_HOVER_DELAY_MS);
+    }
+
+    function handleTooltipPointerMove(event) {
+        inputModality = "pointer";
+        if (!tooltipDisclosureAllowed()) {
+            hideTooltip();
+            return;
+        }
+        var target = tooltipOwner(event.target);
+        if (!target) {
+            hideTooltip();
+            return;
+        }
+        if (tooltipTarget === target) return;
+        if (tooltipTarget && tooltipTarget !== target) hideTooltip();
+        scheduleTooltip(target);
+    }
+
+    function handleTooltipFocusIn(event) {
+        if (inputModality !== "keyboard" || !tooltipDisclosureAllowed()) return;
         var target = tooltipOwner(event.target);
         if (target) showTooltip(target);
     }
 
     function leftTooltipTarget(event) {
         var target = tooltipOwner(event.target);
-        if (!target || target !== tooltipTarget) return;
+        if (!target) return;
         var related = event.relatedTarget;
         if (related && target.contains && target.contains(related)) return;
+        if (tooltipPendingTarget === target) cancelPendingTooltip();
+        if (tooltipTarget === target) hideTooltip();
+    }
+
+    function focusLeftTooltipTarget(event) {
+        var target = tooltipOwner(event.target);
+        if (target && target === tooltipTarget) hideTooltip();
+    }
+
+    document.addEventListener("mousemove", handleTooltipPointerMove);
+    document.addEventListener("focusin", handleTooltipFocusIn);
+    document.addEventListener("mouseout", leftTooltipTarget);
+    document.addEventListener("focusout", focusLeftTooltipTarget);
+    document.addEventListener("pointerdown", function () {
+        inputModality = "pointer";
+        hideTooltip();
+    });
+    document.addEventListener("click", hideTooltip);
+
+    function resetTransientInteractionIntent() {
+        inputModality = "none";
         hideTooltip();
     }
 
-    document.addEventListener("mouseover", enteredTooltipTarget);
-    document.addEventListener("focusin", enteredTooltipTarget);
-    document.addEventListener("mouseout", leftTooltipTarget);
-    document.addEventListener("focusout", leftTooltipTarget);
     if (typeof window.addEventListener === "function") {
         window.addEventListener("scroll", hideTooltip, true);
         window.addEventListener("resize", hideTooltip);
+        window.addEventListener("blur", resetTransientInteractionIntent);
     }
-    App.hideTooltip = hideTooltip;
+
+    function onShellHidden() {
+        resetTransientInteractionIntent();
+        clearToast();
+        if (dialogState) finishDialog(false, { restoreFocus: false });
+    }
+
+    function onShellVisible() {
+        resetTransientInteractionIntent();
+    }
+
+    App.uiPrimitives = Object.freeze({
+        onShellHidden: onShellHidden,
+        onShellVisible: onShellVisible
+    });
 
     document.addEventListener("keydown", function (event) {
+        inputModality = "keyboard";
         if (event.key === "Escape") hideTooltip();
         if (dialogState) {
             if (event.key === "Escape") {
