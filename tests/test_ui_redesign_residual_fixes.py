@@ -2,7 +2,7 @@
 
 Covers six fix areas:
   1. Project Rules catalog stays lightweight (no full-history projection).
-  2. Statistics summary and CSV export paths are split; default range is this month.
+  2. Statistics summary and CSV export paths are split; direct dates default to this week.
   3. Canonical project-scope policy keeps ``unclassified`` disjoint from excluded.
   4. Export ticket binds snapshot, date range, project scope, format and schema.
   5. Settings maintenance status maps deterministically to display text.
@@ -23,6 +23,7 @@ from tests.support.activity_factory import create_closed_activity
 from tests.support.application import FakeStatisticsCapability, build_test_bridge
 from worktrace.api import export_api, project_api, statistics_api
 from worktrace.api.application_capabilities import RulesApplicationService
+from worktrace.api.external_project_identity import LocalProjectIdentityCapability
 from worktrace.services import (
     export_service,
     project_service,
@@ -71,14 +72,18 @@ def test_rules_application_service_routes_to_lightweight_catalog(temp_db):
 
     project_service.create_project("Client B")
     with patch.object(project_api, "list_project_bindings", return_value=[]) as mock:
-        RulesApplicationService.list_project_bindings(RulesApplicationService())
+        identity = LocalProjectIdentityCapability(
+            create_project=project_api.create_project_for_rules,
+            update_project=project_api.update_project_for_rules,
+        )
+        RulesApplicationService(identity).list_project_bindings()
         mock.assert_called_once()
 
 
 def test_project_rules_source_has_no_total_duration():
     """Frontend source must not contain cumulative-duration artifacts."""
 
-    html = (ROOT / "worktrace/webview_ui/index.html").read_text(encoding="utf-8")
+    html = (ROOT / "worktrace/webview_ui/index_fd_work_v5.html").read_text(encoding="utf-8")
     rules_js = (ROOT / "worktrace/webview_ui/js/rules.js").read_text(encoding="utf-8")
     rules_render = (ROOT / "worktrace/webview_ui/js/rules_render.js").read_text(
         encoding="utf-8"
@@ -163,13 +168,15 @@ def test_custom_nonempty_date_range_passes_through():
 def test_statistics_html_uses_direct_dates_and_week_default():
     """Statistics exposes one direct date range with the week shortcut default."""
 
-    html = (ROOT / "worktrace/webview_ui/index.html").read_text(encoding="utf-8")
+    html = (ROOT / "worktrace/webview_ui/index_fd_work_v5.html").read_text(encoding="utf-8")
     assert 'id="statistics-range-mode"' not in html
     assert 'id="statistics-date-from"' in html
     assert 'id="statistics-date-to"' in html
     assert 'id="statistics-week-btn"' in html
-    assert "当前范围：本周" in html
-    assert "全部时间" in html
+    assert "当前范围：本周" not in html
+    assert "全部时间" not in html
+    assert html.count("YYYY/MM/DD") == 2
+    assert 'class="date-control statistics-date-control" type="date"' in html
     assert "自定义范围" not in html
 
 
@@ -542,27 +549,27 @@ def test_export_cancellation_does_not_write(temp_db, tmp_path):
 
 
 def test_settings_maintenance_in_progress_shows_maintaining():
-    """Settings source maps maintenance_in_progress to a non-failure title."""
+    """Settings source maps maintenance_in_progress to a concise non-failure status."""
 
     source = (ROOT / "worktrace/webview_ui/js/settings.js").read_text(encoding="utf-8")
-    assert "正在维护数据" in source
+    assert 'badgeText = "维护中"' in source
     assert "维护期间其他数据操作暂时不可用" in source
     assert "数据维护失败" not in source
 
 
 def test_settings_recovery_blocked_shows_recovery_title():
-    """Settings source maps recovery_blocked to the recovery title."""
+    """Settings source maps recovery_blocked to a concise recovery status."""
 
     source = (ROOT / "worktrace/webview_ui/js/settings.js").read_text(encoding="utf-8")
-    assert "恢复尚未完成" in source
-    assert "请在高级诊断中查看阻断原因" in source
+    assert 'badgeText = "需恢复"' in source
+    assert "请在高级设置中尝试恢复" in source
 
 
 def test_settings_collector_not_running_shows_service_title():
-    """Settings source maps collector-not-running to a service-down title."""
+    """Settings source maps collector-not-running to a concise abnormal status."""
 
     source = (ROOT / "worktrace/webview_ui/js/settings.js").read_text(encoding="utf-8")
-    assert "记录服务未运行" in source
+    assert 'badgeText = "异常"' in source
     assert "请重启应用后再次检查" in source
 
 

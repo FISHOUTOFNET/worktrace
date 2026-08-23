@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
 import pytest
 
+from tests.support import activity_factory as activity_service
 from worktrace import db
 from worktrace.constants import SOURCE_AUTO, STATUS_NORMAL, STATUS_PAUSED
-from tests.support import activity_factory as activity_service
 from worktrace.services import (
     activity_lifecycle_service,
     refresh_state_view_model_service,
@@ -186,40 +185,3 @@ def test_page_and_heartbeat_share_structure_and_page_revision(temp_db):
 
     assert page["structure_revision"] == heartbeat["structure_revision"]
     assert page["page_revision"] == heartbeat["page_revision"]
-
-
-def test_shipping_windows_adapter_has_one_canonical_module():
-    root = Path(__file__).resolve().parents[1]
-    source = (root / "worktrace/platforms/windows_adapter.py").read_text(
-        encoding="utf-8"
-    )
-    maintenance_tests = (
-        root / "tests/test_runtime_maintenance_control.py"
-    ).read_text(encoding="utf-8")
-    assert "legacy." not in source
-    assert "_run_with_timeout =" not in source
-    assert not (root / "worktrace/platforms/hardened_windows_adapter.py").exists()
-    assert "_ClipboardMonitor" not in maintenance_tests
-    assert "platforms.windows_clipboard import ClipboardMonitor" in maintenance_tests
-
-
-def test_frontend_does_not_replace_bridge_or_patch_edit_dom_after_render():
-    root = Path(__file__).resolve().parents[1]
-    source = (root / "worktrace/webview_ui/js/init.js").read_text(
-        encoding="utf-8"
-    )
-    assert "App.callBridge =" not in source
-    assert "_hardeningBridgeInstalled" not in source
-    assert "MutationObserver" not in source
-    assert 'method.indexOf("project")' not in source
-    assert 'method.indexOf("rule")' not in source
-
-
-def test_rules_flow_refreshes_project_catalog_explicitly():
-    root = Path(__file__).resolve().parents[1]
-    source = (root / "worktrace/webview_ui/js/rules.js").read_text(
-        encoding="utf-8"
-    )
-    assert "refreshSharedProjectCatalog" in source
-    assert 'method.indexOf("project")' not in source
-    assert 'method.indexOf("rule")' not in source

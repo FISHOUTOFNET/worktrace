@@ -47,7 +47,7 @@ function loadApp() {
   };
   vm.createContext(context);
   const source = fs.readFileSync(
-    path.join(__dirname, "../../worktrace/webview_ui/js/init.js"),
+    path.join(__dirname, "../../worktrace/webview_ui/js/init_fd_work_v5.js"),
     "utf8"
   );
   vm.runInContext(source, context);

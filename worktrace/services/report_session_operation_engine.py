@@ -144,6 +144,9 @@ def build_projected_activity_contributions(
             rows,
         )
         for row, duration in zip(rows, allocations):
+            observed = _observed_duration_seconds(row)
+            row["observed_duration_seconds"] = observed
+            row["report_duration_seconds"] = duration
             row["duration_seconds"] = duration
             row["projection_instance_key"] = str(
                 session.get("projection_instance_key") or ""
@@ -163,6 +166,14 @@ def build_projected_activity_contributions(
             row["is_in_progress"] = bool(session.get("is_in_progress"))
             contributions.append(row)
     return contributions
+
+
+def _observed_duration_seconds(row: Mapping[str, Any]) -> int:
+    if row.get("observed_duration_seconds") is not None:
+        return max(0, int(row.get("observed_duration_seconds") or 0))
+    if row.get("_basis_duration_seconds") is not None:
+        return max(0, int(row.get("_basis_duration_seconds") or 0))
+    return max(0, int(row.get("duration_seconds") or 0))
 
 
 def allocate_duration(
@@ -677,7 +688,7 @@ def _merge_sessions(
     for row in build_projected_activity_contributions((source, target)):
         item = dict(row)
         item["_basis_duration_seconds"] = int(
-            item.get("duration_seconds") or 0
+            item.get("report_duration_seconds") or item.get("duration_seconds") or 0
         )
         contributions.append(item)
     merged.update(

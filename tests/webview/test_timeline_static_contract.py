@@ -53,7 +53,7 @@ def test_timeline_empty_state_uses_shared_visual_language():
 
 
 def test_timeline_header_filter_editor_and_advanced_menu_contract():
-    html = _resource("index.html")
+    html = _resource("index_fd_work_v5.html")
     timeline_page = html[html.index('id="page-timeline"') : html.index('id="page-statistics"')]
 
     header = timeline_page[: timeline_page.index("</header>") + len("</header>")]
@@ -90,11 +90,12 @@ def test_timeline_header_filter_editor_and_advanced_menu_contract():
     assert 'maxlength="200"' in textarea.group(0)
     assert "0 / 200" in timeline_page
     assert 'id="timeline-readonly-notice"' in timeline_page
-    assert "进行中时段不可编辑，结束后可修改项目、描述和时长。" in timeline_page
+    assert "进行中时段不可编辑" in timeline_page
+    assert "结束后可修改项目、描述和时长" not in timeline_page
     duration = re.search(r'<input id="edit-duration-input"[^>]*>', timeline_page)
     assert duration is not None
     assert 'type="number"' in duration.group(0)
-    assert 'min="0"' in duration.group(0)
+    assert 'min="0.1"' in duration.group(0)
     assert 'step="0.1"' in duration.group(0)
     assert 'inputmode="decimal"' in duration.group(0)
     assert 'aria-label="时长（小时）"' in duration.group(0)
@@ -296,14 +297,18 @@ def test_timeline_duration_draft_preserves_exact_override_until_user_touches_fie
     dirty = func_body(source, "isEditDirty")
     save = func_body(source, "saveEdit")
     handler = func_body(source, "handleTimelineDurationChange")
-    init = _source("init.js")
+    init = _source("init_fd_work_v5.js")
 
     assert "App.timelineDurationDraftTouched = false" in populate
     assert "toFixed(1)" in populate
     assert "App.timelineDurationDraftTouched" in dirty
     assert "App.timelineDurationDraftTouched" in save
-    assert "Math.round(hours * 3600)" in save
+    assert "normalizeTimelineDurationInput" in save
+    assert "normalizedDuration.seconds" in save
     assert "session.adjusted_duration_seconds" in save
+    assert "durationTouched" in save
+    assert "durationTouched: durationTouched" in save
+    assert "durationTouched," in save
     assert "App.timelineDurationDraftTouched = true" in handler
     assert "scheduleTimelineAutosave(0)" in handler
     assert (

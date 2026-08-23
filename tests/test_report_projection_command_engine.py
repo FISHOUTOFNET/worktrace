@@ -6,6 +6,7 @@ import pytest
 
 from worktrace.services import report_session_operation_engine as engine
 from worktrace.services.report_projection_model import ProjectState
+from worktrace.services.project_activity_summary_service import build_activity_summary_rows
 
 
 DATE = "2026-06-25"
@@ -280,6 +281,42 @@ def test_invalid_edit_payload_is_diagnostic_only():
     result = engine.replay_operations(base, [operation])
     assert result.operation_diagnostics[0].reason == "invalid_payload"
     assert "_applied_commands" not in result.final_entries[0]
+
+
+def test_projected_contributions_separate_observed_and_reported_duration():
+    session = _session("base:a", 1, f"{DATE} 09:00:00", 30)
+    session["member_slices"].append(_member(2, f"{DATE} 09:00:30"))
+    session["_projection_contributions"].append(
+        {
+            "report_date": DATE,
+            "activity_id": 2,
+            "slice_start_time": f"{DATE} 09:00:30",
+            "duration_seconds": 70,
+            "activity_identity_key": "activity:2",
+            "status": "normal",
+        }
+    )
+    session["has_duration_override"] = True
+    session["adjusted_duration_seconds"] = 200
+
+    first = engine.replay_operations([session], [])
+    second = engine.replay_operations([session], [])
+    contributions = [dict(row) for row in first.final_contributions]
+
+    assert first == second
+    assert [row["observed_duration_seconds"] for row in contributions] == [30, 70]
+    assert [row["report_duration_seconds"] for row in contributions] == [60, 140]
+    assert [row["duration_seconds"] for row in contributions] == [60, 140]
+    assert sum(row["report_duration_seconds"] for row in contributions) == 200
+
+    details = build_activity_summary_rows(
+        contributions,
+        DATE,
+        "base:a",
+        first.final_entries[0]["projection_revision"],
+    )
+    assert sorted(row["duration_seconds"] for row in details) == [30, 70]
+    assert sum(row["duration_seconds"] for row in details) == 100
 
 
 def _corrupt_payload_operation(payload_overrides: dict | None = None, *, members=None, operation_type: str = "edit_session", drop_keys: tuple[str, ...] = ()):

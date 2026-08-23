@@ -1,8 +1,7 @@
-"""Tests for the Timeline editing bridge methods.
+"""Tests for the shared project catalog and Timeline editing bridge methods.
 
-Covers ``WebViewBridge.list_projects_for_timeline`` and the single
-Session Edit Contract write method
-``WebViewBridge.save_timeline_session_override``:
+Covers ``WebViewBridge.list_project_catalog`` and the single
+Session Edit Contract write method used by Timeline editing:
 
 - JSON-serializable return values;
 - successful writes through the bridge → worktrace.api path;
@@ -14,7 +13,7 @@ Session Edit Contract write method
 
 The old ``update_timeline_project`` / ``update_timeline_note`` /
 ``update_timeline_note_and_duration`` bridge methods have been removed;
-``save_timeline_session_override`` is the only Timeline editing surface.
+``save_timeline_session_edit`` is the only Timeline editing surface.
 """
 
 from __future__ import annotations
@@ -26,6 +25,7 @@ import pytest
 
 from tests.support import activity_factory as activity_service
 from tests.support.application import FakeTimelineCapability, build_test_bridge
+from worktrace.api import project_api
 from worktrace.db import get_connection
 from worktrace.services import (
     project_service,
@@ -203,37 +203,42 @@ def _save_timeline_session_override(
             session["projection_revision"],
             f"test-bridge-edit-{count}",
             project_id,
+            adjusted_duration_seconds is not None,
             adjusted_duration_seconds,
             note,
         )
     )
 
 
-def test_list_projects_for_timeline_returns_json_serializable(bridge):
-    result = bridge.list_projects_for_timeline()
+def test_list_project_catalog_returns_json_serializable(bridge):
+    result = bridge.list_project_catalog()
     assert result["ok"] is True
-    assert isinstance(result["projects"], list)
+    assert isinstance(result["editing_projects"], list)
+    assert isinstance(result["filter_projects"], list)
     json.dumps(result)
 
 
-def test_list_projects_for_timeline_includes_uncategorized(bridge):
-    result = bridge.list_projects_for_timeline()
-    names = [p["name"] for p in result["projects"]]
+def test_list_project_catalog_editing_includes_uncategorized(bridge):
+    result = bridge.list_project_catalog()
+    names = [p["name"] for p in result["editing_projects"]]
     assert "未归类" in names
 
 
-def test_list_projects_for_timeline_has_safe_fields_only(bridge):
-    result = bridge.list_projects_for_timeline()
-    for p in result["projects"]:
-        assert set(p.keys()) <= {"id", "name", "description"}
+def test_list_project_catalog_has_safe_fields_only(bridge):
+    result = bridge.list_project_catalog()
+    for project in result["editing_projects"]:
+        assert set(project.keys()) <= {"id", "name", "description", "fd_work_bound"}
+    for project in result["filter_projects"]:
+        assert set(project.keys()) <= {"id", "name", "description"}
     _assert_no_sensitive_keys(result)
 
 
-def test_list_projects_for_timeline_no_traceback_on_error():
-    timeline = FakeTimelineCapability()
-    timeline.list_selectable_projects_side_effect = RuntimeError("boom")
-    bridge = build_test_bridge(timeline=timeline)
-    result = bridge.list_projects_for_timeline()
+def test_list_project_catalog_no_traceback_on_error(monkeypatch):
+    def explode():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(project_api, "list_selectable_projects", explode)
+    result = build_test_bridge().list_project_catalog()
     assert result["ok"] is False
     assert result["error"] == "operation_failed"
     assert result["message"] == "操作失败"
@@ -315,7 +320,7 @@ def test_save_timeline_session_override_note_only(bridge):
     assert after["adjusted_duration_seconds"] is None
 
 
-def test_save_timeline_session_override_duration_zero_accepted(bridge):
+def test_save_timeline_session_override_duration_zero_rejected_as_too_small(bridge):
     project = project_service.create_project("ZeroDur")
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
@@ -323,8 +328,9 @@ def test_save_timeline_session_override_duration_zero_accepted(bridge):
         bridge, session["activity_ids"], session["activity_member_hash"],
         project, 0, "note", "2026-06-25"
     )
-    assert result["ok"] is True
-    assert _session_for("2026-06-25", ids[0])["adjusted_duration_seconds"] == 0
+    assert result["ok"] is False
+    assert "至少为 0.1 小时" in result["error"]
+    assert _session_for("2026-06-25", ids[0])["adjusted_duration_seconds"] is None
 
 
 def test_save_timeline_session_override_null_duration_clears_override(bridge):
@@ -336,10 +342,19 @@ def test_save_timeline_session_override_null_duration_clears_override(bridge):
         project, 3600, "with override", "2026-06-25"
     )
     assert set_result["ok"] is True
-    assert _session_for("2026-06-25", ids[0])["adjusted_duration_seconds"] == 3600
-    result = _save_timeline_session_override(
-        bridge, session["activity_ids"], session["activity_member_hash"],
-        project, None, "with override", "2026-06-25"
+    overridden = _session_for("2026-06-25", ids[0])
+    assert overridden["adjusted_duration_seconds"] == 3600
+    result = _old_bridge_shape(
+        bridge.save_timeline_session_edit(
+            "2026-06-25",
+            overridden["projection_instance_key"],
+            overridden["projection_revision"],
+            "test-bridge-clear-duration",
+            project,
+            True,
+            None,
+            "with override",
+        )
     )
     assert result["ok"] is True
     after = _session_for("2026-06-25", ids[0])
@@ -405,6 +420,68 @@ def test_save_timeline_session_override_bool_duration_rejected(bridge):
             None, bad, "note", "2026-06-25"
         )
         assert result == {"ok": False, "error": "时长无效"}
+
+
+@pytest.mark.parametrize(
+    "bad_duration",
+    [720.9, "720", True, False, float("nan"), float("inf")],
+)
+def test_bridge_rejects_non_strict_duration_without_calling_capability_or_writing(
+    temp_db,
+    bad_duration,
+):
+    timeline = FakeTimelineCapability()
+    direct_bridge = build_test_bridge(timeline=timeline)
+    with get_connection() as conn:
+        before_generation = list(
+            conn.execute(
+                "SELECT namespace, generation FROM data_generation_state ORDER BY namespace"
+            ).fetchall()
+        )
+
+    result = direct_bridge.save_timeline_session_edit(
+        "2026-06-25",
+        "base:strict-duration",
+        "revision-1",
+        "strict-duration-request",
+        None,
+        True,
+        bad_duration,
+        "safe note",
+    )
+
+    assert result == {"ok": False, "error": "invalid_input", "message": "时长无效"}
+    assert timeline.save_timeline_session_edit_calls == []
+    assert "safe note" not in str(result)
+    with get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM report_session_operation").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM report_mutation_request").fetchone()[0] == 0
+        after_generation = list(
+            conn.execute(
+                "SELECT namespace, generation FROM data_generation_state ORDER BY namespace"
+            ).fetchall()
+        )
+    assert after_generation == before_generation
+
+
+@pytest.mark.parametrize("bad_touched", [None, 0, 1, "true", [], {}])
+def test_bridge_requires_strict_duration_touched_bool(bad_touched):
+    timeline = FakeTimelineCapability()
+    direct_bridge = build_test_bridge(timeline=timeline)
+
+    result = direct_bridge.save_timeline_session_edit(
+        "2026-06-25",
+        "base:strict-intent",
+        "revision-1",
+        "strict-intent-request",
+        None,
+        bad_touched,
+        None,
+        "safe note",
+    )
+
+    assert result == {"ok": False, "error": "invalid_input", "message": "时长无效"}
+    assert timeline.save_timeline_session_edit_calls == []
 
 
 def test_save_timeline_session_override_bool_project_id_rejected(bridge):

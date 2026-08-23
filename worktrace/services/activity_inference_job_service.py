@@ -17,6 +17,7 @@ from . import activity_inference_job_repository as jobs
 from .activity_inference_policy import is_closed_activity_inference_eligible
 
 InferenceCommand = Callable[[Any, int], dict]
+_FOLDER_INDEX_DEFER_SECONDS = 15
 
 
 def process_pending_inference_jobs(
@@ -72,11 +73,18 @@ def process_pending_inference_jobs(
                     continue
 
                 before = _assignment_state(conn, activity_id)
-                infer_activity(conn, activity_id)
+                result = infer_activity(conn, activity_id)
                 after = _assignment_state(conn, activity_id)
                 if before != after:
                     uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
-                jobs.delete_job(conn, activity_id)
+                if str(result.get("_defer_reason") or "") == "folder_index_refresh":
+                    jobs.defer_job(
+                        conn,
+                        activity_id,
+                        delay_seconds=_FOLDER_INDEX_DEFER_SECONDS,
+                    )
+                else:
+                    jobs.delete_job(conn, activity_id)
                 completed += 1
         except Exception as exc:
             code = _classify_failure(exc)

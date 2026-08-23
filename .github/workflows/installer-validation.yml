@@ -1,0 +1,72 @@
+name: Installer validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Exact commit SHA to validate; defaults to the workflow event SHA
+        required: false
+        type: string
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+  PYTHONFAULTHANDLER: "1"
+
+jobs:
+  lifecycle:
+    name: Install, upgrade, and uninstall
+    if: |
+      github.event_name != 'pull_request'
+      || github.event.label.name == 'run-installer-validation'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      VALIDATION_REVISION: ${{ inputs.revision || github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.VALIDATION_REVISION }}
+          clean: true
+          show-progress: false
+          persist-credentials: false
+
+      - name: Capture tested revision
+        shell: pwsh
+        run: |
+          $testedSha = (git rev-parse HEAD).Trim()
+          if ($testedSha -ne "${{ env.VALIDATION_REVISION }}") {
+            throw "Checked out $testedSha instead of requested revision ${{ env.VALIDATION_REVISION }}"
+          }
+          "tested_sha=$testedSha" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+          Write-Host "tested_sha=$testedSha"
+
+      - name: Build Windows executable and installer
+        uses: ./.github/actions/build-windows-package
+
+      - name: Exercise installer runtime lifecycle
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ci\installer_runtime_smoke.ps1
+
+      - name: Upload package artifacts
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v6
+        with:
+          name: trace-windows-${{ env.VALIDATION_REVISION }}
+          path: dist/Trace*.exe
+          if-no-files-found: error
+          retention-days: 7

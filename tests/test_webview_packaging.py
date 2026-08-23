@@ -31,9 +31,12 @@ from tests.webview.static_helpers import ALL_JS_FILES
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = REPO_ROOT / "WorkTrace.spec"
-INDEX_HTML_PATH = REPO_ROOT / "worktrace" / "webview_ui" / "index.html"
+INDEX_HTML_PATH = REPO_ROOT / "worktrace" / "webview_ui" / "index_fd_work_v5.html"
 ENTRY_PATH = REPO_ROOT / "scripts" / "pyinstaller_entry.py"
 MAIN_PATH = REPO_ROOT / "worktrace" / "main.py"
+REQUIREMENTS_PATH = REPO_ROOT / "requirements.txt"
+VALIDATION_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "_validation.yml"
+ICON_GENERATOR_PATH = REPO_ROOT / "scripts" / "generate_brand_icon.py"
 
 
 def _read(path: Path) -> str:
@@ -45,7 +48,7 @@ def test_spec_bundles_webview_ui_static_resources():
     """The spec bundles every static module from the shared file manifest."""
 
     spec = _read(SPEC_PATH)
-    for name in ("index.html", "styles.css"):
+    for name in ("index_fd_work_v5.html", "styles.css"):
         assert name in spec, f"WorkTrace.spec must bundle webview_ui/{name}"
     for name in ALL_JS_FILES:
         assert name in spec, f"WorkTrace.spec must bundle webview_ui/js/{name}"
@@ -55,15 +58,18 @@ def test_spec_bundles_webview_ui_static_resources():
 
 
 def test_index_html_loads_all_js_in_order():
-    """index.html loads every current JavaScript module in manifest order."""
+    """index_fd_work_v5.html loads every current JavaScript module in manifest order."""
 
     html = _read(INDEX_HTML_PATH)
     import re
 
-    scripts = re.findall(r'<script\s+src="js/([^"]+)"\s*>\s*</script>', html)
-    assert scripts, "expected at least one <script src=js/...> tag in index.html"
+    scripts = re.findall(
+        r'<script\s+src="js/([^"?]+)(?:\?v=[0-9a-f]+)?"\s*>\s*</script>',
+        html,
+    )
+    assert scripts, "expected at least one <script src=js/...> tag in index_fd_work_v5.html"
     assert scripts == ALL_JS_FILES, (
-        "index.html script order must match ALL_JS_FILES exactly; "
+        "index_fd_work_v5.html script order must match ALL_JS_FILES exactly; "
         f"got {scripts}"
     )
 
@@ -84,6 +90,17 @@ def test_spec_collects_pywebview():
     assert "collect_all('webview')" in spec or 'collect_all("webview")' in spec
 
 
+def test_pywebview_runtime_is_pinned_and_recorded_by_windows_ci():
+    requirements = _read(REQUIREMENTS_PATH)
+    workflow = _read(VALIDATION_WORKFLOW_PATH)
+
+    assert "pywebview==6.2.1" in requirements.splitlines()
+    assert "pywebview>=" not in requirements
+    assert 'version("pywebview")' in workflow
+    assert "pywebview_version=" in workflow
+    assert workflow.count("pywebview_version=") >= 2
+
+
 def test_spec_retains_schema_sql():
     assert "schema.sql" in _read(SPEC_PATH)
 
@@ -102,11 +119,15 @@ def test_spec_retains_win32timezone():
 
 def test_spec_bundles_canonical_icon_and_tray_pywin32_imports():
     spec = _read(SPEC_PATH)
-    assert "worktrace.ico" in spec
-    assert "icon=str(root / 'worktrace' / 'assets' / 'worktrace.ico')" in spec
+    generator = _read(ICON_GENERATOR_PATH)
+    assert "brand_icon = root / 'build' / 'brand' / 'worktrace.ico'" in spec
+    assert "icon_generator['generate_icon'](brand_icon)" in spec
+    assert "(str(brand_icon), 'worktrace/assets')" in spec
+    assert "icon=str(brand_icon)" in spec
+    assert 'GLYPH = "迹"' in generator
+    assert "ICON_SIZES" in generator
     for module in ("win32api", "win32con", "win32gui"):
         assert module in spec
-    assert (REPO_ROOT / "worktrace" / "assets" / "worktrace.ico").is_file()
 
 
 def test_entry_script_routes_probe_or_forwards_to_worktrace_main():

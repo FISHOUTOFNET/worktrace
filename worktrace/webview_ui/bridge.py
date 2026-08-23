@@ -5,7 +5,9 @@ from typing import Any
 
 from ..api.application_services import ApplicationServices
 from .bridge_dialogs import BridgeDialogMixin
+from .bridge_fd_work import FDWorkBridgeMixin
 from .bridge_overview import OverviewBridgeMixin
+from .bridge_projects import ProjectCatalogBridgeMixin
 from .bridge_rules import ProjectRulesBridgeMixin
 from .bridge_settings import SettingsBridgeMixin
 from .bridge_statistics import StatisticsBridgeMixin
@@ -16,21 +18,24 @@ SHIPPING_METHODS = frozenset(
         "accept_first_run_notice", "archive_project_for_rules",
         "automatic_rules_status", "backfill_project_rule",
         "backfill_project_rules_batch", "clear_all_local_data",
-        "choose_project_rule_folder", "copy_timeline_session",
+        "choose_project_rule_folder", "clear_fd_work_binding_for_rules",
+        "copy_timeline_session",
         "create_excluded_folder_rule",
         "create_excluded_keyword_rule", "create_project_folder_rule",
         "create_project_for_rules", "create_project_keyword_rule",
         "delete_project_folder_rule", "delete_project_for_rules",
         "delete_project_keyword_rule", "export_encrypted_backup",
-        "export_statistics_csv", "get_first_run_notice", "get_overview",
+        "export_statistics_csv", "get_fd_work_status", "get_first_run_notice", "get_overview",
         "get_project_rules", "get_refresh_state", "get_settings_privacy_status",
         "get_statistics_export_summary", "get_status", "get_timeline",
         "get_timeline_session_activity_summary", "hide_timeline_session",
         "hide_timeline_session_activity", "import_encrypted_backup",
-        "list_projects_for_timeline", "merge_timeline_session",
+        "list_project_catalog", "list_projects_for_timeline", "merge_timeline_session",
+        "open_fd_work_case_picker", "open_fd_work_entry", "show_fd_work_login",
         "preview_encrypted_backup_manifest", "preview_project_rule_impact",
         "preview_project_rules_batch_impact", "recover_database_maintenance",
         "save_timeline_session_edit", "set_clipboard_capture_enabled",
+        "set_fd_work_enabled",
         "set_launch_at_login",
         "set_excluded_rules_enabled", "set_project_enabled_for_rules",
         "set_project_rule_enabled", "set_project_rules_batch_enabled",
@@ -55,9 +60,11 @@ class _ShippingBridge:
 
 class WebViewBridge(
     BridgeDialogMixin,
+    FDWorkBridgeMixin,
     OverviewBridgeMixin,
     SettingsBridgeMixin,
     StatisticsBridgeMixin,
+    ProjectCatalogBridgeMixin,
     TimelineBridgeMixin,
     ProjectRulesBridgeMixin,
 ):

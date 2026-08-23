@@ -8,6 +8,7 @@ unattributed statuses outside reportable totals.
 from __future__ import annotations
 
 from datetime import date
+from typing import Mapping
 
 from ..constants import (
     STATUS_EXCLUDED,
@@ -72,23 +73,48 @@ def _build_projection(start_date: str, end_date: str, project_id=None):
     )
 
 
-def _build_summary_projection(start_date: str, end_date: str, project_id=None):
+def _build_summary_snapshot_and_projection(
+    start_date: str,
+    end_date: str,
+    project_id=None,
+):
     from .report_projection_snapshot_service import build_visible_snapshot
-    from .statistics_projection import build_statistics_summary_projection
+    from .statistics_snapshot_provider import get_statistics_summary_projection
 
-    return build_statistics_summary_projection(
-        build_visible_snapshot(start_date, end_date), project_id=project_id
+    snapshot = build_visible_snapshot(start_date, end_date)
+    return snapshot, get_statistics_summary_projection(
+        snapshot,
+        project_id=project_id,
     )
 
 
-def get_statistics_export_summary(
+def _scoped_live_target(
+    live_target,
+    projection,
+    *,
+    file_key: str = "",
+) -> dict | None:
+    if not isinstance(live_target, dict) or live_target.get("enabled") is not True:
+        return None
+    project_keys = {str(group.get("key") or "") for group in projection.by_project}
+    target = dict(live_target)
+    target["file_key"] = str(file_key or "")
+    target["enabled"] = bool(
+        target.get("includes_today") is True
+        and str(target.get("project_key") or "") in project_keys
+    )
+    target.pop("includes_today", None)
+    return target if target["enabled"] else None
+
+
+def _statistics_export_summary_from_projection(
+    projection,
     date_from: str,
     date_to: str,
-    project_id: str | int | None = None,
+    project_id,
+    *,
+    live_target=None,
 ) -> dict:
-    date_from, date_to = resolve_statistics_date_range(date_from, date_to)
-    validate_statistics_project_scope(project_id)
-    projection = _build_summary_projection(date_from, date_to, project_id)
     normalized_scope = normalize_statistics_project_scope(project_id)
     ticket_revision = compute_statistics_export_ticket_revision(
         projection.snapshot_revision,
@@ -114,8 +140,10 @@ def get_statistics_export_summary(
         "project_count": projection.concrete_project_count,
         "app_count": projection.concrete_app_count,
         "by_project": list(projection.by_project),
+        "by_file": list(projection.by_file),
         "by_app": list(projection.by_app),
         "by_status": list(projection.by_status),
+        "live_target": live_target,
         "export_preview": {
             "date_from": date_from,
             "date_to": date_to,
@@ -131,13 +159,84 @@ def get_statistics_export_summary(
     }
 
 
+def get_statistics_export_summary(
+    date_from: str,
+    date_to: str,
+    project_id: str | int | None = None,
+) -> dict:
+    """Return the durable closed-only Statistics service contract."""
+
+    date_from, date_to = resolve_statistics_date_range(date_from, date_to)
+    validate_statistics_project_scope(project_id)
+    _snapshot, projection = _build_summary_snapshot_and_projection(
+        date_from, date_to, project_id
+    )
+    return _statistics_export_summary_from_projection(
+        projection,
+        date_from,
+        date_to,
+        project_id,
+    )
+
+
+def get_statistics_realtime_export_summary(
+    date_from: str,
+    date_to: str,
+    project_id: str | int | None = None,
+) -> dict:
+    """Return the UI read model frozen at one verified runtime/SQLite sample."""
+
+    date_from, date_to = resolve_statistics_date_range(date_from, date_to)
+    validate_statistics_project_scope(project_id)
+
+    from .page_read_context import current_page_read_context, page_read_scope
+    from .report_as_of_snapshot_service import build_statistics_as_of_snapshot
+    from .statistics_snapshot_provider import (
+        get_statistics_base_snapshot,
+        get_statistics_summary_projection,
+    )
+
+    with page_read_scope(allow_unpersisted_runtime=True):
+        base_snapshot = get_statistics_base_snapshot(date_from, date_to)
+        as_of = build_statistics_as_of_snapshot(
+            date_from,
+            date_to,
+            base_snapshot=base_snapshot,
+        )
+        context = current_page_read_context()
+        runtime_snapshot = (
+            context.runtime_sample.snapshot
+            if context is not None
+            and context.runtime_consistent
+            and isinstance(context.runtime_sample.snapshot, Mapping)
+            else None
+        )
+        projection = get_statistics_summary_projection(
+            as_of.snapshot,
+            project_id=project_id,
+            live_runtime_snapshot=runtime_snapshot,
+        )
+        live_target = _scoped_live_target(
+            dict(as_of.live_target) if as_of.live_target is not None else None,
+            projection,
+            file_key=projection.live_file_key,
+        )
+    return _statistics_export_summary_from_projection(
+        projection,
+        date_from,
+        date_to,
+        project_id,
+        live_target=live_target,
+    )
+
+
 def compute_statistics_export_ticket_revision(
     snapshot_revision: str,
     date_from: str,
     date_to: str,
     normalized_scope: str,
 ) -> str:
-    """Compute a ticket revision binding snapshot, date range, scope, format and schema."""
+    """Compute a compatibility ticket for the accepted page snapshot."""
 
     return stable_json_hash(
         {

@@ -6,14 +6,16 @@ from typing import Any, Mapping
 from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
 from ..contracts.live_display_contracts import ActivitySnapshotContract, DisplaySpanContract
 from ..formatters import format_duration, format_status_label
-from ..resources.title_parsing import extract_anchor_file_name
 from . import (
     page_revision_service,
     project_activity_summary_service,
     timeline_service,
 )
 from .activity_display_model_service import build_activity_display_model
-from .activity_display_projection import build_kpi_live_targets
+from .activity_display_projection import (
+    build_aggregate_live_clock,
+    build_kpi_live_targets,
+)
 from .activity_row_overlay import (
     ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW,
     ROW_KIND_PROJECT_SESSION_ROW,
@@ -240,43 +242,24 @@ def _base_session_row(
     return row
 
 
-def _contribution_label(contribution: Mapping[str, Any]) -> str:
-    """Extract the display label from a single contribution row."""
-    activity_name = str(contribution.get("activity_display_name") or "").strip()
-    if contribution.get("resource_is_anchor") and activity_name:
-        return activity_name
-    return extract_anchor_file_name(contribution.get("window_title")) or str(
-        contribution.get("app_name") or contribution.get("process_name") or ""
-    ).strip()
-
-
-def _top3_distinct_labels(contributions: list[dict[str, Any]]) -> list[str]:
-    """Return up to 3 distinct labels by the original sort rule.
-
-    Original semantic: sort contributions by duration descending (stable),
-    iterate, extract label, skip duplicates, break at 3 distinct labels.
-    Equivalent O(n) implementation: keep the best (duration, position) per
-    label (first wins on ties = stable secondary sort), then rank labels
-    by (-duration, position) — identical to the sorted()+break order.
-    """
-    best_per_label: dict[str, tuple[int, int]] = {}
-    for pos, item in enumerate(contributions):
-        if bool(item.get("privacy_redacted")):
-            continue
-        if str(item.get("status") or STATUS_NORMAL) != STATUS_NORMAL:
-            continue
-        label = _contribution_label(item)
-        if not label:
-            continue
-        duration = int(item.get("duration_seconds") or 0)
-        existing = best_per_label.get(label)
-        if existing is None or duration > existing[0]:
-            best_per_label[label] = (duration, pos)
-    ranked = sorted(
-        best_per_label,
-        key=lambda lbl: (-best_per_label[lbl][0], best_per_label[lbl][1]),
+def _top3_activity_summary_labels(
+    contributions: list[dict[str, Any]],
+) -> list[str]:
+    """Return the three longest normal, displayable activity/file names."""
+    displayable = [
+        dict(item)
+        for item in contributions
+        if not bool(item.get("privacy_redacted"))
+        and str(item.get("status") or STATUS_NORMAL) == STATUS_NORMAL
+    ]
+    return project_activity_summary_service.build_top_activity_labels(
+        displayable,
+        limit=3,
     )
-    return ranked[:3]
+
+
+# Compatibility name for older internal callers; the shared detail builder owns semantics.
+_top3_distinct_labels = _top3_activity_summary_labels
 
 
 def _description_display_fields(
@@ -284,7 +267,7 @@ def _description_display_fields(
     contributions: tuple[Mapping[str, Any], ...] = (),
 ) -> dict[str, Any]:
     user_description = str(session.get("session_note") or "").strip()
-    labels = _top3_distinct_labels(list(contributions))
+    labels = _top3_activity_summary_labels([dict(item) for item in contributions])
     derived_summary = " · ".join(labels)
     if user_description:
         display_description = user_description
@@ -331,12 +314,54 @@ def _session_display_seconds(session: Mapping[str, Any]) -> int:
     return base
 
 
+def _overview_accounting_row(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """Build the minimal row used by all Overview accounting surfaces."""
+
+    row_kind = str(entry.get("row_kind") or "project_session")
+    is_standalone_status = row_kind == "standalone_status"
+    is_report_project = False if is_standalone_status else bool(
+        entry.get("is_report_project", entry.get("is_classified"))
+    )
+    is_report_classified = False if is_standalone_status else bool(
+        entry.get("is_report_classified", is_report_project)
+    )
+    is_report_uncategorized = False if is_standalone_status else bool(
+        entry.get("is_report_uncategorized", not is_report_project)
+    )
+    first_activity_id = int(entry.get("first_activity_id") or 0) or None
+    return {
+        "row_kind": row_kind,
+        "project_id": int(entry.get("project_id") or 0),
+        "report_project_id": int(
+            entry.get("report_project_id") or entry.get("project_id") or 0
+        ),
+        "project_name": str(entry.get("project_name") or UNCATEGORIZED_PROJECT),
+        "duration_seconds": _session_display_seconds(entry),
+        "closed_duration_seconds": int(
+            entry.get("closed_duration_seconds") or 0
+        ),
+        "contributes_to_totals": bool(entry.get("contributes_to_totals", True)),
+        "is_in_progress": bool(entry.get("is_in_progress")),
+        "end_time": str(entry.get("end_time") or ""),
+        "activity_ids": list(entry.get("activity_ids") or []),
+        "anchor_activity_id": int(entry.get("anchor_activity_id") or 0),
+        "first_activity_id": first_activity_id,
+        "activity_id": int(first_activity_id or 0),
+        "open_activity_id": int(entry.get("open_activity_id") or 0),
+        "is_classified": is_report_classified,
+        "is_uncategorized": is_report_uncategorized,
+        "is_report_project": is_report_project,
+        "is_report_classified": is_report_classified,
+        "is_report_uncategorized": is_report_uncategorized,
+    }
+
+
 def _accumulate_overview_distribution_bucket(
     buckets: dict[str, dict[str, Any]],
     session: Mapping[str, Any],
     display_seconds: int,
 ) -> None:
-    """Accumulate one authoritative final session into its Overview category."""
+    """Accumulate one authoritative accounting row into its Overview category."""
     if session.get("contributes_to_totals", True) is False or display_seconds <= 0:
         return
 
@@ -355,6 +380,7 @@ def _accumulate_overview_distribution_bucket(
                 "duration_seconds": 0,
                 "is_uncategorized": False,
                 "is_other": False,
+                "_rows": [],
             },
         )
     elif bool(session.get("is_report_uncategorized")):
@@ -368,22 +394,56 @@ def _accumulate_overview_distribution_bucket(
                 "duration_seconds": 0,
                 "is_uncategorized": True,
                 "is_other": False,
+                "_rows": [],
+            },
+        )
+    elif str(session.get("row_kind") or "") == "standalone_status":
+        key = "other"
+        bucket = buckets.setdefault(
+            key,
+            {
+                "key": key,
+                "project_id": None,
+                "label": "其他",
+                "duration_seconds": 0,
+                "is_uncategorized": False,
+                "is_other": True,
+                "_rows": [],
             },
         )
     else:
         return
 
     bucket["duration_seconds"] = int(bucket["duration_seconds"]) + display_seconds
+    bucket["_rows"].append(session)
+
+
+def _distribution_segment(bucket: Mapping[str, Any]) -> dict[str, Any]:
+    rows = list(bucket.get("_rows") or [])
+    segment = {
+        key: value for key, value in bucket.items() if key != "_rows"
+    }
+    live_clock = build_aggregate_live_clock(rows)
+    if live_clock is not None:
+        segment["live_clock"] = live_clock
+    return segment
 
 
 def _finalize_overview_project_distribution(
     buckets: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Sort categories and collapse categories after the top three."""
+    """Return top categories plus one residual Other segment.
+
+    The distribution is a decomposition of the same authoritative total used
+    by the Overview KPI. Standalone report time is privacy-safe residual time
+    and is therefore folded into ``其他`` instead of exposing internal status.
+    """
+
+    residual = dict(buckets.get("other") or {})
     categories = [
         dict(bucket)
-        for bucket in buckets.values()
-        if int(bucket.get("duration_seconds") or 0) > 0
+        for key, bucket in buckets.items()
+        if key != "other" and int(bucket.get("duration_seconds") or 0) > 0
     ]
     categories.sort(
         key=lambda bucket: (
@@ -391,25 +451,36 @@ def _finalize_overview_project_distribution(
             str(bucket["key"]),
         )
     )
-    total_seconds = sum(int(bucket["duration_seconds"]) for bucket in categories)
-    if len(categories) <= 3:
-        segments = categories
-    else:
-        remainder = categories[3:]
-        segments = [
-            *categories[:3],
-            {
-                "key": "other",
-                "project_id": None,
-                "label": "其他",
-                "duration_seconds": sum(
-                    int(bucket["duration_seconds"]) for bucket in remainder
-                ),
-                "category_count": len(remainder),
-                "is_uncategorized": False,
-                "is_other": True,
-            },
-        ]
+    total_seconds = sum(
+        int(bucket.get("duration_seconds") or 0) for bucket in buckets.values()
+    )
+
+    leading = categories[:3]
+    remainder = categories[3:]
+    segments = [_distribution_segment(bucket) for bucket in leading]
+
+    residual_seconds = int(residual.get("duration_seconds") or 0)
+    other_seconds = residual_seconds + sum(
+        int(bucket.get("duration_seconds") or 0) for bucket in remainder
+    )
+    if other_seconds > 0:
+        other_rows = list(residual.get("_rows") or [])
+        for bucket in remainder:
+            other_rows.extend(list(bucket.get("_rows") or []))
+        other_segment: dict[str, Any] = {
+            "key": "other",
+            "project_id": None,
+            "label": "其他",
+            "duration_seconds": other_seconds,
+            "category_count": len(remainder) + (1 if residual_seconds > 0 else 0),
+            "is_uncategorized": False,
+            "is_other": True,
+        }
+        live_clock = build_aggregate_live_clock(other_rows)
+        if live_clock is not None:
+            other_segment["live_clock"] = live_clock
+        segments.append(other_segment)
+
     return {
         "total_seconds": total_seconds,
         "segments": segments,
@@ -445,15 +516,11 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
 
     from .report_projection_provider import get_day_projection
     from .report_status_policy import decide_report_status
+    from .reported_duration_policy import reported_day_total_seconds
 
     projection = get_day_projection(scoped_today)
     with stage("overview_assemble"):
         sessions = list(projection.final_sessions)
-        standalone_entries = [
-            entry
-            for entry in projection.standalone_status_entries
-            if not bool(entry.get("is_in_progress"))
-        ]
         project_count = len(
             {
                 int(row.get("report_project_id") or row.get("project_id") or 0)
@@ -463,19 +530,47 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
             }
         )
 
-        # Select-then-transform: compute lightweight selection keys for all
-        # sessions, pick the visible 20 recent rows, then build full DTOs only
-        # for the surviving rows. Distribution aggregation shares this same
-        # authoritative final-session traversal.
-        candidates: list[dict[str, Any]] = []
+        # Accounting and Recent intentionally have different ownership.
+        # All KPI/distribution values come from the complete report projection;
+        # Recent visibility and its 20-row limit affect presentation only.
+        accounting_rows = [
+            _overview_accounting_row(entry) for entry in projection.entries
+        ]
+        _apply_live_span_to_rows(
+            accounting_rows,
+            model,
+            row_kind=ROW_KIND_PROJECT_SESSION_ROW,
+        )
+        today_total_seconds = reported_day_total_seconds(accounting_rows)
+        reporting_rows = [
+            row
+            for row in accounting_rows
+            if row.get("contributes_to_totals") is not False
+        ]
+        classified_seconds = sum(
+            int(row.get("duration_seconds") or 0)
+            for row in reporting_rows
+            if bool(row.get("is_classified"))
+        )
+        uncategorized_seconds = sum(
+            int(row.get("duration_seconds") or 0)
+            for row in reporting_rows
+            if bool(row.get("is_uncategorized"))
+        )
+
         distribution_buckets: dict[str, dict[str, Any]] = {}
-        for session in sessions:
-            display_seconds = _session_display_seconds(session)
+        for row in reporting_rows:
             _accumulate_overview_distribution_bucket(
                 distribution_buckets,
-                session,
-                display_seconds,
+                row,
+                int(row.get("duration_seconds") or 0),
             )
+        project_distribution = _finalize_overview_project_distribution(
+            distribution_buckets
+        )
+
+        candidates: list[dict[str, Any]] = []
+        for session in sessions:
             session_key = str(session.get("projection_instance_key") or "")
             session_contributions = projection.contributions_by_key.get(
                 session_key, ()
@@ -490,49 +585,8 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
                     "contributions": session_contributions,
                     "start_time": str(session.get("start_time") or ""),
                     "is_in_progress": bool(session.get("is_in_progress")),
-                    "display_seconds": display_seconds,
-                    "contributes_to_totals": bool(
-                        session.get("contributes_to_totals", True)
-                    ),
-                    "is_classified": bool(
-                        session.get("is_report_classified")
-                        or session.get("is_report_project")
-                        or session.get("is_classified")
-                    ),
-                    "is_uncategorized": bool(
-                        session.get("is_report_uncategorized")
-                        or (
-                            not bool(session.get("is_report_project"))
-                            and not bool(session.get("is_classified"))
-                        )
-                    ),
                 }
             )
-        project_distribution = _finalize_overview_project_distribution(
-            distribution_buckets
-        )
-
-        # KPI must be computed from the full projection, not the truncated
-        # visible set, so it is calculated from candidates (pre-truncation).
-        total_candidates = [
-            c for c in candidates if c["contributes_to_totals"]
-        ]
-        today_total_seconds = sum(
-            c["display_seconds"] for c in total_candidates
-        )
-        classified_seconds = sum(
-            c["display_seconds"]
-            for c in total_candidates
-            if c["is_classified"]
-        )
-        uncategorized_seconds = sum(
-            c["display_seconds"]
-            for c in total_candidates
-            if c["is_uncategorized"]
-        )
-        today_total_seconds += sum(
-            int(entry.get("duration_seconds") or 0) for entry in standalone_entries
-        )
 
         # Sort: in-progress first, then start_time descending.
         candidates.sort(
@@ -568,7 +622,7 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         )
 
     kpi_live_targets = build_kpi_live_targets(
-        [row for row in recent_rows if row.get("contributes_to_totals") is not False],
+        accounting_rows,
         model.get("live_clock") or {},
     )
     current_session = next(
@@ -643,9 +697,9 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             row_kind=ROW_KIND_PROJECT_SESSION_ROW,
         )
         _set_summary_activity_ids(sessions)
-    display_total_seconds = sum(
-        int(row.get("duration_seconds") or 0) for row in sessions
-    )
+    from .reported_duration_policy import reported_day_total_seconds
+
+    display_total_seconds = reported_day_total_seconds(sessions)
     total_target = build_kpi_live_targets(
         sessions,
         report_model.get("live_clock") or {},

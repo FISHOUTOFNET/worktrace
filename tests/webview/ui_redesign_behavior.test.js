@@ -153,10 +153,6 @@ function privacyHarness() {
   App.stopHeartbeat = () => { App.heartbeatTimer = null; };
   let refreshCount = 0;
   App.refreshAll = () => { refreshCount += 1; return Promise.resolve(); };
-  // Stub the single idempotent startup entry owned by init.js. The privacy
-  // gate (settings.js) delegates to this entry instead of calling refreshAll
-  // directly, so the harness tracks it to verify the gate hands off to the
-  // unique startup path rather than a second refresh path.
   let startupContinues = 0;
   App.continueStartupAfterPrivacyGate = () => { startupContinues += 1; return Promise.resolve(true); };
   App.bridge = {
@@ -237,10 +233,7 @@ test("2. privacy confirmation success closes gate, continues via single startup 
   assert.equal(App.privacyGateState, "accepted_ready");
   assert.equal(App.firstRunNoticeRequired, false);
   assert.equal(element("first-run-notice-overlay").hidden, true);
-  // The gate must hand off to the single idempotent startup entry, not a
-  // second refreshAll path.
   assert.equal(startupContinues(), 1);
-  // The gate itself must NOT start a heartbeat; that is owned by init.js.
   assert.equal(heartbeatStarts(), 0, "gate must not start heartbeat directly");
 });
 
@@ -266,15 +259,11 @@ test("3. privacy partial success: accepted but collector failed does not lock UI
   await flush();
   await flush();
 
-  // Gate must NOT remain an uncloseable authorization door.
   assert.equal(App.privacyGateState, "accepted_start_failed");
   assert.equal(App.firstRunNoticeRequired, false);
   assert.equal(element("first-run-notice-overlay").hidden, true);
-  // Global alert must surface the real failure reason.
   assert.equal(element("global-alert").hidden, false);
   assert.match(element("global-alert").textContent, /记录功能未能启动/);
-  // Authorization is durable, so the UI must still enter the app via the
-  // single startup entry (heartbeat + settings usable for recovery).
   assert.equal(startupContinues(), 1, "partial success must still continue startup");
 });
 
@@ -283,7 +272,7 @@ test("3. privacy partial success: accepted but collector failed does not lock UI
 // ---------------------------------------------------------------------------
 
 test("4. maintenance recovery: blocked -> recover -> reload status and page", async () => {
-  const { context, element } = makeBaseContext();
+  const { context } = makeBaseContext();
   const App = context.window.WorkTraceApp;
   Object.assign(App, {
     settingsLoaded: true,
@@ -307,7 +296,6 @@ test("4. maintenance recovery: blocked -> recover -> reload status and page", as
   };
   loadJs(context, "core.js");
   loadJs(context, "settings.js");
-  // Set mocks AFTER loading settings.js so they are not overwritten.
   let refreshCount = 0;
   let statusCount = 0;
   App.refreshAll = () => { refreshCount += 1; return Promise.resolve(); };
@@ -348,8 +336,6 @@ test("4b. maintenance recovery failure keeps blocked flag and shows public error
       ok: false,
       error_code: "recovery_failed",
       message: "恢复失败：维护锁仍被持有",
-      // The backend returns maintenance state even on failure so the
-      // frontend can re-render the recovery card from authoritative state.
       maintenance: {
         maintenance_in_progress: false,
         maintenance_restored: false,
@@ -371,20 +357,10 @@ test("4b. maintenance recovery failure keeps blocked flag and shows public error
 
   assert.equal(ok, false);
   assert.equal(App.recoveryInProgress, false);
-  // Button is re-enabled because the backend still reports recovery_blocked;
-  // the frontend never clears the blocked flag locally.
   assert.equal(element("settings-recovery-btn").disabled, false);
   assert.match(element("settings-recovery-status").textContent, /恢复失败：维护锁仍被持有/);
 });
 
-// ---------------------------------------------------------------------------
-// Category 4c: Symmetric Settings mutex — any operation blocks recovery
-// ---------------------------------------------------------------------------
-
-// Parameterized: every Settings busy flag must prevent recovery from starting.
-// This is the reverse direction of the guard the other operations already
-// perform (recovery → blocks others). Without it, a user could trigger
-// recovery while a backup import is mid-flight and corrupt the write gate.
 const RECOVERY_BLOCKING_FLAGS = [
   ["settingsLoading", "settings status load"],
   ["settingsWriteInProgress", "clipboard setting write"],
@@ -397,7 +373,7 @@ const RECOVERY_BLOCKING_FLAGS = [
 
 for (const [flag, label] of RECOVERY_BLOCKING_FLAGS) {
   test(`4c. ${label} (${flag}) blocks recovery — symmetric mutex`, async () => {
-    const { context, element } = makeBaseContext();
+    const { context } = makeBaseContext();
     const App = context.window.WorkTraceApp;
     Object.assign(App, {
       settingsLoaded: true,
@@ -424,8 +400,6 @@ for (const [flag, label] of RECOVERY_BLOCKING_FLAGS) {
     App.refreshAll = () => Promise.resolve();
     App.loadSettingsPrivacyStatus = () => Promise.resolve();
     App.showToast = () => {};
-
-    // Set the busy flag AFTER loading settings.js so it is not overwritten.
     App[flag] = true;
 
     const ok = await App.recoverDatabaseMaintenance();
@@ -435,18 +409,11 @@ for (const [flag, label] of RECOVERY_BLOCKING_FLAGS) {
     assert.equal(ok, false, `recovery must be rejected when ${flag} is true`);
     assert.equal(recoverCalls, 0, `recovery Bridge must not be called when ${flag} is true`);
     assert.equal(App[flag], true, `${flag} must not be cleared by the rejected recovery`);
-    // For the recoveryInProgress case the flag was already true and must stay
-    // true (early return does not touch it). For every other flag, the
-    // rejected path must not set recoveryInProgress.
     if (flag !== "recoveryInProgress") {
       assert.equal(App.recoveryInProgress, false, "recovery flag must not be set by the rejected path");
     }
   });
 }
-
-// ---------------------------------------------------------------------------
-// Category 4d: Recovery in progress blocks every other Settings operation
-// ---------------------------------------------------------------------------
 
 test("4d. recovery in progress blocks backup export, manifest, import, clear, and clipboard write", async () => {
   const { context, element } = makeBaseContext();
@@ -466,9 +433,6 @@ test("4d. recovery in progress blocks backup export, manifest, import, clear, an
       return result;
     },
   });
-  // Recovery Bridge call stays pending so recoveryInProgress stays true for
-  // the duration of the test. Every other operation must observe the busy
-  // flag and bail out without calling its own Bridge method.
   const recoveryGate = deferred();
   const bridgeCalls = {
     exportEncryptedBackup: 0,
@@ -494,12 +458,10 @@ test("4d. recovery in progress blocks backup export, manifest, import, clear, an
   App.showToast = () => {};
   App.lastSettingsStatus = { recovery_blocked: true };
 
-  // Kick off recovery (pending). Do not await — it must stay in flight.
   App.recoverDatabaseMaintenance();
   await flush();
   assert.equal(App.recoveryInProgress, true, "recovery must be in progress");
 
-  // Every other operation must be rejected by the symmetric mutex.
   App.exportEncryptedBackup();
   App.previewEncryptedBackupManifest();
   App.importEncryptedBackup();
@@ -516,20 +478,13 @@ test("4d. recovery in progress blocks backup export, manifest, import, clear, an
   assert.equal(bridgeCalls.setClipboardCaptureEnabled, 0, "clipboard write must not run during recovery");
   assert.equal(bridgeCalls.recoverDatabaseMaintenance, 1, "recovery itself runs exactly once");
   assert.equal(App.recoveryInProgress, true, "recovery flag must remain set while pending");
-
-  // The recovery button itself must be disabled while recovery is in flight.
   assert.equal(element("settings-recovery-btn").disabled, true, "recovery button disabled during recovery");
 
-  // Release the pending recovery so the test can clean up.
   recoveryGate.resolve({ ok: true });
   await flush();
   await flush();
   assert.equal(App.recoveryInProgress, false, "recovery flag released after completion");
 });
-
-// ---------------------------------------------------------------------------
-// Category 4e: Transport rejection re-reads authoritative backend state
-// ---------------------------------------------------------------------------
 
 test("4e. recovery transport rejection re-reads authoritative state (blocked=false → button disabled)", async () => {
   const { context, element } = makeBaseContext();
@@ -552,9 +507,7 @@ test("4e. recovery transport rejection re-reads authoritative state (blocked=fal
   let recoverCalls = 0;
   let statusReads = 0;
   App.bridge = {
-    // Transport rejection: the frontend cannot know whether recovery applied.
     recoverDatabaseMaintenance: () => { recoverCalls += 1; return Promise.reject(new Error("webview transport disconnected")); },
-    // Authoritative backend status reports recovery is no longer needed.
     getSettingsPrivacyStatus: () => Promise.resolve({
       ok: true,
       status: {
@@ -571,9 +524,6 @@ test("4e. recovery transport rejection re-reads authoritative state (blocked=fal
   loadJs(context, "core.js");
   loadJs(context, "settings.js");
   App.refreshAll = () => Promise.resolve();
-  // Stub the real status loader so the count is observable; the production
-  // catch path calls App.loadSettingsPrivacyStatus, which in turn invokes
-  // bridge.getSettingsPrivacyStatus.
   App.loadSettingsPrivacyStatus = async function () {
     statusReads += 1;
     const result = await App.bridge.getSettingsPrivacyStatus();
@@ -594,10 +544,7 @@ test("4e. recovery transport rejection re-reads authoritative state (blocked=fal
   assert.equal(recoverCalls, 1, "recovery Bridge called exactly once");
   assert.equal(statusReads, 1, "authoritative status must be re-read exactly once after rejection");
   assert.equal(App.recoveryInProgress, false, "recovery busy flag must be released after state refresh");
-  // Backend reports recovery_blocked=false, so the button must be disabled:
-  // no recovery is needed. The frontend never clears the blocked flag locally.
   assert.equal(element("settings-recovery-btn").disabled, true, "button disabled when backend reports no recovery needed");
-  // The stale blocked=true status must NOT be reused as the final answer.
   assert.equal(App.lastSettingsStatus.recovery_blocked, false, "lastSettingsStatus refreshed to authoritative state");
   assert.match(element("settings-recovery-status").textContent, /恢复结果未知/);
 });
@@ -660,15 +607,13 @@ test("4f. recovery transport rejection re-reads authoritative state (blocked=tru
   assert.equal(recoverCalls, 1, "recovery Bridge called exactly once");
   assert.equal(statusReads, 1, "authoritative status must be re-read exactly once after rejection");
   assert.equal(App.recoveryInProgress, false, "recovery busy flag must be released after state refresh");
-  // Backend still reports recovery_blocked=true, so the button must be
-  // re-enabled: the user can attempt recovery again.
   assert.equal(element("settings-recovery-btn").disabled, false, "button re-enabled when backend still reports blocked");
   assert.equal(App.lastSettingsStatus.recovery_blocked, true, "lastSettingsStatus refreshed to authoritative state");
   assert.match(element("settings-recovery-status").textContent, /恢复结果未知/);
 });
 
 test("4g. recovery transport rejection when status read also fails still releases busy flag", async () => {
-  const { context, element } = makeBaseContext();
+  const { context } = makeBaseContext();
   const App = context.window.WorkTraceApp;
   Object.assign(App, {
     settingsLoaded: true,
@@ -699,8 +644,6 @@ test("4g. recovery transport rejection when status read also fails still release
     await App.bridge.getSettingsPrivacyStatus();
   };
   App.showToast = () => {};
-  // Pre-existing authoritative state: still blocked. The frontend must NOT
-  // clear this flag locally when the status re-read itself fails.
   App.lastSettingsStatus = { recovery_blocked: true, blocked_reason: "prior_failure" };
 
   const ok = await App.recoverDatabaseMaintenance();
@@ -711,16 +654,9 @@ test("4g. recovery transport rejection when status read also fails still release
   assert.equal(ok, false, "must not be reported as success when both recovery and status read fail");
   assert.equal(recoverCalls, 1);
   assert.equal(statusReads, 1, "status must still be attempted once");
-  // Critical: the busy flag must be released to avoid a permanent UI deadlock,
-  // even though the status read failed.
   assert.equal(App.recoveryInProgress, false, "busy flag released even on double failure");
-  // The frontend must not clear the prior blocked flag locally.
   assert.equal(App.lastSettingsStatus.recovery_blocked, true, "prior blocked state preserved");
 });
-
-// ---------------------------------------------------------------------------
-// Category 5: Global collection feedback visible on every page
-// ---------------------------------------------------------------------------
 
 test("5. global toggle error is visible via global-alert on every page", async () => {
   const { context, element } = makeBaseContext();
@@ -742,7 +678,6 @@ test("5. global toggle error is visible via global-alert on every page", async (
   for (const page of ["overview", "timeline", "statistics", "rules", "settings"]) {
     App.currentPage = page;
     App.showGlobalAlert("");
-    // Simulate the global toggle handler path.
     const result = await App.bridge.pauseCollector();
     if (!result || result.ok === false) {
       App.showGlobalAlert(App.extractBridgeError(result, "操作失败"));
@@ -751,10 +686,6 @@ test("5. global toggle error is visible via global-alert on every page", async (
     assert.match(element("global-alert").textContent, /数据库维护未完成/);
   }
 });
-
-// ---------------------------------------------------------------------------
-// Categories 6-9: Timeline editing, autosave rebase, context change, merge
-// ---------------------------------------------------------------------------
 
 function timelineHarness() {
   const { context, element } = makeBaseContext();
@@ -786,7 +717,7 @@ function timelineHarness() {
   App.bridge = {
     getTimeline: bridgeCall("get_timeline"),
     getTimelineSessionActivitySummary: bridgeCall("get_timeline_session_activity_summary"),
-    listProjectsForTimeline: bridgeCall("list_projects_for_timeline"),
+    listProjectCatalog: bridgeCall("list_project_catalog"),
     saveTimelineSessionEdit: bridgeCall("save_timeline_session_edit"),
     hideTimelineSession: bridgeCall("hide_timeline_session"),
     hideTimelineSessionActivity: bridgeCall("hide_timeline_session_activity"),
@@ -800,6 +731,17 @@ function timelineHarness() {
   };
   App.refreshTimelineAfterEdit = () => Promise.resolve();
   App.loadTimelineReport = () => Promise.resolve();
+  const timelineProjects = [{ id: 1, name: "P1" }, { id: 2, name: "P2" }];
+  App.projectCatalog = Object.freeze({
+    load: () => Promise.resolve({
+      editingProjects: timelineProjects.slice(),
+      filterProjects: timelineProjects.slice(),
+    }),
+    invalidate() {},
+    resetGeneration() {},
+    getEditing: () => timelineProjects.slice(),
+    getFilter: () => timelineProjects.slice(),
+  });
   for (const file of ["timeline_request_state.js", "timeline.js"]) loadJs(context, file);
   return { App, element, context };
 }
@@ -831,8 +773,6 @@ function session(key, revision, startTime, opts = {}) {
 
 function prepareTimelineEditor(App, element, source) {
   App.currentSessions = [source];
-  App.projectsCache = [{ id: 1, name: "P1" }, { id: 2, name: "P2" }];
-  App.editingProjectsCache = App.projectsCache;
   App.populateEditPanel(source);
   element("edit-project-select").value = String(source.project_id || "");
 }
@@ -862,6 +802,37 @@ test("6a. 1.5 edited hours submits 5400 integer seconds", async () => {
   element("edit-duration-input").value = "1.5";
   App.handleTimelineDurationChange();
   const payloads = [];
+  let submittedDurationTouched = null;
+  App.callBridge = (method, ...args) => {
+    if (method === "save_timeline_session_edit") {
+      payloads.push(args);
+      submittedDurationTouched = App.submittedDraft.durationTouched;
+    }
+    return Promise.resolve(successfulTimelineEdit());
+  };
+
+  App.saveEdit();
+  await flush();
+  await flush();
+
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0][5], true);
+  assert.equal(payloads[0][6], 5400);
+  assert.equal(submittedDurationTouched, true);
+});
+
+test("6a2. explicit 1.234 edit on observed 4442 seconds submits set intent for 4320", async () => {
+  const { App, element, context } = timelineHarness();
+  const source = session("base:a", "rev-1", "2026-07-12T09:00:00", {
+    adjusted_duration_seconds: null,
+    duration_seconds: 4442,
+    has_duration_override: false,
+  });
+  prepareTimelineEditor(App, element, source);
+  context.window.setTimeout = () => 1;
+  element("edit-duration-input").value = "1.234";
+  App.handleTimelineDurationChange();
+  const payloads = [];
   App.callBridge = (method, ...args) => {
     if (method === "save_timeline_session_edit") payloads.push(args);
     return Promise.resolve(successfulTimelineEdit());
@@ -871,8 +842,42 @@ test("6a. 1.5 edited hours submits 5400 integer seconds", async () => {
   await flush();
   await flush();
 
+  assert.equal(element("edit-duration-input").value, "1.2");
   assert.equal(payloads.length, 1);
-  assert.equal(payloads[0][5], 5400);
+  assert.equal(payloads[0][5], true);
+  assert.equal(payloads[0][6], 4320);
+});
+
+test("6a3. unknown duration save retry preserves exact intent and request id", async () => {
+  const { App, element, context } = timelineHarness();
+  const source = session("base:a", "rev-1", "2026-07-12T09:00:00", {
+    adjusted_duration_seconds: null,
+    duration_seconds: 4442,
+    has_duration_override: false,
+  });
+  prepareTimelineEditor(App, element, source);
+  context.window.setTimeout = () => 1;
+  element("edit-duration-input").value = "1.234";
+  App.handleTimelineDurationChange();
+  const payloads = [];
+  App.callBridge = (method, ...args) => {
+    if (method !== "save_timeline_session_edit") return Promise.resolve({ ok: true });
+    payloads.push(args);
+    return payloads.length === 1
+      ? Promise.reject(new Error("transport uncertain"))
+      : Promise.resolve(successfulTimelineEdit());
+  };
+
+  await App.saveEdit();
+  assert.equal(App.timelineDurationDraftTouched, true);
+  await App.saveEdit();
+  await flush();
+  await flush();
+
+  assert.equal(payloads.length, 2);
+  assert.equal(payloads[0][3], payloads[1][3]);
+  assert.deepEqual(payloads[0].slice(4), [null, true, 4320, ""]);
+  assert.deepEqual(payloads[1], payloads[0]);
 });
 
 test("6b. project-only edit keeps a non-rounded no-override duration as null", async () => {
@@ -896,7 +901,8 @@ test("6b. project-only edit keeps a non-rounded no-override duration as null", a
   await flush();
 
   assert.equal(payloads[0][4], 2);
-  assert.equal(payloads[0][5], null);
+  assert.equal(payloads[0][5], false);
+  assert.equal(payloads[0][6], null);
 });
 
 test("6c. description-only edit preserves the exact existing override seconds", async () => {
@@ -919,8 +925,9 @@ test("6c. description-only edit preserves the exact existing override seconds", 
   await flush();
   await flush();
 
-  assert.equal(payloads[0][5], 5432);
-  assert.equal(payloads[0][6], "只修改描述");
+  assert.equal(payloads[0][5], false);
+  assert.equal(payloads[0][6], null);
+  assert.equal(payloads[0][7], "只修改描述");
 });
 
 test("6c2. clearing duration cancels only an existing override", async () => {
@@ -945,7 +952,8 @@ test("6c2. clearing duration cancels only an existing override", async () => {
   await flush();
 
   assert.equal(payloads.length, 1);
-  assert.equal(payloads[0][5], null);
+  assert.equal(payloads[0][5], true);
+  assert.equal(payloads[0][6], null);
 });
 
 test("6d. duration edit during an in-flight save queues against the rebased revision", async () => {
@@ -992,36 +1000,31 @@ test("6d. duration edit during an in-flight save queues against the rebased revi
   await flush();
 
   assert.equal(payloads.length, 2);
-  assert.equal(payloads[0][5], null);
+  assert.equal(payloads[0][5], false);
+  assert.equal(payloads[0][6], null);
   assert.equal(payloads[1][2], "rev-2");
-  assert.equal(payloads[1][5], 5400);
+  assert.equal(payloads[1][5], true);
+  assert.equal(payloads[1][6], 5400);
 });
 
 test("6. continuous autosave: S1 uses R1, S2 uses R2 after rebase", async () => {
   const { App, element } = timelineHarness();
-  const sessions = [
-    session("base:a", "rev-1", "2026-07-12T09:00:00"),
-  ];
+  const sessions = [session("base:a", "rev-1", "2026-07-12T09:00:00")];
   App.currentSessions = sessions;
   App.editingSession = sessions[0];
-  App.projectsCache = [{ id: 1, name: "P" }];
-  App.editingProjectsCache = [{ id: 1, name: "P" }];
   element("edit-note-text").value = "A";
   element("edit-project-select").value = "1";
   element("edit-duration-input").value = "0.2";
 
   const saveCalls = [];
-  let refreshImpl = () => {
-    // After S1 succeeds, the authoritative session advances to rev-2.
+  App.loadTimelineReport = () => {
     App.currentSessions = [session("base:a", "rev-2", "2026-07-12T09:00:00", { session_note: "A" })];
     return Promise.resolve();
   };
-  App.loadTimelineReport = () => refreshImpl();
 
   App.callBridge = (method, ...args) => {
     if (method !== "save_timeline_session_edit") return Promise.resolve({ ok: true });
-    // payload: [date, key, revision, requestId, projectId, duration, note]
-    saveCalls.push({ revision: args[2], note: args[6], requestId: args[3] });
+    saveCalls.push({ revision: args[2], note: args[7], requestId: args[3] });
     return Promise.resolve({
       ok: true,
       outcome_type: "operation_committed",
@@ -1030,19 +1033,11 @@ test("6. continuous autosave: S1 uses R1, S2 uses R2 after rebase", async () => 
     });
   };
 
-  // Fire S1.
   App.saveEdit();
   await flush();
-  // While S1 in flight, change note to B.
   element("edit-note-text").value = "B";
-  // Queue S2.
   App.saveEdit();
-  await flush();
-  await flush();
-  await flush();
-  await flush();
-  await flush();
-  await flush();
+  for (let i = 0; i < 6; i += 1) await flush();
 
   assert.equal(saveCalls.length, 2, "one in-flight save plus one latest-draft save");
   assert.equal(saveCalls[0].revision, "rev-1", "S1 must use R1");
@@ -1056,18 +1051,15 @@ test("7. multi-field edits during save are not overwritten by stale response", a
   const sessions = [session("base:a", "rev-1", "2026-07-12T09:00:00")];
   App.currentSessions = sessions;
   App.editingSession = sessions[0];
-  App.projectsCache = [{ id: 1, name: "P1" }, { id: 2, name: "P2" }];
-  App.editingProjectsCache = [{ id: 1, name: "P1" }, { id: 2, name: "P2" }];
   element("edit-project-select").value = "1";
   element("edit-note-text").value = "note-1";
   element("edit-duration-input").value = "0.2";
 
-  let refreshImpl = () => {
+  App.loadTimelineReport = () => {
     App.currentSessions = [session("base:a", "rev-2", "2026-07-12T09:00:00", { session_note: "note-1", adjusted_duration_seconds: 600, has_duration_override: true })];
     return Promise.resolve();
   };
-  App.loadTimelineReport = () => refreshImpl();
-  App.callBridge = (method, ...args) => Promise.resolve({
+  App.callBridge = () => Promise.resolve({
     ok: true,
     outcome_type: "operation_committed",
     snapshot_revision: "snap-2",
@@ -1076,23 +1068,13 @@ test("7. multi-field edits during save are not overwritten by stale response", a
 
   App.saveEdit();
   await flush();
-  // Change all three fields while in flight.
   element("edit-project-select").value = "2";
   element("edit-note-text").value = "note-2";
   element("edit-duration-input").value = "0.3";
   App.handleTimelineDurationChange();
-
-  // Queue a second save.
   App.saveEdit();
-  await flush();
-  await flush();
-  await flush();
-  await flush();
-  await flush();
-  await flush();
+  for (let i = 0; i < 6; i += 1) await flush();
 
-  // After everything settles, the DOM must still reflect the user's latest
-  // input, not the stale baseline.
   assert.equal(element("edit-note-text").value, "note-2");
   assert.equal(element("edit-project-select").value, "2");
   assert.equal(element("edit-duration-input").value, "0.3");
@@ -1103,7 +1085,6 @@ test("7b. composition input never submits intermediate text and saves only final
   const source = session("base:a", "rev-1", "2026-07-12T09:00:00");
   App.currentSessions = [source];
   App.editingSession = source;
-  App.projectsCache = [{ id: 1, name: "P" }];
   element("edit-project-select").value = "1";
   element("edit-duration-input").value = "0.2";
 
@@ -1117,23 +1098,16 @@ test("7b. composition input never submits intermediate text and saves only final
   context.window.clearTimeout = () => {};
   const submitted = [];
   App.callBridge = (method, ...args) => {
-    if (method === "save_timeline_session_edit") submitted.push(args[6]);
+    if (method === "save_timeline_session_edit") submitted.push(args[7]);
     return Promise.resolve({
       ok: true,
       outcome_type: "operation_committed",
       snapshot_revision: "snap-2",
-      selection_hint: {
-        projection_instance_key: "base:a",
-        projection_revision: "rev-2",
-      },
+      selection_hint: { projection_instance_key: "base:a", projection_revision: "rev-2" },
     });
   };
   App.loadTimelineReport = () => {
-    App.currentSessions = [
-      session("base:a", "rev-2", "2026-07-12T09:00:00", {
-        session_note: "中文",
-      }),
-    ];
+    App.currentSessions = [session("base:a", "rev-2", "2026-07-12T09:00:00", { session_note: "中文" })];
     return Promise.resolve();
   };
 
@@ -1161,7 +1135,6 @@ test("7c. editable fields stay enabled and focused while autosave is in flight",
   const source = session("base:a", "rev-1", "2026-07-12T09:00:00");
   App.currentSessions = [source];
   App.editingSession = source;
-  App.projectsCache = [{ id: 1, name: "P" }];
   element("edit-project-select").value = "1";
   element("edit-note-text").value = "first";
   element("edit-duration-input").value = "0.2";
@@ -1182,24 +1155,16 @@ test("7c. editable fields stay enabled and focused while autosave is in flight",
   assert.equal(element("edit-note-text").value, "second");
   assert.equal(focusCount, 0);
 
-  pending.resolve({
-    ok: false,
-    error: "operation_failed",
-    message: "失败",
-  });
+  pending.resolve({ ok: false, error: "operation_failed", message: "失败" });
   await flush();
 });
 
 test("7d. 200-character limit applies only when the description changed", async () => {
   const { App, element } = timelineHarness();
   const historical = "旧".repeat(250);
-  const source = session("base:a", "rev-1", "2026-07-12T09:00:00", {
-    project_id: 1,
-    session_note: historical,
-  });
+  const source = session("base:a", "rev-1", "2026-07-12T09:00:00", { project_id: 1, session_note: historical });
   App.currentSessions = [source];
   App.editingSession = source;
-  App.projectsCache = [{ id: 1, name: "P1" }, { id: 2, name: "P2" }];
   element("edit-project-select").value = "2";
   element("edit-note-text").value = historical;
   element("edit-duration-input").value = "0.2";
@@ -1212,7 +1177,7 @@ test("7d. 200-character limit applies only when the description changed", async 
   App.saveEdit();
   await flush();
   assert.equal(submitted.length, 1, "unchanged historical long text must not block project edit");
-  assert.equal(submitted[0][6], historical);
+  assert.equal(submitted[0][7], historical);
 
   App.editingSession = source;
   App.editSaving = false;
@@ -1227,8 +1192,6 @@ test("8. context switch preserves dirty draft (save first, then switch)", async 
   const sessions = [session("base:a", "rev-1", "2026-07-12T09:00:00")];
   App.currentSessions = sessions;
   App.editingSession = sessions[0];
-  App.projectsCache = [{ id: 1, name: "P" }];
-  App.editingProjectsCache = [{ id: 1, name: "P" }];
   element("edit-note-text").value = "dirty";
   element("edit-project-select").value = "1";
 
@@ -1238,7 +1201,7 @@ test("8. context switch preserves dirty draft (save first, then switch)", async 
     App.currentSessions = [session("base:a", "rev-2", "2026-07-12T09:00:00", { session_note: "dirty" })];
     return Promise.resolve();
   };
-  App.callBridge = (method, ...args) => Promise.resolve({
+  App.callBridge = () => Promise.resolve({
     ok: true,
     outcome_type: "operation_committed",
     snapshot_revision: "snap-2",
@@ -1246,12 +1209,7 @@ test("8. context switch preserves dirty draft (save first, then switch)", async 
   });
 
   await App.requestTimelineContextChange(switchAction, "切换日期");
-  await flush();
-  await flush();
-  await flush();
-  await flush();
-  await flush();
-  await flush();
+  for (let i = 0; i < 6; i += 1) await flush();
 
   assert.equal(switched, true, "switch must execute after save success");
   assert.equal(App.pendingContextChange, null);
@@ -1272,8 +1230,6 @@ test("8c. context switch during save in flight queues and executes after success
   App.editingSession = sessions[0];
   element("edit-note-text").value = "dirty";
   element("edit-project-select").value = "1";
-  App.projectsCache = [{ id: 1, name: "P" }];
-  App.editingProjectsCache = [{ id: 1, name: "P" }];
 
   const saveDeferred = deferred();
   let switched = false;
@@ -1284,34 +1240,25 @@ test("8c. context switch during save in flight queues and executes after success
   };
   App.callBridge = () => saveDeferred.promise;
 
-  // Start save (in flight).
   App.saveEdit();
   await flush();
-  // Request a context switch while save is in flight.
   await App.requestTimelineContextChange(switchAction, "切换日期");
   assert.equal(switched, false, "must NOT switch while save in flight");
   assert.ok(App.pendingContextChange, "switch must be queued");
 
-  // Resolve save successfully.
   saveDeferred.resolve({
     ok: true,
     outcome_type: "operation_committed",
     snapshot_revision: "snap-2",
     selection_hint: { projection_instance_key: "base:a", projection_revision: "rev-2" },
   });
-  await flush();
-  await flush();
-  await flush();
-  await flush();
-  await flush();
-  await flush();
+  for (let i = 0; i < 6; i += 1) await flush();
 
   assert.equal(switched, true, "queued switch must execute after save success");
 });
 
 test("9. merge chronological semantics: descending display, ascending order", () => {
   const { App } = timelineHarness();
-  // UI display order: C (11:00), B (10:00), A (09:00) — newest first.
   const sessions = [
     session("base:c", "rev-c", "2026-07-12T11:00:00"),
     session("base:b", "rev-b", "2026-07-12T10:00:00"),
@@ -1319,23 +1266,14 @@ test("9. merge chronological semantics: descending display, ascending order", ()
   ];
   App.currentSessions = sessions;
 
-  // B previous -> A (time-earlier).
   const bPrev = App.findChronologicalMergeTarget(sessions, "base:b", "previous");
   assert.equal(bPrev.projection_instance_key, "base:a");
   assert.equal(bPrev.projection_revision, "rev-a");
-
-  // B next -> C (time-later).
   const bNext = App.findChronologicalMergeTarget(sessions, "base:b", "next");
   assert.equal(bNext.projection_instance_key, "base:c");
   assert.equal(bNext.projection_revision, "rev-c");
-
-  // A previous -> none (already earliest).
-  const aPrev = App.findChronologicalMergeTarget(sessions, "base:a", "previous");
-  assert.equal(aPrev, null);
-
-  // C next -> none (already latest).
-  const cNext = App.findChronologicalMergeTarget(sessions, "base:c", "next");
-  assert.equal(cNext, null);
+  assert.equal(App.findChronologicalMergeTarget(sessions, "base:a", "previous"), null);
+  assert.equal(App.findChronologicalMergeTarget(sessions, "base:c", "next"), null);
 });
 
 test("9b. merge passes correct target key, revision, and direction to bridge", async () => {
@@ -1366,7 +1304,6 @@ test("9b. merge passes correct target key, revision, and direction to bridge", a
   await flush();
 
   assert.ok(capturedArgs, "merge must call the bridge");
-  // args: [date, sourceKey, direction, sourceRevision, requestId, targetKey, targetRevision]
   assert.equal(capturedArgs[1], "base:b");
   assert.equal(capturedArgs[2], "previous");
   assert.equal(capturedArgs[3], "rev-b");
@@ -1374,17 +1311,10 @@ test("9b. merge passes correct target key, revision, and direction to bridge", a
   assert.equal(capturedArgs[6], "rev-a");
 });
 
-// ---------------------------------------------------------------------------
-// Categories 10-11: Project catalog and filter semantics
-// ---------------------------------------------------------------------------
-
 function rulesHarness() {
   const { context, element } = makeBaseContext();
   const App = context.window.WorkTraceApp;
   Object.assign(App, {
-    editingProjectsCache: [],
-    filterProjectsCache: [],
-    projectsCache: null,
     projectsLoading: false,
     lastProjectRulesData: null,
     rulesLoaded: false,
@@ -1393,22 +1323,23 @@ function rulesHarness() {
     rulesSortMode: "last_used",
     statisticsControlsBound: false,
     currentPage: "statistics",
+    dataEpoch: 0,
     handleResult(result, onError) {
       if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
       return result;
     },
   });
   App.bridge = {
-    listProjectsForTimeline: () => Promise.resolve({ ok: true, projects: [], editing_projects: [], filter_projects: [] }),
+    listProjectCatalog: () => Promise.resolve({ ok: true, editing_projects: [], filter_projects: [] }),
   };
   loadJs(context, "core.js");
+  loadJs(context, "project_catalog.js");
   loadJs(context, "rules.js");
   return { App, element };
 }
 
 test("10. filter catalog excludes system unclassified project (single 未归类 option)", async () => {
   const { App, element } = rulesHarness();
-  // Provide a mock renderer that mirrors timeline.js renderTimelineProjectFilter.
   App.renderTimelineProjectFilter = function (projects) {
     var select = element("timeline-project-filter");
     var html = '<option value="">全部项目</option><option value="unclassified">未归类</option>';
@@ -1421,18 +1352,17 @@ test("10. filter catalog excludes system unclassified project (single 未归类 
     { id: 1, name: "Alpha" },
     { id: 2, name: "未归类", description: "system unclassified" },
   ];
-  const filterProjects = [
-    { id: 1, name: "Alpha" },
-  ];
-  App.bridge.listProjectsForTimeline = () => Promise.resolve({
+  const filterProjects = [{ id: 1, name: "Alpha" }];
+  App.bridge.listProjectCatalog = () => Promise.resolve({
     ok: true,
-    projects: editingProjects,
     editing_projects: editingProjects,
     filter_projects: filterProjects,
   });
 
-  await App.refreshSharedProjectCatalog();
+  App.projectCatalog.invalidate();
+  await App.projectCatalog.load();
   await flush();
+  App.renderTimelineProjectFilter(App.projectCatalog.getFilter());
 
   const filterSelect = element("timeline-project-filter");
   const optionsHtml = filterSelect.innerHTML;
@@ -1446,60 +1376,55 @@ test("10b. editing catalog includes system unclassified so users can reset a ses
     { id: 1, name: "Alpha" },
     { id: 2, name: "未归类" },
   ];
-  App.bridge.listProjectsForTimeline = () => Promise.resolve({
+  App.bridge.listProjectCatalog = () => Promise.resolve({
     ok: true,
-    projects: editingProjects,
     editing_projects: editingProjects,
     filter_projects: [{ id: 1, name: "Alpha" }],
   });
 
-  await App.refreshSharedProjectCatalog();
+  App.projectCatalog.invalidate();
+  await App.projectCatalog.load();
   await flush();
 
-  assert.equal(App.editingProjectsCache.length, 2);
-  assert.equal(App.filterProjectsCache.length, 1);
-  assert.equal(App.filterProjectsCache.find((p) => p.name === "未归类"), undefined);
+  assert.equal(App.projectCatalog.getEditing().length, 2);
+  assert.equal(App.projectCatalog.getFilter().length, 1);
+  assert.equal(App.projectCatalog.getFilter().find((p) => p.name === "未归类"), undefined);
 });
 
-test("11. catalog refresh after project CRUD updates all caches (no duplicate binding)", async () => {
+test("11. catalog refresh after project CRUD updates both projections (no duplicate binding)", async () => {
   const { App } = rulesHarness();
-  // Initial catalog: only project A.
   let editingProjects = [{ id: 1, name: "A" }];
   let filterProjects = [{ id: 1, name: "A" }];
-  App.bridge.listProjectsForTimeline = () => Promise.resolve({
+  App.bridge.listProjectCatalog = () => Promise.resolve({
     ok: true,
-    projects: editingProjects,
     editing_projects: editingProjects,
     filter_projects: filterProjects,
   });
 
-  await App.refreshSharedProjectCatalog();
+  App.projectCatalog.invalidate();
+  await App.projectCatalog.load();
   await flush();
-  assert.equal(App.editingProjectsCache.length, 1);
-  assert.equal(App.filterProjectsCache.length, 1);
+  assert.equal(App.projectCatalog.getEditing().length, 1);
+  assert.equal(App.projectCatalog.getFilter().length, 1);
 
-  // Add project B.
   editingProjects = [{ id: 1, name: "A" }, { id: 2, name: "B" }];
   filterProjects = [{ id: 1, name: "A" }, { id: 2, name: "B" }];
-  await App.refreshSharedProjectCatalog();
+  App.projectCatalog.invalidate();
+  await App.projectCatalog.load();
   await flush();
-  assert.equal(App.editingProjectsCache.length, 2, "editing catalog must include B");
-  assert.equal(App.filterProjectsCache.length, 2, "filter catalog must include B");
-  assert.ok(App.filterProjectsCache.find((p) => p.id === 2));
+  assert.equal(App.projectCatalog.getEditing().length, 2, "editing catalog must include B");
+  assert.equal(App.projectCatalog.getFilter().length, 2, "filter catalog must include B");
+  assert.ok(App.projectCatalog.getFilter().find((p) => p.id === 2));
 
-  // Delete project B.
   editingProjects = [{ id: 1, name: "A" }];
   filterProjects = [{ id: 1, name: "A" }];
-  await App.refreshSharedProjectCatalog();
+  App.projectCatalog.invalidate();
+  await App.projectCatalog.load();
   await flush();
-  assert.equal(App.editingProjectsCache.length, 1);
-  assert.equal(App.filterProjectsCache.length, 1);
-  assert.equal(App.filterProjectsCache.find((p) => p.id === 2), undefined);
+  assert.equal(App.projectCatalog.getEditing().length, 1);
+  assert.equal(App.projectCatalog.getFilter().length, 1);
+  assert.equal(App.projectCatalog.getFilter().find((p) => p.id === 2), undefined);
 });
-
-// ---------------------------------------------------------------------------
-// Category 12: Project language preservation
-// ---------------------------------------------------------------------------
 
 function rulesPanelHarness() {
   const { context, element } = makeBaseContext();
@@ -1539,7 +1464,8 @@ function rulesPanelHarness() {
       return Promise.resolve({ ok: true, project: { id: projectId, name, description, language } });
     },
   };
-  loadJs(context, "rules_create_panel.js");
+  loadJs(context, "fd_work_v5.js");
+  loadJs(context, "rules_create_panel_v5.js");
   return { App, element, bridgeCalls };
 }
 
@@ -1548,8 +1474,6 @@ test("12. editing an English project preserves language when only name changes",
   const englishProject = { id: 5, name: "Old", description: "desc", language: "English" };
   App.openRulesPanel("project", { project: englishProject });
   assert.equal(App.rulesPanelOriginalLanguage, "English");
-
-  // Change only the name.
   element("rules-panel-project-name").value = "New";
   element("rules-panel-project-description").value = "desc";
 
@@ -1567,7 +1491,6 @@ test("12b. editing a Japanese project preserves language when only description c
   const japaneseProject = { id: 6, name: "プロジェクト", description: "old", language: "日本語" };
   App.openRulesPanel("project", { project: japaneseProject });
   assert.equal(App.rulesPanelOriginalLanguage, "日本語");
-
   element("rules-panel-project-name").value = "プロジェクト";
   element("rules-panel-project-description").value = "new description";
 
@@ -1583,7 +1506,6 @@ test("12c. editing a custom-language project preserves the custom language", asy
   const customProject = { id: 7, name: "Custom", description: "", language: "Klingon" };
   App.openRulesPanel("project", { project: customProject });
   assert.equal(App.rulesPanelOriginalLanguage, "Klingon");
-
   element("rules-panel-project-name").value = "Custom-renamed";
   element("rules-panel-project-description").value = "";
 
@@ -1608,10 +1530,6 @@ test("12d. new project defaults to 中文 when no language specified", async () 
   assert.equal(bridgeCalls.create[0].language, "中文");
 });
 
-// ---------------------------------------------------------------------------
-// Category 13: Overview current activity, project distribution, recent records
-// ---------------------------------------------------------------------------
-
 function makeStructuredCurrentActivityElement(id) {
   const children = {
     ".current-resource": makeElement("current-resource"),
@@ -1630,7 +1548,7 @@ function makeStructuredCurrentActivityElement(id) {
       return [children[".current-resource"], children[".current-context"], children[".current-duration"]]
         .map((c) => c.textContent || "").join("");
     },
-    set() { /* structured card sets children, not the container */ },
+    set() {},
   });
   return el;
 }
@@ -1638,9 +1556,6 @@ function makeStructuredCurrentActivityElement(id) {
 function overviewHarness() {
   const { context, element, elements } = makeBaseContext();
   const App = context.window.WorkTraceApp;
-  // Pre-register a structured current-activity element so the structured
-  // Overview card path (querySelector for .current-resource etc.) is taken
-  // instead of the unstructured Timeline transport path.
   elements.set("current-activity", makeStructuredCurrentActivityElement("current-activity"));
   Object.assign(App, {
     currentPage: "overview",
@@ -1649,18 +1564,16 @@ function overviewHarness() {
     pendingTimelineSelectionIntent: null,
     getActiveLiveClock: () => null,
     validateLiveClock: (clock) => (clock && clock.is_live === true ? clock : null),
-    computeClockDurationNow: (clock, nowMs) => (clock ? (clock.elapsed_seconds_at_sample || 0) : 0),
+    computeClockDurationNow: (clock) => (clock ? (clock.elapsed_seconds_at_sample || 0) : 0),
     setLiveClockTarget: () => {},
     clearLiveClockTarget: () => {},
-    renderDurationProjected: (target, seconds) => {
-      if (target) target.textContent = formatDuration(seconds);
-    },
+    renderDurationProjected: (target, seconds) => { if (target) target.textContent = formatDuration(seconds); },
     liveClockDataAttributes: () => "",
     liveContinuityKey: () => "",
     currentActivityContinuityKey: () => "",
     formatStartTimeOnly: (t) => String(t || "").slice(11, 16),
     formatProjectLabel: (name) => name || "未归类",
-    formatDuration: formatDuration,
+    formatDuration,
     escapeHtml: (s) => String(s == null ? "" : s),
     switchPage: () => {},
     loadTimelineReport: () => Promise.resolve(),
@@ -1694,8 +1607,7 @@ test("13. current activity main title comes from resource_name, not project name
     elapsed_seconds: 312,
   };
   App.renderCurrentActivityElement(element("current-activity"), currentActivity, "overview");
-  const resource = element("current-activity").querySelector(".current-resource");
-  assert.equal(resource.textContent, "overview.js");
+  assert.equal(element("current-activity").querySelector(".current-resource").textContent, "overview.js");
 });
 
 test("13b. current_session project_name does not override the current resource name", () => {
@@ -1713,8 +1625,7 @@ test("13b. current_session project_name does not override the current resource n
     elapsed_seconds: 600,
   };
   App.renderCurrentActivityElement(element("current-activity"), currentActivity, "overview");
-  const resource = element("current-activity").querySelector(".current-resource");
-  assert.equal(resource.textContent, "license-draft.docx");
+  assert.equal(element("current-activity").querySelector(".current-resource").textContent, "license-draft.docx");
 });
 
 test("13c. current activity uses current_live when clock is live", () => {
@@ -1740,23 +1651,14 @@ test("13c. current activity uses current_live when clock is live", () => {
     elapsed_seconds: 300,
   };
   App.renderCurrentActivityElement(element("current-activity"), currentActivity, "overview");
-  const resource = element("current-activity").querySelector(".current-resource");
-  assert.equal(resource.textContent, "editing.md");
+  assert.equal(element("current-activity").querySelector(".current-resource").textContent, "editing.md");
 });
 
 test("13d. current activity with no navigation target is truly disabled", () => {
   const { App, element } = overviewHarness();
   const bundle = {
-    current_activity: {
-      active: true,
-      status: "normal",
-      resource_name: "doc.txt",
-      app_name: "Editor",
-      project_name: "P",
-      is_uncategorized: false,
-      elapsed_seconds: 60,
-    },
-    current_session: null, // No navigable session.
+    current_activity: { active: true, status: "normal", resource_name: "doc.txt", app_name: "Editor", project_name: "P", is_uncategorized: false, elapsed_seconds: 60 },
+    current_session: null,
     recent: [],
     project_distribution: { total_seconds: 0, segments: [] },
     today_total_seconds: 0,
@@ -1770,19 +1672,8 @@ test("13d. current activity with no navigation target is truly disabled", () => 
 test("13e. current activity with navigation target is enabled and wired", () => {
   const { App, element } = overviewHarness();
   const bundle = {
-    current_activity: {
-      active: true,
-      status: "normal",
-      resource_name: "doc.txt",
-      app_name: "Editor",
-      project_name: "P",
-      is_uncategorized: false,
-      elapsed_seconds: 60,
-    },
-    current_session: {
-      projection_instance_key: "key-1",
-      start_time: "2026-07-22T10:00:00",
-    },
+    current_activity: { active: true, status: "normal", resource_name: "doc.txt", app_name: "Editor", project_name: "P", is_uncategorized: false, elapsed_seconds: 60 },
+    current_session: { projection_instance_key: "key-1", start_time: "2026-07-22T10:00:00" },
     recent: [],
     project_distribution: { total_seconds: 0, segments: [] },
     today_total_seconds: 0,
@@ -1793,179 +1684,76 @@ test("13e. current activity with navigation target is enabled and wired", () => 
   assert.equal(typeof btn.onclick, "function", "button must have an onclick handler");
 });
 
-test("13e2. paused state disables current button even with a current_session", () => {
-  const { App, element } = overviewHarness();
-  const bundle = {
-    current_activity: {
-      active: true,
-      status: "paused",
-      resource_name: "stale.md",
-      app_name: "Editor",
-      project_name: "P",
-      elapsed_seconds: 999,
-    },
-    current_session: {
-      projection_instance_key: "key-1",
-      start_time: "2026-07-22T10:00:00",
-    },
-    recent: [],
-    project_distribution: { total_seconds: 0, segments: [] },
-    today_total_seconds: 0,
-  };
-  App.showOverview(bundle);
-  const btn = element("current-activity");
-  assert.equal(btn.disabled, true, "button must be disabled when status is paused");
-  assert.equal(btn.onclick, null, "paused button must not have an onclick handler");
-});
-
-test("13e3. idle state disables current button even with a current_session", () => {
-  const { App, element } = overviewHarness();
-  const bundle = {
-    current_activity: {
-      active: true,
-      status: "idle",
-      resource_name: "old.md",
-      app_name: "Editor",
-      elapsed_seconds: 999,
-    },
-    current_session: {
-      projection_instance_key: "key-1",
-      start_time: "2026-07-22T10:00:00",
-    },
-    recent: [],
-    project_distribution: { total_seconds: 0, segments: [] },
-    today_total_seconds: 0,
-  };
-  App.showOverview(bundle);
-  const btn = element("current-activity");
-  assert.equal(btn.disabled, true, "button must be disabled when status is idle");
-  assert.equal(btn.onclick, null, "idle button must not have an onclick handler");
-});
-
-test("13e4. excluded state disables current button even with a current_session", () => {
-  const { App, element } = overviewHarness();
-  const bundle = {
-    current_activity: {
-      active: true,
-      status: "excluded",
-      resource_name: "secret.xlsx",
-      app_name: "Excel",
-      project_name: "Confidential",
-      elapsed_seconds: 500,
-    },
-    current_session: {
-      projection_instance_key: "key-1",
-      start_time: "2026-07-22T10:00:00",
-    },
-    recent: [],
-    project_distribution: { total_seconds: 0, segments: [] },
-    today_total_seconds: 0,
-  };
-  App.showOverview(bundle);
-  const btn = element("current-activity");
-  assert.equal(btn.disabled, true, "button must be disabled when status is excluded");
-  assert.equal(btn.onclick, null, "excluded button must not have an onclick handler");
-});
-
-test("13e5. error state disables current button even with a current_session", () => {
-  const { App, element } = overviewHarness();
-  const bundle = {
-    current_activity: {
-      active: true,
-      status: "error",
-      resource_name: "stale.md",
-      app_name: "Editor",
-      elapsed_seconds: 999,
-    },
-    current_session: {
-      projection_instance_key: "key-1",
-      start_time: "2026-07-22T10:00:00",
-    },
-    recent: [],
-    project_distribution: { total_seconds: 0, segments: [] },
-    today_total_seconds: 0,
-  };
-  App.showOverview(bundle);
-  const btn = element("current-activity");
-  assert.equal(btn.disabled, true, "button must be disabled when status is error");
-  assert.equal(btn.onclick, null, "error button must not have an onclick handler");
-});
+for (const [name, status, resource] of [
+  ["13e2. paused state disables current button even with a current_session", "paused", "stale.md"],
+  ["13e3. idle state disables current button even with a current_session", "idle", "old.md"],
+  ["13e4. excluded state disables current button even with a current_session", "excluded", "secret.xlsx"],
+  ["13e5. error state disables current button even with a current_session", "error", "stale.md"],
+]) {
+  test(name, () => {
+    const { App, element } = overviewHarness();
+    App.showOverview({
+      current_activity: { active: true, status, resource_name: resource, app_name: "Editor", project_name: "P", elapsed_seconds: 999 },
+      current_session: { projection_instance_key: "key-1", start_time: "2026-07-22T10:00:00" },
+      recent: [],
+      project_distribution: { total_seconds: 0, segments: [] },
+      today_total_seconds: 0,
+    });
+    const btn = element("current-activity");
+    assert.equal(btn.disabled, true);
+    assert.equal(btn.onclick, null);
+  });
+}
 
 test("13f. paused state does not retain stale activity content", () => {
   const { App, element } = overviewHarness();
-  const currentActivity = {
-    active: true,
-    status: "paused",
-    resource_name: "should-not-show.md",
-    app_name: "Editor",
-    project_name: "P",
-    elapsed_seconds: 999,
-  };
-  App.renderCurrentActivityElement(element("current-activity"), currentActivity, "overview");
+  App.renderCurrentActivityElement(element("current-activity"), {
+    active: true, status: "paused", resource_name: "should-not-show.md", app_name: "Editor", project_name: "P", elapsed_seconds: 999,
+  }, "overview");
   const text = element("current-activity").textContent;
-  assert.equal(text.includes("已暂停"), true, "paused state must show paused title");
-  assert.equal(text.includes("should-not-show.md"), false, "paused state must not show stale resource name");
+  assert.equal(text.includes("已暂停"), true);
+  assert.equal(text.includes("should-not-show.md"), false);
 });
 
 test("13g. excluded state does not leak sensitive content", () => {
   const { App, element } = overviewHarness();
-  const currentActivity = {
-    active: true,
-    status: "excluded",
-    resource_name: "secret-financial-data.xlsx",
-    app_name: "Excel",
-    project_name: "Confidential",
-    elapsed_seconds: 500,
-  };
-  App.renderCurrentActivityElement(element("current-activity"), currentActivity, "overview");
+  App.renderCurrentActivityElement(element("current-activity"), {
+    active: true, status: "excluded", resource_name: "secret-financial-data.xlsx", app_name: "Excel", project_name: "Confidential", elapsed_seconds: 500,
+  }, "overview");
   const text = element("current-activity").textContent;
-  assert.equal(text.includes("已排除"), true, "excluded state must show excluded title");
-  assert.equal(text.includes("secret-financial-data.xlsx"), false, "excluded state must not leak real resource name");
-  assert.equal(text.includes("Confidential"), false, "excluded state must not leak real project name");
+  assert.equal(text.includes("已排除"), true);
+  assert.equal(text.includes("secret-financial-data.xlsx"), false);
+  assert.equal(text.includes("Confidential"), false);
 });
 
 test("13h. error state does not retain stale activity content", () => {
   const { App, element } = overviewHarness();
-  const currentActivity = {
-    active: true,
-    status: "error",
-    resource_name: "stale-resource.md",
-    app_name: "Editor",
-    project_name: "P",
-    elapsed_seconds: 999,
-  };
-  App.renderCurrentActivityElement(element("current-activity"), currentActivity, "overview");
+  App.renderCurrentActivityElement(element("current-activity"), {
+    active: true, status: "error", resource_name: "stale-resource.md", app_name: "Editor", project_name: "P", elapsed_seconds: 999,
+  }, "overview");
   const text = element("current-activity").textContent;
-  assert.equal(text.includes("无法识别"), true, "error state must show error title");
-  assert.equal(text.includes("stale-resource.md"), false, "error state must not show stale resource name");
+  assert.equal(text.includes("无法识别"), true);
+  assert.equal(text.includes("stale-resource.md"), false);
 });
 
 test("13i. idle state shows idle title, not stale resource", () => {
   const { App, element } = overviewHarness();
-  const currentActivity = {
-    active: true,
-    status: "idle",
-    resource_name: "old-resource.md",
-    app_name: "Editor",
-    elapsed_seconds: 999,
-  };
-  App.renderCurrentActivityElement(element("current-activity"), currentActivity, "overview");
+  App.renderCurrentActivityElement(element("current-activity"), {
+    active: true, status: "idle", resource_name: "old-resource.md", app_name: "Editor", elapsed_seconds: 999,
+  }, "overview");
   const text = element("current-activity").textContent;
-  assert.equal(text.includes("空闲"), true, "idle state must show idle title");
-  assert.equal(text.includes("old-resource.md"), false, "idle state must not show stale resource name");
+  assert.equal(text.includes("空闲"), true);
+  assert.equal(text.includes("old-resource.md"), false);
 });
 
 test("13j. no active snapshot shows no-activity state, not stale content", () => {
   const { App, element } = overviewHarness();
-  const currentActivity = {
-    active: false,
-    status: "normal",
-    resource_name: "should-not-appear.md",
-  };
-  App.renderCurrentActivityElement(element("current-activity"), currentActivity, "overview");
+  App.renderCurrentActivityElement(element("current-activity"), {
+    active: false, status: "normal", resource_name: "should-not-appear.md",
+  }, "overview");
   const text = element("current-activity").textContent;
-  assert.equal(text.includes("当前没有活动"), true, "inactive state must show no-activity title");
-  assert.equal(text.includes("should-not-appear.md"), false, "inactive state must not show stale resource name");
+  assert.equal(text.includes("当前没有活动"), true);
+  assert.equal(text.includes("should-not-appear.md"), false);
 });
 
 test("13k. recent records keep a stable three-child structure, live metadata, and Timeline intent", () => {
@@ -1982,21 +1770,15 @@ test("13k. recent records keep a stable three-child structure, live metadata, an
         const indexMatch = row.attributes.match(/\bdata-recent-index="([^"]+)"/);
         const listeners = {};
         return {
-          getAttribute(name) {
-            return name === "data-recent-index" && indexMatch ? indexMatch[1] : null;
-          },
+          getAttribute(name) { return name === "data-recent-index" && indexMatch ? indexMatch[1] : null; },
           addEventListener(name, handler) { listeners[name] = handler; },
           click() { if (listeners.click) listeners.click(); },
         };
       });
     },
   });
-  recentList.querySelectorAll = (selector) => (
-    selector === "[data-recent-index]" ? boundButtons : []
-  );
-  App.computeClockDurationNow = (clock) => (
-    clock.aggregate_base_seconds + clock.elapsed_seconds_at_sample
-  );
+  recentList.querySelectorAll = (selector) => selector === "[data-recent-index]" ? boundButtons : [];
+  App.computeClockDurationNow = (clock) => clock.aggregate_base_seconds + clock.elapsed_seconds_at_sample;
   let switchedPage = "";
   App.switchPage = (page) => { switchedPage = page; };
   const bundle = {
@@ -2012,7 +1794,7 @@ test("13k. recent records keep a stable three-child structure, live metadata, an
   };
   App.showOverview(bundle);
   const rows = topLevelElements(recentHtml);
-  assert.equal(rows.length, 3, "all three recent records must render");
+  assert.equal(rows.length, 3);
   const rowChildren = rows.map((row) => topLevelElements(row.innerHTML));
   rowChildren.forEach((children, index) => {
     assert.equal(children.length, 3, `row ${index} must have exactly three direct children`);
@@ -2020,21 +1802,14 @@ test("13k. recent records keep a stable three-child structure, live metadata, an
     assert.deepEqual(classTokens(children[1]), ["recent-main"]);
     assert.deepEqual(classTokens(children[2]), ["numeric", "recent-duration"]);
   });
-
   const titleLines = rowChildren.map((children) => topLevelElements(children[1].innerHTML)[0]);
   assert.deepEqual(classTokens(titleLines[0]), ["recent-title-line"]);
-  assert.deepEqual(
-    topLevelElements(titleLines[0].innerHTML).map(classTokens),
-    [["recent-project"]],
-    "in-progress state must not add a visible badge to the title line"
-  );
-  assert.equal(topLevelElements(titleLines[1].innerHTML).length, 1);
-  assert.equal(topLevelElements(titleLines[2].innerHTML).length, 1);
+  assert.deepEqual(topLevelElements(titleLines[0].innerHTML).map(classTokens), [["recent-project"]]);
   assert.equal(recentHtml.includes("recent-status"), false);
   assert.equal(recentHtml.includes("进行中"), false);
-  assert.equal(recentHtml.includes("待整理"), false, "attention badge must not appear in recent");
+  assert.equal(recentHtml.includes("待整理"), false);
   assert.equal(recentHtml.includes('class="recent-description derived"'), true);
-  assert.equal(recentHtml.includes("自动摘要"), false, "derived label is supplied by CSS, not duplicated in markup");
+  assert.equal(recentHtml.includes("自动摘要"), false);
   assert.equal(recentHtml.includes("WorkTrace"), true);
   assert.equal(recentHtml.includes("未归类"), true);
   assert.equal(recentHtml.includes("Project B"), true);
@@ -2061,7 +1836,7 @@ test("13k2. empty project distribution clears and hides the bar", () => {
   });
   assert.equal(bar.hidden, true);
   assert.equal(bar.innerHTML, "");
-  assert.deepEqual(bar.style, {}, "empty rendering must not leave container sizing styles");
+  assert.deepEqual(bar.style, {});
 });
 
 test("13k3. project distribution renders project, uncategorized, and other segments safely", () => {
@@ -2086,17 +1861,17 @@ test("13k3. project distribution renders project, uncategorized, and other segme
   assert.equal(bar.innerHTML.includes('style="flex-grow: 9000"'), true);
   assert.equal(bar.innerHTML.includes('style="flex-grow: 4500"'), true);
   assert.equal(bar.innerHTML.includes('style="flex-grow: 3600"'), true);
-  assert.equal(bar.innerHTML.includes("&lt;WorkTrace&gt;"), true, "project label must be escaped");
-  assert.equal(bar.innerHTML.includes("<WorkTrace>"), false, "raw project markup must not be injected");
-  assert.equal(bar.innerHTML.includes("2.5 h"), true, "hours must use one decimal place");
-  assert.equal(bar.innerHTML.includes("1.3 h"), true, "uncategorized hours must use one decimal place");
-  assert.equal(bar.innerHTML.includes("1.0 h"), true, "other hours must use one decimal place");
+  assert.equal(bar.innerHTML.includes("&lt;WorkTrace&gt;"), true);
+  assert.equal(bar.innerHTML.includes("<WorkTrace>"), false);
+  assert.equal(bar.innerHTML.includes("2.5 h"), true);
+  assert.equal(bar.innerHTML.includes("1.3 h"), true);
+  assert.equal(bar.innerHTML.includes("1.0 h"), true);
   assert.equal(bar.innerHTML.includes("rank-1"), true);
   assert.equal(bar.innerHTML.includes("is-uncategorized"), true);
   assert.equal(bar.innerHTML.includes("is-other"), true);
   assert.equal(bar.innerHTML.includes('title="&lt;WorkTrace&gt; · 02:30:00"'), true);
   assert.equal(bar.innerHTML.includes('aria-label="未归类，01:15:00"'), true);
-  assert.equal(bar.innerHTML.includes("<button"), false, "distribution segments must not be interactive");
+  assert.equal(bar.innerHTML.includes("<button"), false);
 
   App.showOverview({
     current_activity: { active: false, status: "normal" },
@@ -2104,29 +1879,22 @@ test("13k3. project distribution renders project, uncategorized, and other segme
     recent: [],
     project_distribution: {
       total_seconds: 0,
-      segments: [
-        { key: "invalid", label: "Invalid", duration_seconds: "12; color: red", is_uncategorized: false, is_other: false },
-      ],
+      segments: [{ key: "invalid", label: "Invalid", duration_seconds: "12; color: red", is_uncategorized: false, is_other: false }],
     },
     today_total_seconds: 0,
   });
   assert.equal(bar.innerHTML.includes('style="flex-grow: 1"'), true);
-  assert.equal(bar.innerHTML.includes("12; color: red"), false, "raw duration text must never enter style output");
+  assert.equal(bar.innerHTML.includes("12; color: red"), false);
 });
 
 test("13l. current activity 5 min and recent record 25 min can both display", () => {
   const { App, element } = overviewHarness();
-  // Deterministic clock stub: returns elapsed_seconds_at_sample directly
-  // without real-time delta so the test does not depend on wall-clock drift.
   App.computeClockDurationNow = function (clock) {
     var accepted = App.validateLiveClock(clock);
     if (!accepted || accepted.duration_semantic === "static_closed") return null;
     var elapsed = accepted.elapsed_seconds_at_sample;
-    return accepted.duration_semantic === "aggregate_live"
-      ? accepted.aggregate_base_seconds + elapsed
-      : elapsed;
+    return accepted.duration_semantic === "aggregate_live" ? accepted.aggregate_base_seconds + elapsed : elapsed;
   };
-  // Live clock for current activity (5 minutes = 300s).
   App.getActiveLiveClock = () => ({
     sampled_at_epoch_ms: 1000000,
     started_at_epoch_ms: 700000,
@@ -2142,35 +1910,26 @@ test("13l. current activity 5 min and recent record 25 min can both display", ()
     current_activity: { active: true, status: "normal", resource_name: "editing.md", app_name: "Editor", project_name: "P", is_uncategorized: false, elapsed_seconds: 300 },
     current_session: { projection_instance_key: "live-key", start_time: "2026-07-22T10:00:00" },
     recent: [
-      // 25 minutes = 1500s, aggregate_live.
       { projection_instance_key: "live-key", start_time: "2026-07-22T10:00:00", project_name: "WorkTrace", display_description: "起草", duration_seconds: 1500, is_in_progress: true, needs_attention: false, live_clock: { sampled_at_epoch_ms: 1000000, started_at_epoch_ms: 0, elapsed_seconds_at_sample: 1500, aggregate_base_seconds: 0, duration_semantic: "aggregate_live", is_live: true, live_state: "persisted_open", display_span_id: "span:agg", stable_live_key_hash: "agg" } },
     ],
     project_distribution: { total_seconds: 1500, segments: [] },
     today_total_seconds: 1500,
   };
-  // This must render both durations independently on different DOM targets.
   App.showOverview(bundle);
-  // Current activity card: 5 minutes (current_live).
-  const currentDuration = element("current-activity").querySelector(".current-duration");
-  assert.equal(currentDuration.textContent, "00:05:00", "current activity card must show 5 minutes");
-  // Recent record: 25 minutes (aggregate_live).
-  const recentHtml = element("recent-list").innerHTML;
-  assert.equal(recentHtml.includes("00:25:00"), true, "recent record must show 25 minutes");
+  assert.equal(element("current-activity").querySelector(".current-duration").textContent, "00:05:00");
+  assert.equal(element("recent-list").innerHTML.includes("00:25:00"), true);
 });
 
-test("13m. page subtitle uses authoritative module names", () => {
-  const { context } = makeBaseContext();
-  const fs = require("node:fs");
-  const path = require("node:path");
+test("13m. page headings use concise authoritative module names", () => {
   const html = fs.readFileSync(
-    path.join(__dirname, "../../worktrace/webview_ui/index.html"),
+    path.join(__dirname, "../../worktrace/webview_ui/index_fd_work_v5.html"),
     "utf8"
   );
-    assert.equal(html.includes("当前活动"), true, "index.html must include '当前活动'");
-    assert.equal(html.includes("最近记录"), true, "index.html must include '最近记录'");
-    assert.equal(html.includes("当前活动和最近记录"), true, "Overview subtitle must use the final two-module wording");
-    assert.equal(html.includes("待整理"), false, "Overview must not include a standalone attention section");
-    assert.equal(html.includes("最近活动"), false, "index.html must not use retired '最近活动' label");
+  assert.equal(html.includes("当前活动"), true);
+  assert.equal(html.includes("最近记录"), true);
+  assert.equal(html.includes("当前活动和最近记录"), false, "Overview must not repeat an explanatory subtitle");
+  assert.equal(html.includes("待整理"), false);
+  assert.equal(html.includes("最近活动"), false);
 });
 
 test("14. launch-at-login rollback is authoritative and switch mutations are independent", async () => {
@@ -2209,11 +1968,7 @@ test("14. launch-at-login rollback is authoritative and switch mutations are ind
 
   const launchPromise = App.setLaunchAtLoginEnabled(true);
   assert.equal(App.launchAtLoginWriteInProgress, true);
-  assert.equal(
-    element("settings-clipboard-toggle").disabled,
-    false,
-    "launch write must not lock clipboard toggle"
-  );
+  assert.equal(element("settings-clipboard-toggle").disabled, false, "launch write must not lock clipboard toggle");
   await App.setCaptureEnabled(true);
   assert.equal(clipboardCalls, 1, "clipboard write can proceed independently");
 

@@ -1,4 +1,4 @@
-// WorkTrace shared UI primitives: focus management, Drawer, Dialog, and Toast.
+// WorkTrace shared UI primitives: focus management, Drawer, Dialog, Toast, Tooltip.
 (function () {
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
@@ -8,8 +8,10 @@
     var dialogBody = document.getElementById("confirm-dialog-body");
     var dialogPrimary = document.getElementById("confirm-dialog-primary");
     var dialogSecondary = document.getElementById("confirm-dialog-secondary");
+    var tooltip = document.getElementById("app-tooltip");
     var dialogState = null;
     var toastTimer = null;
+    var tooltipTarget = null;
 
     function isWithinHiddenAncestor(element) {
         var node = element;
@@ -87,17 +89,63 @@
         if (options.restoreFocus !== false) restoreFocus(target);
     };
 
+    function normalizedDialogChoices(options) {
+        if (!Array.isArray(options.choices)) return [];
+        return options.choices.filter(function (choice) {
+            return choice && typeof choice.value === "string" && choice.value
+                && typeof choice.label === "string" && choice.label;
+        });
+    }
+
+    function renderDialogChoices(options) {
+        var choices = normalizedDialogChoices(options);
+        if (!choices.length) return;
+        var group = document.createElement("div");
+        group.className = "dialog-choice-group";
+        group.setAttribute("role", "radiogroup");
+        choices.forEach(function (choice) {
+            var row = document.createElement("label");
+            row.className = "dialog-choice-row";
+            var input = document.createElement("input");
+            input.type = "radio";
+            input.name = "confirm-dialog-choice";
+            input.value = choice.value;
+            var selected = dialogState.choice || options.defaultChoice || choices[0].value;
+            input.checked = choice.value === selected;
+            if (input.checked) dialogState.choice = choice.value;
+            input.addEventListener("change", function () {
+                if (input.checked && dialogState) dialogState.choice = choice.value;
+            });
+            var copy = document.createElement("span");
+            copy.className = "dialog-choice-copy";
+            var title = document.createElement("span");
+            title.className = "dialog-choice-title";
+            title.textContent = choice.label;
+            copy.appendChild(title);
+            if (choice.description) {
+                var description = document.createElement("span");
+                description.className = "field-hint";
+                description.textContent = String(choice.description);
+                copy.appendChild(description);
+            }
+            row.appendChild(input);
+            row.appendChild(copy);
+            group.appendChild(row);
+        });
+        dialogBody.appendChild(group);
+    }
+
     function renderDialogStep() {
         if (!dialogState) return;
         var options = dialogState.options;
         var second = dialogState.step === 2;
         dialogTitle.textContent = second
-            ? (options.secondTitle || "再次确认操作")
+            ? (options.secondTitle || "确认操作")
             : (options.title || "确认操作");
         dialogBody.innerHTML = "";
-        if (second) {
+        if (second && options.secondIntro) {
             var secondIntro = document.createElement("p");
-            secondIntro.textContent = options.secondIntro || "即将执行：";
+            secondIntro.textContent = options.secondIntro;
             dialogBody.appendChild(secondIntro);
         }
         if (options.objectLabel) {
@@ -112,6 +160,7 @@
             warning.textContent = options.warning;
             dialogBody.appendChild(warning);
         }
+        if (!second) renderDialogChoices(options);
         dialogSecondary.textContent = second ? "返回" : "取消";
         dialogPrimary.textContent = second
             ? (options.confirmLabel || "确认")
@@ -129,16 +178,22 @@
         dialogState = null;
         dialogLayer.hidden = true;
         restoreFocus(state.returnFocus);
-        state.resolve(!!confirmed);
+        if (!confirmed) {
+            state.resolve(false);
+            return;
+        }
+        var choices = normalizedDialogChoices(state.options);
+        state.resolve(choices.length ? (state.choice || choices[0].value) : true);
     }
 
     App.openConfirmDialog = function (options) {
-        options = options || {};
+        options = Object.assign({}, options || {});
         if (dialogState) return Promise.resolve(false);
         return new Promise(function (resolve) {
             dialogState = {
                 options: options,
                 step: 1,
+                choice: options.defaultChoice || null,
                 returnFocus: options.trigger || document.activeElement,
                 resolve: resolve
             };
@@ -148,15 +203,14 @@
     };
 
     App.openDeleteDialog = function (options) {
-        options = options || {};
         return App.openConfirmDialog(Object.assign({
             title: "确认删除",
-            secondTitle: "再次确认删除",
-            secondIntro: "即将永久删除：",
-            confirmLabel: "确认删除",
+            secondTitle: "确认删除",
+            secondIntro: "此操作不可撤销。",
+            confirmLabel: "删除",
             twoStep: true,
             danger: true
-        }, options));
+        }, options || {}));
     };
 
     if (dialogPrimary) dialogPrimary.addEventListener("click", function () {
@@ -185,15 +239,78 @@
         var toast = document.getElementById("app-toast");
         if (!toast) return;
         clearTimeout(toastTimer);
-        toast.textContent = String(message || "");
-        toast.hidden = !message;
-        if (message) toastTimer = setTimeout(function () {
+        var copy = String(message || "");
+        toast.textContent = copy;
+        toast.hidden = !copy;
+        if (copy) toastTimer = setTimeout(function () {
             toast.hidden = true;
             toast.textContent = "";
         }, 3200);
     };
 
+    function tooltipOwner(target) {
+        if (!target || !target.closest) return null;
+        return target.closest("[data-tooltip]");
+    }
+
+    function hideTooltip() {
+        tooltipTarget = null;
+        if (!tooltip) return;
+        tooltip.hidden = true;
+        tooltip.textContent = "";
+    }
+
+    function positionTooltip(target) {
+        if (!tooltip || !target || typeof target.getBoundingClientRect !== "function") return;
+        var rect = target.getBoundingClientRect();
+        var width = Number(tooltip.offsetWidth || 0);
+        var height = Number(tooltip.offsetHeight || 0);
+        var viewportWidth = Number(window.innerWidth || 10000);
+        var viewportHeight = Number(window.innerHeight || 10000);
+        var gap = 6;
+        var left = rect.left + rect.width / 2 - width / 2;
+        left = Math.max(6, Math.min(left, viewportWidth - width - 6));
+        var top = rect.bottom + gap;
+        if (top + height + 6 > viewportHeight) top = Math.max(6, rect.top - height - gap);
+        tooltip.style.left = Math.round(left) + "px";
+        tooltip.style.top = Math.round(top) + "px";
+    }
+
+    function showTooltip(target) {
+        if (!tooltip || !target || target.disabled) return;
+        var text = String(target.getAttribute("data-tooltip") || "").trim();
+        if (!text) return;
+        tooltipTarget = target;
+        tooltip.textContent = text;
+        tooltip.hidden = false;
+        positionTooltip(target);
+    }
+
+    function enteredTooltipTarget(event) {
+        var target = tooltipOwner(event.target);
+        if (target) showTooltip(target);
+    }
+
+    function leftTooltipTarget(event) {
+        var target = tooltipOwner(event.target);
+        if (!target || target !== tooltipTarget) return;
+        var related = event.relatedTarget;
+        if (related && target.contains && target.contains(related)) return;
+        hideTooltip();
+    }
+
+    document.addEventListener("mouseover", enteredTooltipTarget);
+    document.addEventListener("focusin", enteredTooltipTarget);
+    document.addEventListener("mouseout", leftTooltipTarget);
+    document.addEventListener("focusout", leftTooltipTarget);
+    if (typeof window.addEventListener === "function") {
+        window.addEventListener("scroll", hideTooltip, true);
+        window.addEventListener("resize", hideTooltip);
+    }
+    App.hideTooltip = hideTooltip;
+
     document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape") hideTooltip();
         if (dialogState) {
             if (event.key === "Escape") {
                 event.preventDefault();

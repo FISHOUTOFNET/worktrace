@@ -15,6 +15,7 @@ from . import clipboard_fact_query_service, session_boundary_service
 from .context_service import ReportContextProjection
 from .project_attribution_policy import official_project_fields, report_project_fields
 from .projection_performance import stage
+from .report_project_transition_projection import ReportProjectTransitionProjection
 from .settings_service import get_int_setting
 
 
@@ -71,9 +72,14 @@ def load_report_activity_rows(
         conn,
         activity_ids,
     )
+    with stage("project_transition_projection"):
+        transition_projected = ReportProjectTransitionProjection.build(
+            rows,
+            boundary_times=boundaries,
+        ).rows
     with stage("context_projection"):
         attributed = ReportContextProjection.build(
-            rows,
+            transition_projected,
             carry_minutes=carry_minutes,
             boundary_times=boundaries,
             clipboard_times=clipboard_times,
@@ -128,7 +134,7 @@ def _load_fact_rows(
     """Load activity fact rows overlapping ``[day_start - carry, day_end + carry]``.
 
     The carry margin only needs to cover context-anchor lookups (capped at
-    ``REPORT_CONTEXT_SHORT_MERGE_SECONDS``).  Cross-midnight activities are
+    ``REPORT_CONTEXT_SHORT_MERGE_SECONDS``). Cross-midnight activities are
     captured by the overlap predicate itself; the previous fixed 1-day-before
     / 2-days-after window loaded far more rows than context attribution needs.
 

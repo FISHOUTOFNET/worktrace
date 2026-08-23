@@ -8,20 +8,25 @@ from typing import Any, Mapping, Sequence
 
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
-from ..domain_limits import TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH
+from ..domain_limits import (
+    TIMELINE_DAY_MAX_SECONDS,
+    TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH,
+    normalize_timeline_duration_override_seconds,
+)
 from ..domain_unit_of_work import DomainUnitOfWork
 from . import (
     project_lifecycle_policy,
     report_operation_repository,
 )
 from . import report_session_operation_engine as engine
-from .report_fact_query_service import get_uncategorized_project_id
+from .report_fact_query_service import get_uncategorized_project_id, session_sort_key
+from .report_projection_builder import compute_projection_snapshot_revision
 from .report_projection_identity import member_identity_key, stable_json_hash
 from .report_projection_model import (
     DatabaseBusyError,
+    DayDurationExceedsLimitError,
     InvalidInputError,
     MutationResult,
-    OperationNoEffectError,
     OperationNotAllowedError,
     ProjectNotSelectableError,
     RequestIdConflictError,
@@ -42,6 +47,7 @@ def edit_session(
     request_id: str,
     *,
     project_id: int | None,
+    duration_touched: bool,
     adjusted_duration_seconds: int | None,
     note: str,
 ) -> MutationResult:
@@ -53,6 +59,7 @@ def edit_session(
         expected_projection_revision,
         payload_input={
             "project_id": project_id,
+            "duration_touched": duration_touched,
             "adjusted_duration_seconds": adjusted_duration_seconds,
             "note": note,
         },
@@ -177,6 +184,17 @@ def _run_uow(
     ):
         raise InvalidInputError()
     values = dict(payload_input or {})
+    if operation_type == "edit_session":
+        duration_touched = values.get("duration_touched")
+        if not isinstance(duration_touched, bool):
+            raise InvalidInputError()
+        values["adjusted_duration_seconds"] = (
+            normalize_timeline_duration_override_seconds(
+                values.get("adjusted_duration_seconds")
+            )
+            if duration_touched
+            else None
+        )
     intent = {
         "report_date": report_date,
         "operation_type": operation_type,
@@ -275,10 +293,11 @@ def _run_uow(
                 conn,
                 report_date,
             )
+            project_states = _project_states(conn)
             preview = engine.replay_operations(
                 before.base_sessions,
                 [*existing, candidate],
-                _project_states(conn),
+                project_states,
             )
             diagnostic = next(
                 (
@@ -317,23 +336,62 @@ def _run_uow(
                 _insert_receipt(conn, request_id, input_signature, result)
                 return result
 
+            if _operation_requires_day_total_limit(operation_type, payload):
+                from .reported_duration_policy import reported_day_total_seconds
+
+                preview_total = reported_day_total_seconds(
+                    preview.final_entries,
+                    before.standalone_status_entries,
+                )
+                if preview_total > TIMELINE_DAY_MAX_SECONDS:
+                    raise DayDurationExceedsLimitError()
+
             _insert_operation(conn, candidate)
             _insert_members(conn, operation_id, roles)
 
-            after = build_visible_snapshot(report_date, report_date, conn=conn)
-            applied = next(
+            final_sessions = sorted(
                 (
-                    item
-                    for item in after.operation_diagnostics
-                    if item.operation_id == operation_id
+                    dict(item)
+                    for item in preview.final_entries
+                    if not bool(item.get("project_is_deleted"))
                 ),
-                None,
+                key=session_sort_key,
             )
-            if applied is None or applied.state != APPLIED:
-                reason = (
-                    applied.reason if applied is not None else "missing_diagnostic"
-                )
-                raise OperationNoEffectError(reason)
+            standalone_entries = [
+                dict(item) for item in before.standalone_status_entries
+            ]
+            final_entries = sorted(
+                [*final_sessions, *standalone_entries],
+                key=lambda item: (
+                    str(item.get("start_time") or ""),
+                    str(item.get("projection_instance_key") or ""),
+                ),
+            )
+            standalone_keys = {
+                str(item.get("projection_instance_key") or "")
+                for item in before.standalone_status_entries
+            }
+            final_contributions = [
+                *(
+                    dict(item)
+                    for item in preview.final_contributions
+                    if not bool(item.get("project_is_deleted"))
+                ),
+                *(
+                    dict(item)
+                    for item in before.final_contributions
+                    if str(item.get("projection_instance_key") or "")
+                    in standalone_keys
+                ),
+            ]
+            snapshot_revision = compute_projection_snapshot_revision(
+                report_date,
+                report_date,
+                project_states,
+                final_entries,
+                final_contributions,
+                preview.operation_diagnostics,
+            )
             result = MutationResult(
                 request_id=request_id,
                 outcome_type="operation_committed",
@@ -343,9 +401,9 @@ def _run_uow(
                     operation_type,
                     operation_id,
                     source_instance_key,
-                    after.final_sessions,
+                    final_sessions,
                 ),
-                snapshot_revision=after.snapshot_revision,
+                snapshot_revision=snapshot_revision,
             )
             _insert_receipt(conn, request_id, input_signature, result)
             uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
@@ -389,6 +447,7 @@ def _operation_input(
 
         duration = _duration_edit_payload(
             source,
+            values.get("duration_touched"),
             values.get("adjusted_duration_seconds"),
         )
         if duration is not None:
@@ -422,8 +481,11 @@ def _operation_input(
 
 def _duration_edit_payload(
     source: Mapping[str, Any],
+    duration_touched: Any,
     requested_value: Any,
 ) -> dict[str, Any] | None:
+    if duration_touched is not True:
+        return None
     has_override = bool(source.get("has_duration_override"))
     if requested_value is None:
         return {"mode": "inherit"} if has_override else None
@@ -435,14 +497,18 @@ def _duration_edit_payload(
         else source.get("duration_seconds")
         or 0
     )
-    if requested == current or requested == _rounded_editor_seconds(current):
+    if requested == current:
         return None
     return {"mode": "set", "value": requested}
 
 
-def _rounded_editor_seconds(seconds: int) -> int:
-    value = max(0, int(seconds or 0))
-    return ((value + 30) // 60) * 60
+def _operation_requires_day_total_limit(
+    operation_type: str,
+    payload: Mapping[str, Any],
+) -> bool:
+    return operation_type == "copy_session" or (
+        operation_type == "edit_session" and "duration" in payload
+    )
 
 
 def _affected_members(source: dict, summary_id: str) -> list[dict]:

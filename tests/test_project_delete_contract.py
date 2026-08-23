@@ -2,103 +2,102 @@ from __future__ import annotations
 
 import pytest
 
-from worktrace.services import system_project_service
-
 from tests.support.activity_factory import create_closed_activity
-from tests.support.application import FakeRulesCapability, build_test_bridge
 from tests.support.db_helpers import assign_activity_project, fetch_one, table_count
-from worktrace.api import project_api
+from worktrace.api import project_api, timeline_api
 from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 from worktrace.data_generation_repository import DataGenerationNamespace
 from worktrace.db import get_connection
 from worktrace.generation_clock import generation
 from worktrace.services import (
-    export_service,
     folder_rule_service,
-    project_inference_service,
+    history_mutation_job_service,
     project_service,
-    report_session_operation_service,
     rule_service,
     statistics_service,
-    timeline_service,
+    system_project_service,
 )
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 
-
-def _project_row(project_id: int) -> dict:
-    row = fetch_one("SELECT * FROM project WHERE id = ?", (project_id,))
-    assert row is not None
-    return row
+DATE = "2026-06-18"
 
 
-def _activity(project_id: int, start: str, end: str, title: str, app: str = "Word") -> int:
+def _activity(project_id: int, start: str, end: str, title: str) -> int:
     activity_id = create_closed_activity(
-        day="2026-06-18",
+        day=DATE,
         start=start,
         end=end,
-        app_name=app,
-        process_name=f"{app.casefold()}.exe",
+        app_name="Word",
+        process_name="winword.exe",
         window_title=title,
     )
     assign_activity_project(activity_id, project_id, manual=True)
     return activity_id
 
 
-def _edit_session_project(report_date: str, session: dict, project_id: int) -> None:
-    count = getattr(_edit_session_project, "_count", 0) + 1
-    setattr(_edit_session_project, "_count", count)
-    report_session_operation_service.edit_session(
-        report_date,
-        session["projection_instance_key"],
-        session["projection_revision"],
-        f"test-project-delete-{count}",
-        project_id=project_id,
-        adjusted_duration_seconds=None,
-        note="",
-    )
-
-
-def test_delete_project_soft_deletes_and_keeps_facts_rules_and_bindings_hidden(temp_db):
+def test_delete_project_physically_removes_identity_rules_and_releases_assignments(temp_db):
     project_id = project_service.create_project("Delete Me")
     keyword_id = rule_service.create_rule("Spec", project_id)
-    folder_id = folder_rule_service.create_or_update_folder_rule(r"D:\DeleteMe", project_id)
+    folder_id = folder_rule_service.create_or_update_folder_rule(r"D:\\DeleteMe", project_id)
     activity_id = _activity(project_id, "09:00:00", "09:30:00", "Spec.docx")
-    before_counts = {
-        "project": table_count("project"),
-        "activity": table_count("activity_log"),
-        "assignment": table_count("activity_project_assignment"),
-        "keyword": table_count("project_rule"),
-        "folder": table_count("folder_project_rule"),
-    }
+    before_activity_count = table_count("activity_log")
+    uncategorized_id = system_project_service.require_uncategorized_project_id()
 
     result = project_api.delete_project_for_rules(project_id)
 
-    assert result["ok"] is True
-    assert result["project"]["deleted"] is True
-    row = _project_row(project_id)
-    assert row["is_deleted"] == 1
-    assert row["is_archived"] == 1
-    assert row["enabled"] == 0
-    assert table_count("project") == before_counts["project"]
-    assert table_count("activity_log") == before_counts["activity"]
-    assert table_count("activity_project_assignment") == before_counts["assignment"]
-    assert table_count("project_rule") == before_counts["keyword"]
-    assert table_count("folder_project_rule") == before_counts["folder"]
-    assert fetch_one("SELECT id FROM project_rule WHERE id = ?", (keyword_id,)) is not None
-    assert fetch_one("SELECT id FROM folder_project_rule WHERE id = ?", (folder_id,)) is not None
+    assert result == {
+        "ok": True,
+        "project": {"id": project_id, "deleted": True},
+    }
+    assert fetch_one("SELECT id FROM project WHERE id = ?", (project_id,)) is None
+    assert fetch_one("SELECT id FROM project_rule WHERE id = ?", (keyword_id,)) is None
+    assert fetch_one("SELECT id FROM folder_project_rule WHERE id = ?", (folder_id,)) is None
+    assert table_count("activity_log") == before_activity_count
     assert fetch_one("SELECT id FROM activity_log WHERE id = ?", (activity_id,)) is not None
-    assert project_id not in {int(item["id"]) for item in project_service.list_project_bindings()}
-    assert project_id not in {int(item["id"]) for item in project_service.list_rule_target_projects()}
-    assert project_id not in {int(item["id"]) for item in project_service.list_selectable_projects()}
+    assignment = fetch_one(
+        """
+        SELECT project_id, confidence, source, is_manual,
+               suggested_project_name, source_rule_type, source_rule_id
+        FROM activity_project_assignment WHERE activity_id = ?
+        """,
+        (activity_id,),
+    )
+    assert assignment == {
+        "project_id": uncategorized_id,
+        "confidence": 100,
+        "source": "manual",
+        "is_manual": 1,
+        "suggested_project_name": None,
+        "source_rule_type": None,
+        "source_rule_id": None,
+    }
+
+
+def test_delete_project_releases_name_for_new_independent_identity(temp_db):
+    old_id = project_service.create_project("Reusable Name")
+    rule_service.create_rule("Old Rule", old_id)
+
+    assert project_api.delete_project_for_rules(old_id)["ok"] is True
+    new_id = project_service.create_project("Reusable Name")
+
+    assert new_id != old_id
+    assert project_service.get_project(old_id) is None
+    assert project_service.get_project(new_id)["name"] == "Reusable Name"
+    assert all(
+        int(row["project_id"]) != new_id
+        for row in rule_service.list_rules()
+    )
 
 
 @pytest.mark.parametrize("bad_id", [None, True, False, "1", 1.0, 0, -1, [], {}])
 def test_delete_project_rejects_invalid_ids_without_side_effects(temp_db, bad_id):
     project_id = project_service.create_project("Client")
+
     result = project_api.delete_project_for_rules(bad_id)
+
     assert result == {"ok": False, "error": "invalid_input"}
-    assert _project_row(project_id)["is_deleted"] == 0
+    assert project_service.get_project(project_id) is not None
 
 
 @pytest.mark.parametrize("name", [UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT])
@@ -108,25 +107,27 @@ def test_delete_project_rejects_system_special_projects(temp_db, name):
         if name == UNCATEGORIZED_PROJECT
         else system_project_service.require_excluded_project_id()
     )
+
     result = project_api.delete_project_for_rules(project_id)
+
     assert result == {"ok": False, "error": "system_project"}
-    assert _project_row(project_id)["is_deleted"] == 0
+    assert project_service.get_project(project_id) is not None
 
 
-def test_delete_project_update_failure_rolls_back_without_generation_change(temp_db):
-    project_id = project_service.create_project("Client")
-    rule_service.create_rule("Spec", project_id)
-    assert project_inference_service._enabled_keyword_rules()
-    before_generation = generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
-    before_rules = project_inference_service._enabled_keyword_rules()
+def test_delete_project_rolls_back_assignment_and_rule_cleanup_if_delete_fails(temp_db):
+    project_id = project_service.create_project("Rollback")
+    keyword_id = rule_service.create_rule("Spec", project_id)
+    activity_id = _activity(project_id, "09:00:00", "09:30:00", "Spec.docx")
+    before_catalog = generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
+    before_report = generation(DataGenerationNamespace.REPORT_STRUCTURE)
     with get_connection() as conn:
         conn.execute(
-            """
-            CREATE TRIGGER fail_project_soft_delete
-            BEFORE UPDATE OF is_deleted ON project
-            WHEN NEW.is_deleted = 1
+            f"""
+            CREATE TRIGGER fail_project_delete
+            BEFORE DELETE ON project
+            WHEN OLD.id = {int(project_id)}
             BEGIN
-                SELECT RAISE(ABORT, 'soft delete failed');
+                SELECT RAISE(ABORT, 'project delete failed');
             END;
             """
         )
@@ -134,102 +135,85 @@ def test_delete_project_update_failure_rolls_back_without_generation_change(temp
     result = project_api.delete_project_for_rules(project_id)
 
     assert result == {"ok": False, "error": "operation_failed"}
-    row = _project_row(project_id)
-    assert row["is_deleted"] == 0
-    assert row["is_archived"] == 0
-    assert row["enabled"] == 1
-    assert generation(DataGenerationNamespace.CLASSIFICATION_CATALOG) == before_generation
-    assert project_inference_service._enabled_keyword_rules() == before_rules
+    assert project_service.get_project(project_id) is not None
+    assert fetch_one("SELECT id FROM project_rule WHERE id = ?", (keyword_id,)) is not None
+    assignment = fetch_one(
+        "SELECT project_id, source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
+        (activity_id,),
+    )
+    assert assignment == {"project_id": project_id, "source": "manual", "is_manual": 1}
+    assert generation(DataGenerationNamespace.CLASSIFICATION_CATALOG) == before_catalog
+    assert generation(DataGenerationNamespace.REPORT_STRUCTURE) == before_report
 
 
-def test_deleted_project_session_is_suppressed_without_merging_surrounding_sessions(temp_db):
-    project_a = project_service.create_project("Project A")
-    deleted = project_service.create_project("Deleted Project")
-    first_a = _activity(project_a, "09:00:00", "09:30:00", "A1.docx")
-    deleted_activity = _activity(deleted, "09:30:00", "10:00:00", "Deleted.docx")
-    second_a = _activity(project_a, "10:00:00", "10:30:00", "A2.docx")
+def test_delete_project_fails_closed_while_owned_rule_history_job_is_active(temp_db):
+    project_id = project_service.create_project("Busy Project")
+    rule_id = rule_service.create_rule("Spec", project_id)
+    job = history_mutation_job_service.submit_rule_job(
+        "keyword",
+        rule_id,
+        kind="rule_backfill",
+        synchronous_scan_limit=0,
+    )
+    assert job["status"] in {"pending", "running"}
 
-    project_service.soft_delete_project(deleted)
+    result = project_api.delete_project_for_rules(project_id)
 
-    sessions = timeline_service.get_project_sessions_by_range("2026-06-18", "2026-06-18")
-    names = [session["project_name"] for session in sessions]
-    assert names.count("Project A") == 2
-    assert "Deleted Project" not in repr(sessions)
-    assert all(deleted_activity not in session.get("activity_ids", []) for session in sessions)
-    assert sorted([session["activity_ids"] for session in sessions]) == [[first_a], [second_a]]
+    assert result == {"ok": False, "error": "project_busy"}
+    assert project_service.get_project(project_id) is not None
+    assert fetch_one("SELECT id FROM project_rule WHERE id = ?", (rule_id,)) is not None
 
 
-def test_deleted_project_override_semantics(temp_db):
-    valid = project_service.create_project("Valid Project")
-    deleted = project_service.create_project("Deleted Project")
-    _activity(deleted, "09:00:00", "09:30:00", "Deleted.docx")
-    valid_activity = _activity(valid, "10:00:00", "10:30:00", "Valid.docx")
+def test_deleted_project_override_falls_back_to_uncategorized_but_keeps_other_edits(temp_db):
+    base_project = project_service.create_project("Base Project")
+    deleted_project = project_service.create_project("Deleted Override")
+    _activity(base_project, "09:00:00", "09:30:00", "Draft.docx")
+    source = timeline_api.get_project_sessions_by_date(DATE)[0]
 
-    deleted_session = timeline_service.get_project_sessions_by_range("2026-06-18", "2026-06-18")[1]
-    _edit_session_project("2026-06-18", deleted_session, valid)
-    valid_session = timeline_service.get_project_sessions_by_range("2026-06-18", "2026-06-18")[0]
-    _edit_session_project("2026-06-18", valid_session, deleted)
+    edit = timeline_api.save_timeline_session_edit(
+        DATE,
+        source["projection_instance_key"],
+        source["projection_revision"],
+        "delete-project-override",
+        deleted_project,
+        True,
+        720,
+        "keep this note",
+    )
+    assert edit["ok"] is True
+    assert project_api.delete_project_for_rules(deleted_project)["ok"] is True
 
-    project_service.soft_delete_project(deleted)
-
-    sessions = timeline_service.get_project_sessions_by_range("2026-06-18", "2026-06-18")
+    sessions = timeline_api.get_project_sessions_by_date(DATE)
     assert len(sessions) == 1
-    assert sessions[0]["project_name"] == "Valid Project"
-    assert sessions[0]["activity_ids"] == [valid_activity]
-    assert table_count("report_session_operation") == 2
-    assert "Deleted Project" not in repr(sessions)
+    session = sessions[0]
+    assert session["project_name"] == UNCATEGORIZED_PROJECT
+    assert session["session_note"] == "keep this note"
+    assert session["has_duration_override"] is True
+    assert session["adjusted_duration_seconds"] == 720
+    assert table_count("report_session_operation") == 1
 
 
-def test_deleted_project_is_removed_from_statistics_and_csv_export(temp_db):
-    project_a = project_service.create_project("Project A")
-    deleted = project_service.create_project("Deleted Project")
-    _activity(project_a, "09:00:00", "09:30:00", "A1.docx", app="Word")
-    _activity(deleted, "09:30:00", "10:00:00", "Deleted.docx", app="Excel")
-    _activity(project_a, "10:00:00", "10:30:00", "A2.docx", app="Word")
+def test_delete_project_preserves_reported_time_as_uncategorized(temp_db):
+    retained = project_service.create_project("Retained")
+    deleted = project_service.create_project("Deleted")
+    _activity(retained, "09:00:00", "09:30:00", "Retained.docx")
+    deleted_activity = _activity(deleted, "09:30:00", "10:00:00", "Deleted.docx")
 
-    before = statistics_service.get_summary("2026-06-18", "2026-06-18")
-    project_service.soft_delete_project(deleted)
-    after = statistics_service.get_summary("2026-06-18", "2026-06-18")
-    project_stats = statistics_service.get_project_stats("2026-06-18", "2026-06-18")
-    export_summary = statistics_service.get_statistics_export_summary("2026-06-18", "2026-06-18")
-    csv_rows = export_service.build_statistics_csv_rows("2026-06-18", "2026-06-18")
+    before = statistics_service.get_summary(DATE, DATE)
+    assert project_api.delete_project_for_rules(deleted)["ok"] is True
+    after = statistics_service.get_summary(DATE, DATE)
+    released = fetch_one(
+        "SELECT project_id, source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
+        (deleted_activity,),
+    )
 
-    assert before["total_duration"] == 5400
+    assert released == {
+        "project_id": system_project_service.require_uncategorized_project_id(),
+        "source": "manual",
+        "is_manual": 1,
+    }
+    assert before["total_duration"] == 3600
     assert after["total_duration"] == 3600
     assert after["effective_duration"] == 3600
-    assert after["classified_duration"] == 3600
-    assert after["uncategorized_duration"] == 0
-    assert {row["project"] for row in project_stats} == {"Project A"}
-    assert export_summary["total_duration_seconds"] == 3600
-    assert export_summary["activity_count"] == 2
-    assert export_summary["project_count"] == 1
-    assert "Deleted Project" not in repr(csv_rows)
-    assert sum(int(row["duration_seconds"]) for row in csv_rows) == 3600
-
-
-def test_archived_project_history_remains_reportable_as_delete_contrast(temp_db):
-    archived = project_service.create_project("Archived Project")
-    _activity(archived, "09:00:00", "09:30:00", "Archived.docx")
-
-    project_api.archive_project_for_rules(archived)
-
-    assert archived not in {int(row["id"]) for row in project_service.list_rule_target_projects()}
-    sessions = timeline_service.get_project_sessions_by_range("2026-06-18", "2026-06-18")
-    assert [session["project_name"] for session in sessions] == ["Archived Project"]
-    assert statistics_service.get_summary("2026-06-18", "2026-06-18")["total_duration"] == 1800
-
-
-def test_bridge_delete_project_uses_delete_specific_safe_messages():
-    for code, message in {
-        "invalid_input": "操作无效",
-        "not_found": "项目不存在",
-        "system_project": "系统项目不能删除",
-        "operation_failed": "删除项目失败",
-        "unknown": "删除项目失败",
-    }.items():
-        rules = FakeRulesCapability()
-        rules.delete_project_for_rules_return = {"ok": False, "error": code}
-        bridge = build_test_bridge(rules=rules)
-        result = bridge.delete_project_for_rules(1)
-        assert result == {"ok": False, "error": message}
-        assert "归档项目失败" not in repr(result)
+    assert after["classified_duration"] == 1800
+    assert after["uncategorized_duration"] == 1800

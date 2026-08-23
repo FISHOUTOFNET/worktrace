@@ -8,6 +8,8 @@ from __future__ import annotations
 from typing import Any, Protocol, runtime_checkable, TYPE_CHECKING
 
 from ..platforms.windows_startup import WindowsStartupRegistration
+from .application_lifecycle import ApplicationDataLifecycle
+from .external_project_identity import ProjectIdentityIntegrationCapability
 
 from . import (
     export_api,
@@ -56,13 +58,17 @@ class StatisticsCapability(Protocol):
 
 
 @runtime_checkable
+class ProjectCatalogCapability(Protocol):
+    def list_editing_projects(self) -> list[dict[str, Any]]: ...
+    def list_filter_projects(self) -> list[dict[str, Any]]: ...
+
+
+@runtime_checkable
 class TimelineCapability(Protocol):
     TIMELINE_NOTE_MAX_LENGTH: int
     def get_timeline_view_model(self, date, *, runtime, collector_status) -> dict[str, Any]: ...
     def get_session_activity_summary_view_model(self, *, report_date, projection_instance_key, expected_projection_revision, expected_source_version, runtime, collector_status) -> dict[str, Any]: ...
-    def list_selectable_projects(self) -> list[dict[str, Any]]: ...
-    def list_filter_projects(self) -> list[dict[str, Any]]: ...
-    def save_timeline_session_edit(self, report_date, projection_instance_key, projection_revision, request_id, project_id, adjusted_duration_seconds, note) -> dict[str, Any]: ...
+    def save_timeline_session_edit(self, report_date, projection_instance_key, projection_revision, request_id, project_id, duration_touched, adjusted_duration_seconds, note) -> dict[str, Any]: ...
     def hide_timeline_session(self, report_date, projection_instance_key, projection_revision, request_id) -> dict[str, Any]: ...
     def merge_timeline_session(self, report_date, projection_instance_key, direction, projection_revision, request_id, target_projection_instance_key, target_projection_revision) -> dict[str, Any]: ...
     def split_timeline_session(self, report_date, projection_instance_key, projection_revision, request_id) -> dict[str, Any]: ...
@@ -71,10 +77,45 @@ class TimelineCapability(Protocol):
 
 
 @runtime_checkable
+class FDWorkCapability(Protocol):
+    def bind_status_callback(self, callback) -> None: ...
+    def get_settings_status(self) -> dict[str, object]: ...
+    def set_enabled(self, enabled: bool) -> dict[str, object]: ...
+    def prepare_session(self, show_login_if_required=True) -> dict[str, Any]: ...
+
+    def prepare_window_before_start(
+        self, show_login_if_required=True
+    ) -> dict[str, Any]: ...
+
+    def on_renderer_initialized(self, renderer: str) -> None: ...
+    def open_case_picker(self, request_id) -> dict[str, Any]: ...
+    def create_bound_project(
+        self, name, description, language, selection_token
+    ) -> dict[str, Any]: ...
+    def rebind_project(
+        self, project_id, name, description, language, selection_token
+    ) -> dict[str, Any]: ...
+    def validate_case_selection(self, selection_token, expected_label) -> str: ...
+    def discard_case_selection(self, selection_token) -> None: ...
+    def bind_project(self, project_id: int, project_name: str) -> None: ...
+    def clear_project_binding(self, project_id: int) -> None: ...
+    def list_bound_project_ids(self) -> set[int]: ...
+    def clear_all_bindings(self, *, delete_database: bool = False) -> None: ...
+    def open_entry(
+        self,
+        report_date,
+        projection_instance_key,
+        expected_projection_revision,
+    ) -> dict[str, Any]: ...
+    def shutdown(self) -> None: ...
+
+
+@runtime_checkable
 class RulesCapability(Protocol):
     def list_project_bindings(self) -> list[dict[str, Any]]: ...
-    def create_project_for_rules(self, name, description, language) -> dict[str, Any]: ...
-    def update_project_for_rules(self, project_id, name, description, language) -> dict[str, Any]: ...
+    def create_project_for_rules(self, name, description, language, selection_token=None) -> dict[str, Any]: ...
+    def update_project_for_rules(self, project_id, name, description, language, selection_token=None) -> dict[str, Any]: ...
+    def clear_external_project_identity_for_rules(self, project_id) -> dict[str, Any]: ...
     def set_project_enabled_for_rules(self, project_id, enabled) -> dict[str, Any]: ...
     def set_excluded_rules_enabled(self, enabled) -> dict[str, Any]: ...
     def archive_project_for_rules(self, project_id) -> dict[str, Any]: ...
@@ -116,7 +157,10 @@ class SettingsApplicationService:
     def __init__(
         self,
         startup_registration: WindowsStartupRegistration | None = None,
+        *,
+        data_lifecycle: ApplicationDataLifecycle,
     ) -> None:
+        self._data_lifecycle = data_lifecycle
         self._startup_registration = (
             startup_registration
             if startup_registration is not None
@@ -138,7 +182,13 @@ class SettingsApplicationService:
         return settings_api.recover_database_maintenance_for_webview()
 
     def clear_all_local_data_for_webview(self, confirm_text):
-        return settings_api.clear_all_local_data_for_webview(confirm_text)
+        result = settings_api.clear_all_local_data_for_webview(confirm_text)
+        if (
+            result.get("ok") is True
+            and not self._data_lifecycle.after_local_data_cleared()
+        ):
+            result["external_state_warning"] = "外部项目关联清理失败，旧关联已在当前会话失效"
+        return result
 
     def set_launch_at_login(self, enabled):
         if enabled is not True and enabled is not False:
@@ -189,6 +239,9 @@ class SettingsApplicationService:
 class BackupApplicationService:
     """Concrete backup capability delegating to settings_api backup functions."""
 
+    def __init__(self, data_lifecycle: ApplicationDataLifecycle) -> None:
+        self._data_lifecycle = data_lifecycle
+
     def export_encrypted_backup_for_webview(self, output_path, passphrase, confirm_passphrase):
         return settings_api.export_encrypted_backup_for_webview(
             output_path, passphrase, confirm_passphrase
@@ -198,9 +251,15 @@ class BackupApplicationService:
         return settings_api.preview_encrypted_backup_manifest_for_webview(input_path)
 
     def import_encrypted_backup_for_webview(self, input_path, passphrase, confirm_text):
-        return settings_api.import_encrypted_backup_for_webview(
+        result = settings_api.import_encrypted_backup_for_webview(
             input_path, passphrase, confirm_text
         )
+        if (
+            result.get("ok") is True
+            and not self._data_lifecycle.after_database_replaced()
+        ):
+            result["external_state_warning"] = "数据库已替换，旧外部项目关联已在当前会话失效"
+        return result
 
 
 class StatisticsApplicationService:
@@ -221,8 +280,25 @@ class StatisticsApplicationService:
         )
 
 
+class ProjectCatalogApplicationService:
+    """Shared editable/filter project catalogs with optional external identity."""
+
+    def __init__(
+        self, project_identity: ProjectIdentityIntegrationCapability
+    ) -> None:
+        self._project_identity = project_identity
+
+    def list_editing_projects(self):
+        return self._project_identity.list_project_identities(
+            project_api.list_selectable_projects()
+        )
+
+    def list_filter_projects(self):
+        return timeline_api.list_filter_projects()
+
+
 class TimelineApplicationService:
-    """Concrete timeline capability delegating to timeline_api, project_api, view_model_api."""
+    """Concrete timeline capability delegating to timeline_api and view_model_api."""
 
     TIMELINE_NOTE_MAX_LENGTH = timeline_api.TIMELINE_NOTE_MAX_LENGTH
 
@@ -250,12 +326,6 @@ class TimelineApplicationService:
             collector_status=collector_status,
         )
 
-    def list_selectable_projects(self):
-        return project_api.list_selectable_projects()
-
-    def list_filter_projects(self):
-        return timeline_api.list_filter_projects()
-
     def save_timeline_session_edit(
         self,
         report_date,
@@ -263,6 +333,7 @@ class TimelineApplicationService:
         projection_revision,
         request_id,
         project_id,
+        duration_touched,
         adjusted_duration_seconds,
         note,
     ):
@@ -272,6 +343,7 @@ class TimelineApplicationService:
             projection_revision,
             request_id,
             project_id,
+            duration_touched,
             adjusted_duration_seconds,
             note,
         )
@@ -328,16 +400,36 @@ class TimelineApplicationService:
 class RulesApplicationService:
     """Concrete rules capability delegating to project_api, rule_api, rule_history_api."""
 
+    def __init__(
+        self, project_identity: ProjectIdentityIntegrationCapability
+    ) -> None:
+        self._project_identity = project_identity
+
     def list_project_bindings(self):
-        return project_api.list_project_bindings()
-
-    def create_project_for_rules(self, name, description, language):
-        return project_api.create_project_for_rules(name, description, language)
-
-    def update_project_for_rules(self, project_id, name, description, language):
-        return project_api.update_project_for_rules(
-            project_id, name, description, language
+        return self._project_identity.list_project_identities(
+            project_api.list_project_bindings()
         )
+
+    def create_project_for_rules(
+        self, name, description, language, external_identity_proof=None
+    ):
+        return self._project_identity.create_project(
+            name, description, language, external_identity_proof
+        )
+
+    def update_project_for_rules(
+        self, project_id, name, description, language, external_identity_proof=None
+    ):
+        return self._project_identity.update_project(
+            int(project_id),
+            name,
+            description,
+            language,
+            external_identity_proof,
+        )
+
+    def clear_external_project_identity_for_rules(self, project_id):
+        return self._project_identity.clear_project_identity(int(project_id))
 
     def set_project_enabled_for_rules(self, project_id, enabled):
         return project_api.set_project_enabled_for_rules(project_id, enabled)
@@ -349,7 +441,12 @@ class RulesApplicationService:
         return project_api.archive_project_for_rules(project_id)
 
     def delete_project_for_rules(self, project_id):
-        return project_api.delete_project_for_rules(project_id)
+        result = project_api.delete_project_for_rules(project_id)
+        if result.get("ok") is True:
+            result["external_identity_binding"] = (
+                self._project_identity.after_project_deleted(int(project_id))
+            )
+        return result
 
     def set_project_rule_enabled(self, rule_type, rule_id, enabled):
         return rule_api.set_project_rule_enabled(rule_type, rule_id, enabled)
@@ -400,8 +497,11 @@ class RulesApplicationService:
 __all__ = [
     "BackupApplicationService",
     "BackupCapability",
+    "FDWorkCapability",
     "OverviewApplicationService",
     "OverviewCapability",
+    "ProjectCatalogApplicationService",
+    "ProjectCatalogCapability",
     "RulesApplicationService",
     "RulesCapability",
     "SettingsApplicationService",

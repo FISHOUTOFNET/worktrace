@@ -190,16 +190,15 @@
         App.mutationOwner = null;
         App.mutationState = "idle";
         App.detailsInFlight = {};
-        App.projectsCache = null;
-        App.projectsLoading = false;
-        App.projectsLoadPromise = null;
+        if (App.projectCatalog && typeof App.projectCatalog.resetGeneration === "function") {
+            App.projectCatalog.resetGeneration();
+        }
         App.statisticsAcceptedPayload = null;
         App.rulesLoadPromise = null;
         App.refreshCheckInFlight = false;
         App.activePageRefreshInFlight = false;
         App.activePageRefreshPromise = null;
         App.activePageRefreshPending = null;
-        App.reconcileInFlight = false;
         for (var key in sharedPromises) delete sharedPromises[key];
         for (var channel in requestSequences) requestSequences[channel] += 1;
         return App.dataEpoch;

@@ -6,6 +6,9 @@ import threading
 from pathlib import Path
 from typing import Callable
 
+from .. import PRODUCT_DISPLAY_NAME, PRODUCT_NAME
+from .windows_icons import load_icon_variant
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,17 +26,23 @@ class WindowsTrayHost:
         icon_path: Path,
         on_open: Callable[[], object],
         on_exit: Callable[[], object],
+        on_session_end: Callable[[], object] | None = None,
     ) -> None:
         self._icon_path = Path(icon_path)
         self._on_open = on_open
         self._on_exit = on_exit
+        self._on_session_end = on_session_end if on_session_end is not None else on_exit
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
         self._failed = threading.Event()
         self._stop_requested = threading.Event()
+        self._session_end_requested = threading.Event()
         self._hwnd: int | None = None
+        self._active_icon_handle = None
+        self._inactive_icon_handle = None
         self._icon_handle = None
+        self._collection_active = False
         self._taskbar_created = 0
         self._deleted = False
 
@@ -46,6 +55,7 @@ class WindowsTrayHost:
                 self._failed.set()
                 return False
             self._stop_requested.clear()
+            self._session_end_requested.clear()
             self._thread = threading.Thread(
                 target=self._run,
                 name="WorkTraceWindowsTray",
@@ -75,6 +85,28 @@ class WindowsTrayHost:
         if thread is not threading.current_thread():
             thread.join(timeout=5.0)
 
+    def set_collection_active(self, active: bool) -> None:
+        """Switch the notification icon without changing collector ownership."""
+
+        with self._lock:
+            active = bool(active)
+            if self._collection_active is active and self._icon_handle is not None:
+                return
+            self._collection_active = active
+            hwnd = self._hwnd
+            icon = (
+                self._active_icon_handle if active else self._inactive_icon_handle
+            )
+            if not hwnd or not icon:
+                return
+            self._icon_handle = icon
+        try:
+            import win32gui
+
+            win32gui.Shell_NotifyIcon(win32gui.NIM_MODIFY, self._notify_data())
+        except Exception:
+            logger.warning("tray collection icon update failed", exc_info=True)
+
     def show_background_notice(self) -> None:
         with self._lock:
             hwnd = self._hwnd
@@ -91,24 +123,25 @@ class WindowsTrayHost:
             flags,
             self._WM_TRAY,
             icon,
-            "WorkTrace",
-            "WorkTrace 仍在后台记录，可右键通知区域图标退出。",
+            PRODUCT_DISPLAY_NAME,
+            f"{PRODUCT_NAME} 仍在后台记录，可右键通知区域图标退出。",
             5000,
-            "WorkTrace",
+            PRODUCT_DISPLAY_NAME,
         )
         win32gui.Shell_NotifyIcon(win32gui.NIM_MODIFY, data)
 
     def _notify_data(self):
         import win32gui
 
-        return (
-            self._hwnd,
-            0,
-            win32gui.NIF_ICON | win32gui.NIF_MESSAGE | win32gui.NIF_TIP,
-            self._WM_TRAY,
-            self._icon_handle,
-            "WorkTrace",
-        )
+        with self._lock:
+            return (
+                self._hwnd,
+                0,
+                win32gui.NIF_ICON | win32gui.NIF_MESSAGE | win32gui.NIF_TIP,
+                self._WM_TRAY,
+                self._icon_handle,
+                PRODUCT_DISPLAY_NAME,
+            )
 
     def _add_icon(self) -> None:
         import win32gui
@@ -127,6 +160,23 @@ class WindowsTrayHost:
         except Exception:
             logger.warning("tray icon deletion failed", exc_info=True)
 
+    def _destroy_icon_handles(self) -> None:
+        with self._lock:
+            handles = [self._active_icon_handle, self._inactive_icon_handle]
+            self._active_icon_handle = None
+            self._inactive_icon_handle = None
+            self._icon_handle = None
+        try:
+            import win32gui
+
+            for handle in dict.fromkeys(handle for handle in handles if handle):
+                try:
+                    win32gui.DestroyIcon(handle)
+                except Exception:
+                    logger.debug("tray icon handle cleanup failed", exc_info=True)
+        except Exception:
+            logger.debug("tray icon cleanup unavailable", exc_info=True)
+
     def _run(self) -> None:
         try:
             import win32api
@@ -139,6 +189,8 @@ class WindowsTrayHost:
                 self._WM_STOP: self._on_stop,
                 win32con.WM_COMMAND: self._on_command,
                 win32con.WM_DESTROY: self._on_destroy,
+                win32con.WM_QUERYENDSESSION: self._on_query_end_session,
+                win32con.WM_ENDSESSION: self._on_end_session,
                 self._taskbar_created: self._on_taskbar_created,
             }
             class_name = f"WorkTraceTrayHost_{id(self)}"
@@ -149,7 +201,7 @@ class WindowsTrayHost:
             win32gui.RegisterClass(wc)
             self._hwnd = win32gui.CreateWindow(
                 class_name,
-                "WorkTrace Tray Host",
+                "Trace Tray Host",
                 0,
                 0,
                 0,
@@ -160,14 +212,20 @@ class WindowsTrayHost:
                 wc.hInstance,
                 None,
             )
-            self._icon_handle = win32gui.LoadImage(
-                0,
-                str(self._icon_path),
-                win32con.IMAGE_ICON,
-                0,
-                0,
-                win32con.LR_LOADFROMFILE | win32con.LR_DEFAULTSIZE,
+            self._active_icon_handle = load_icon_variant(
+                self._icon_path,
+                active=True,
             )
+            self._inactive_icon_handle = load_icon_variant(
+                self._icon_path,
+                active=False,
+            )
+            with self._lock:
+                self._icon_handle = (
+                    self._active_icon_handle
+                    if self._collection_active
+                    else self._inactive_icon_handle
+                )
             self._add_icon()
             self._ready.set()
             if self._stop_requested.is_set():
@@ -181,9 +239,9 @@ class WindowsTrayHost:
             self._ready.set()
         finally:
             self._delete_icon()
+            self._destroy_icon_handles()
             with self._lock:
                 self._hwnd = None
-                self._icon_handle = None
 
     def _on_tray_message(self, hwnd, _msg, _wparam, lparam):
         import win32con
@@ -201,9 +259,9 @@ class WindowsTrayHost:
 
         menu = win32gui.CreatePopupMenu()
         try:
-            win32gui.AppendMenu(menu, win32con.MF_STRING, self._CMD_OPEN, "打开 WorkTrace")
+            win32gui.AppendMenu(menu, win32con.MF_STRING, self._CMD_OPEN, f"打开 {PRODUCT_NAME}")
             win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
-            win32gui.AppendMenu(menu, win32con.MF_STRING, self._CMD_EXIT, "退出 WorkTrace")
+            win32gui.AppendMenu(menu, win32con.MF_STRING, self._CMD_EXIT, f"退出 {PRODUCT_NAME}")
             x, y = win32gui.GetCursorPos()
             win32gui.SetForegroundWindow(hwnd)
             win32gui.TrackPopupMenu(
@@ -225,6 +283,32 @@ class WindowsTrayHost:
             self._on_open()
         elif command == self._CMD_EXIT:
             self._on_exit()
+        return 0
+
+    def _request_session_end(self) -> None:
+        if self._session_end_requested.is_set():
+            return
+        self._session_end_requested.set()
+
+        def request_exit() -> None:
+            try:
+                self._on_session_end()
+            except Exception:
+                logger.exception("Windows session-end shutdown callback failed")
+
+        threading.Thread(
+            target=request_exit,
+            name="WorkTraceSessionEnd",
+            daemon=True,
+        ).start()
+
+    def _on_query_end_session(self, _hwnd, _msg, _wparam, _lparam):
+        self._request_session_end()
+        return 1
+
+    def _on_end_session(self, _hwnd, _msg, wparam, _lparam):
+        if int(wparam):
+            self._request_session_end()
         return 0
 
     def _on_taskbar_created(self, _hwnd, _msg, _wparam, _lparam):

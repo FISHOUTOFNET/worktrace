@@ -160,6 +160,7 @@ def test_all_derived_workers_are_blocking_entrypoints_without_lifecycle_ownershi
             "run_activity_resource_repair_worker",
         ),
         ("worktrace/services/recovery_service.py", "run_startup_recovery_worker"),
+        ("worktrace/runtime/collector_supervisor.py", "run_worker"),
     )
     for relative, function_name in workers:
         definition = _function(relative, function_name)
@@ -187,6 +188,8 @@ def test_worker_registry_is_declarative_and_single_owned() -> None:
     assert "self._worker_specs" in runtime
     assert "self._worker_handles" in runtime
     assert "thread.is_alive()" not in runtime
+    assert '"collector_supervisor": WorkerSpec(' in runtime
+    assert "target=self.collector_supervisor.run_worker" in runtime
     for legacy_member in (
         "_index_thread",
         "_history_thread",
@@ -198,6 +201,7 @@ def test_worker_registry_is_declarative_and_single_owned() -> None:
 
     init = _method("worktrace/runtime/app_runtime.py", "AppRuntime", "__init__")
     assert "WorkerHealthRegistry" in _called_names(init)
+    assert "CollectorSupervisor" in _called_names(init)
     start = _method("worktrace/runtime/app_runtime.py", "AppRuntime", "_start_worker")
     assert "Thread" in _called_names(start)
     assert "ready_event" in runtime

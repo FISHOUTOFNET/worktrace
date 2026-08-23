@@ -86,6 +86,7 @@ def _samples_match(
     database_key: str,
     replacement_epoch: int,
     open_activity_id: int | None,
+    allow_unpersisted_runtime: bool = False,
 ) -> bool:
     if sample_a.revision != sample_b.revision:
         return False
@@ -101,7 +102,11 @@ def _samples_match(
         return False
     if sample_b.snapshot is None:
         return open_activity_id is None
-    return runtime_id is not None and runtime_id == open_activity_id
+    if runtime_id is not None:
+        return runtime_id == open_activity_id
+    if not allow_unpersisted_runtime or open_activity_id is not None:
+        return False
+    return sample_b.snapshot.get("is_persisted") is not True
 
 
 def _log_mismatch_once(
@@ -128,8 +133,17 @@ def _log_mismatch_once(
 
 
 @contextmanager
-def page_read_scope() -> Iterator[PageReadContext]:
-    """Bind one verified query-only SQLite snapshot and runtime sample."""
+def page_read_scope(
+    *,
+    allow_unpersisted_runtime: bool = False,
+) -> Iterator[PageReadContext]:
+    """Bind one verified query-only SQLite snapshot and runtime sample.
+
+    ``allow_unpersisted_runtime`` is an explicit read-model opt-in for callers
+    such as realtime Statistics that can safely project a stable transient
+    runtime sample without creating a durable activity row. The default keeps
+    the stricter runtime/SQLite ownership contract used by all other pages.
+    """
 
     existing = current_page_read_context()
     if existing is not None:
@@ -157,6 +171,7 @@ def page_read_scope() -> Iterator[PageReadContext]:
                 database_key=database_key,
                 replacement_epoch=replacement_epoch,
                 open_activity_id=open_id,
+                allow_unpersisted_runtime=allow_unpersisted_runtime,
             ):
                 accepted = (conn, sample_b, generations, open_id)
                 break

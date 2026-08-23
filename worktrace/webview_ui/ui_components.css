@@ -1,0 +1,386 @@
+/* Shared UI primitive presentation plus narrow final consistency overrides. Structural feature layout stays in styles.css. */
+#app-tooltip {
+    position: fixed;
+    z-index: 90;
+    max-width: min(320px, calc(100vw - 12px));
+    padding: 3px 6px;
+    color: #fff;
+    background: #24313a;
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-flyout);
+    white-space: nowrap;
+    font-size: var(--font-size-xs);
+    font-weight: 400;
+    line-height: 1.35;
+    pointer-events: none;
+}
+
+/* The portal above is the only tooltip renderer. Disable the retired pseudo layer. */
+[data-tooltip]::after {
+    content: none !important;
+    display: none !important;
+}
+
+.dialog-choice-group {
+    display: grid;
+    gap: 8px;
+    margin-top: 8px;
+}
+.dialog-choice-row {
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr);
+    gap: 8px;
+    align-items: start;
+    text-align: left;
+}
+.dialog-choice-row input {
+    width: 14px;
+    height: 14px;
+    min-height: 0;
+    margin: 2px 0 0;
+}
+.dialog-choice-copy {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+    line-height: 1.35;
+}
+.dialog-choice-title { font-weight: 500; }
+
+.page-header-compact { align-items: center; }
+
+/* Final cross-page visual consistency layer. */
+:root {
+    --record-start-time-width: 52px;
+    --font-sans: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+}
+
+body { font-synthesis: none; }
+
+.page-header h1,
+.nav-item.active,
+.topbar-context,
+th,
+.tabs button[aria-selected="true"],
+.tabs button.is-active,
+.current-label,
+.overview-project-hours,
+.recent-project,
+.timeline-item-project,
+.quick-ranges button[aria-pressed="true"],
+.rules-project-title,
+.settings-categories button[aria-current="true"] {
+    font-weight: 700;
+}
+
+.recent-start-time,
+.timeline-item-time {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+}
+
+.timeline-item {
+    grid-template-columns: var(--record-start-time-width) minmax(0, 1fr) var(--record-duration-width);
+}
+.timeline-item-time { width: var(--record-start-time-width); }
+.timeline-item-side,
+.timeline-item-duration { width: var(--record-duration-width); }
+
+.rules-row { font-size: var(--font-size-md); }
+.rules-kind-badge,
+.rules-detail { font-size: inherit; }
+
+.setting-row small { font-size: var(--font-size-sm); }
+
+#rules-panel-project-section:not(:has(#rules-panel-fd-work-picker:not([hidden]))) > label.field:first-child {
+    grid-column: 1 / -1;
+}
+
+.metric-strip {
+    border-width: 0;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+/* Statistics keeps the native date input and its picker indicator in every
+   range mode. The controlled overlay masks Chromium's locale-dependent empty
+   segments without changing the input type or date-picker behavior. */
+.statistics-date-control-shell {
+    position: relative;
+    width: var(--date-control-width);
+    min-width: var(--date-control-width);
+    font: var(--font-size-md)/var(--line-height-normal) var(--font-sans);
+    font-weight: 400;
+}
+.statistics-date-control-shell .date-control {
+    width: 100%;
+    min-width: 100%;
+    font: inherit;
+}
+.statistics-date-empty-label {
+    position: absolute;
+    z-index: 1;
+    left: 9px;
+    right: 30px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--color-text-tertiary);
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+    white-space: nowrap;
+}
+.statistics-date-control[data-empty="false"] + .statistics-date-empty-label {
+    display: none;
+}
+.statistics-date-control[data-empty="true"]::-webkit-datetime-edit,
+.statistics-date-control[data-empty="true"]::-webkit-datetime-edit-fields-wrapper,
+.statistics-date-control[data-empty="true"]::-webkit-datetime-edit-text,
+.statistics-date-control[data-empty="true"]::-webkit-datetime-edit-month-field,
+.statistics-date-control[data-empty="true"]::-webkit-datetime-edit-day-field,
+.statistics-date-control[data-empty="true"]::-webkit-datetime-edit-year-field {
+    color: transparent;
+}
+
+.timeline-edit-panel .project-autocomplete-menu {
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+}
+
+/* Conditional timeline actions keep a stable visual affordance without
+   leaving empty fixed-width columns behind. Disabled destructive actions are
+   deliberately neutral instead of looking actionable. */
+.danger-icon-button:disabled {
+    color: var(--color-text-tertiary);
+    border-color: transparent;
+    background: transparent;
+    opacity: .58;
+}
+
+.editor-actions.advanced-actions-unavailable {
+    grid-template-columns: minmax(0, 1fr) var(--control-height);
+}
+.editor-actions.advanced-actions-unavailable #timeline-hide-session {
+    grid-column: 2;
+}
+
+/* Active pages keep controls fixed; only the explicit content regions below own scrolling. */
+.page {
+    min-height: 0;
+}
+
+:where(
+    #recent-list,
+    .timeline-list,
+    .activity-list,
+    .table-scroll,
+    .rules-scroll-region,
+    .settings-content,
+    .drawer,
+    .dialog,
+    .first-run-notice-text,
+    .settings-categories,
+    .project-autocomplete-menu,
+    textarea
+) {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    scrollbar-gutter: auto;
+}
+
+:where(
+    #recent-list,
+    .timeline-list,
+    .activity-list,
+    .table-scroll,
+    .rules-scroll-region,
+    .settings-content,
+    .drawer,
+    .dialog,
+    .first-run-notice-text,
+    .settings-categories,
+    .project-autocomplete-menu,
+    textarea
+)::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+.overview-page.active,
+.timeline-page.active,
+.statistics-page.active,
+.rules-page.active,
+.settings-page.active {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.content-loading-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 6;
+    display: grid;
+    place-items: center;
+    color: var(--color-text-secondary);
+    background: rgba(255, 255, 255, .78);
+    pointer-events: none;
+}
+.content-loading-overlay > span {
+    padding: 5px 9px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    box-shadow: 0 2px 8px rgba(24, 35, 43, .08);
+    font-size: var(--font-size-sm);
+}
+
+.overview-page {
+    --overview-time-right-inset: 0px;
+}
+.current-activity { padding-right: 18px; }
+.recent-section h2 { padding-right: 0; }
+
+.overview-page > .page-header,
+.overview-page > .inline-alert,
+.overview-page > .current-activity,
+.overview-page > .overview-project-bar,
+.timeline-page > .page-header,
+.timeline-page > .timeline-toolbar,
+.timeline-page > .inline-alert,
+.statistics-page > .page-header,
+.statistics-page > .statistics-toolbar,
+.statistics-page > .inline-alert,
+.statistics-page > #statistics-loading,
+.statistics-page > #stats-export-status,
+.rules-page > .page-header,
+.rules-page > .rules-toolbar,
+.rules-page > .inline-alert,
+.settings-page > .page-header,
+.settings-page > .inline-alert,
+.settings-page > #settings-loading {
+    flex: 0 0 auto;
+}
+
+/* Settings can show its status text without pushing the settings grid down. */
+#settings-loading {
+    position: relative;
+    z-index: 2;
+    height: 0;
+    min-height: 0;
+    overflow: visible;
+    pointer-events: none;
+}
+
+.recent-section {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    padding-inline: 18px;
+    overflow: hidden;
+}
+
+#recent-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: block;
+    overflow: auto;
+    scrollbar-gutter: auto;
+}
+
+.timeline-workspace {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+}
+
+.timeline-list {
+    overflow: auto;
+}
+
+.timeline-inspector {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.timeline-inspector > .timeline-readonly-notice,
+.timeline-inspector > .timeline-edit-panel {
+    flex: 0 0 auto;
+}
+.activity-details {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.activity-details h2 { flex: 0 0 auto; }
+.activity-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+
+#statistics-results:not([hidden]) {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+#statistics-results > .metric-strip { flex: 0 0 auto; }
+.stats-result {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+.stats-result > .tabs { flex: 0 0 auto; }
+#stats-project-panel:not([hidden]),
+#stats-file-panel:not([hidden]),
+#stats-app-panel:not([hidden]) {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+.stats-result .table-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+
+.rules-scroll-region {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+
+#settings-status:not([hidden]) {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: grid;
+}
+.settings-content {
+    min-height: 0;
+    align-self: stretch;
+    overflow: auto;
+}
+
+@media (max-width: 959px) {
+    .timeline-inspector { display: none; }
+    .timeline-inspector.drawer-open { display: flex; }
+    #settings-status:not([hidden]) { grid-template-rows: auto minmax(0, 1fr); }
+    .settings-categories { overflow-y: hidden; }
+}
+
+@media (min-width: 960px) {
+    .statistics-date-range { min-width: 310px; }
+}

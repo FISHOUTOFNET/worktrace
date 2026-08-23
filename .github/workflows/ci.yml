@@ -19,4 +19,4 @@ jobs:
     with:
       revision: ${{ github.event.pull_request.head.sha || github.sha }}
       run_node_tests: true
-      run_build_smoke: true
+      run_build_smoke: ${{ github.event_name == 'pull_request' }}

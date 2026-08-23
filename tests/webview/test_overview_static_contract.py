@@ -11,7 +11,7 @@ from static_helpers import func_body, read_js, read_resource  # noqa: E402
 
 
 def _css_rule(source: str, selector: str) -> str:
-    match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", source)
+    match = re.search(r"(?m)^" + re.escape(selector) + r"\s*\{([^}]*)\}", source)
     assert match, f"styles.css must define {selector}"
     return match.group(1)
 
@@ -48,7 +48,7 @@ def test_overview_shipping_ui_uses_authoritative_module_names():
     """Regression guard: the shipping UI must use the canonical module
     names "当前活动 / 最近记录" and must not reintroduce the retired
     attention section or "最近活动" label in user-visible markup or ARIA."""
-    html = read_resource("index.html")
+    html = read_resource("index_fd_work_v5.html")
     assert "当前活动" in html
     assert "最近记录" in html
     assert "待整理" not in html
@@ -75,7 +75,7 @@ def test_overview_view_model_does_not_reintroduce_attention_selection():
 
 
 def test_overview_project_bar_is_unheaded_narrow_and_accessible():
-    html = read_resource("index.html")
+    html = read_resource("index_fd_work_v5.html")
     css = read_resource("styles.css")
     source = read_js("overview.js")
     render = func_body(source, "renderProjectDistribution")
@@ -130,22 +130,37 @@ def test_overview_time_axis_and_recent_columns_are_stable_and_local():
     render = func_body(source, "renderRecent")
 
     overview_rule = _css_rule(css, ".overview-page")
+    active_rule = _css_rule(css, ".overview-page.active")
     total_rule = _css_rule(css, ".overview-page .page-total")
+    current_rule = _css_rule(css, ".current-activity")
     primary_time_rule = _css_rule(
         css,
         ".overview-page .page-total strong,\n.overview-page .current-duration",
     )
+    recent_section_rule = _css_rule(css, ".recent-section")
+    recent_list_rule = _css_rule(css, ".recent-section .data-list")
     recent_rule = _css_rule(css, ".recent-row")
     start_rule = _css_rule(css, ".recent-start-time")
     duration_rule = _css_rule(css, ".recent-duration")
 
-    assert "--overview-time-right-inset: 17px" in overview_rule
-    assert "--overview-record-time-size: 14px" in overview_rule
+    assert "--overview-time-right-inset: 20px" in overview_rule
+    assert "--overview-record-time-size: 13px" in overview_rule
+    assert "overflow: hidden" in overview_rule
+    assert "display: flex" in active_rule
+    assert "flex-direction: column" in active_rule
     assert "padding-right: var(--overview-time-right-inset)" in total_rule
+    assert "var(--overview-time-right-inset)" in current_rule
     assert "min-width: 8ch" in primary_time_rule
-    assert "font-size: var(--font-size-2xl)" in primary_time_rule
+    assert "font-size: var(--font-size-xl)" in primary_time_rule
     assert "font-variant-numeric: tabular-nums" in primary_time_rule
     assert ".current-duration { font-size: var(--font-size-xl)" not in css
+
+    assert "flex: 1 1 auto" in recent_section_rule
+    assert "min-height: 0" in recent_section_rule
+    assert "overflow: hidden" in recent_section_rule
+    assert "overflow-y: auto" in recent_list_rule
+    assert "scrollbar-gutter: stable" in recent_list_rule
+    assert "padding-right: var(--overview-time-right-inset)" in recent_list_rule
 
     assert "grid-template-columns: 52px minmax(0, 1fr) var(--record-duration-width)" in recent_rule
     assert "column-gap: 10px" in recent_rule

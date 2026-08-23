@@ -284,7 +284,11 @@ def test_cross_project_same_file_name_is_ambiguous(temp_db, tmp_path, allow_sens
     assert activity_service.get_activity(activity_id)["project_id"] != project_b
 
 
-def test_safe_backfill_uses_index_only_after_valid_from(temp_db, tmp_path, allow_sensitive_runtime):
+def test_explicit_backfill_uses_current_ready_index_before_valid_from(
+    temp_db,
+    tmp_path,
+    allow_sensitive_runtime,
+):
     project = project_service.create_project("Client")
     folder = tmp_path / "Client"
     folder.mkdir()
@@ -306,11 +310,17 @@ def test_safe_backfill_uses_index_only_after_valid_from(temp_db, tmp_path, allow
     )
     activity_service.close_activity_row(late, "2026-06-18 11:10:00")
 
+    # Automatic filename inference keeps the historical valid_from boundary.
+    assert folder_index_query_service.lookup_indexed_paths_for_file_name(
+        "report.docx",
+        "2026-06-18 09:00:00",
+    ) == []
+
     result = rule_api.backfill_project_rule("folder", rule_id)
 
     assert result["ok"] is True
-    assert result["result"]["updated_count"] == 1
-    assert activity_service.get_activity(early)["project_id"] != project
+    assert result["result"]["updated_count"] == 2
+    assert activity_service.get_activity(early)["project_id"] == project
     assert activity_service.get_activity(late)["project_id"] == project
 
 

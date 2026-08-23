@@ -26,8 +26,8 @@ For display-model hardening, the default touched-file neighborhood is:
 `activity_display_span.py`, `activity_row_overlay.py`,
 `view_model_service.py`, `live_display_service.py`, `live_time_service.py`,
 the collector lifecycle files involved in the change, affected WebView JS,
-`scripts/run_affected_tests.py`, and the focused live-display tests. Do not
-expand beyond this set unless a test failure or unclear boundary requires it.
+and the focused live-display tests. Do not expand beyond this set unless a
+test failure or unclear boundary requires it.
 
 Do **not** default-read the full README, the phase history, the release
 validation doc, or research docs. Reach for them only when the task actually
@@ -36,171 +36,84 @@ needs them.
 ## 2. Where The History Lives
 
 - [`docs/history/webview-phases.md`](history/webview-phases.md) — the long-form
-  Phase 0A → current WebView phase log (every "Implemented Scope" / "Not
-  Implemented" section). Read it **only** when you need the exact data
-  semantics or "not implemented" list of a specific past phase.
+  Phase 0A → current WebView phase log. Read it **only** when you need the
+  exact data semantics or "not implemented" list of a specific past phase.
 - [`docs/release-validation.md`](release-validation.md) — the canonical release
   baseline. Read it **only** when validating a release.
 
 Treat these as archives, not as default context.
 
-## 3. Documentation Governance (Phase DG1)
+## 3. Documentation Governance
 
-The repository follows a "single source of truth" documentation model so
-each phase does not require editing the same facts in multiple places:
+The repository follows a single-source-of-truth documentation model:
 
-- **README** must not contain long phase implementation logs or per-phase
-  chronology. It is a project overview with a short current-state pointer.
-- **`docs/current-state.md`** is the **only** current shipped behavior source.
-  Post-WebView migration, it no longer uses UI migration phase labels (Phase
-  6F etc.) as the current-state identifier; it describes the shipped state
-  directly.
-- **`architecture.md`** is the **current architecture contract**. Use it for
-  live-display ownership, lifecycle boundaries, DB/report boundaries,
-  frontend runtime boundaries, startup/privacy-gate boundaries, and current
-  public export-surface boundaries.
-- **`docs/ui-webview-migration.md`** is **migration-history architecture only**.
-  The WebView migration is closed; this document no longer carries current
-  architecture-owner or current-status responsibility.
-- **`docs/history/webview-phases.md`** is the archive for the Phase 0A →
-  Phase 6F history. The migration is closed; ordinary maintenance should NOT
-  append new UI migration phase entries.
-- **`docs/release-validation.md`** is the canonical release baseline.
-- Post-migration: ordinary maintenance (docs cleanup, bridge refactoring,
-  test hardening) does NOT require updating the migration archive or
-  creating new phase labels. Only update `docs/current-state.md` when
-  shipped behavior changes; update `architecture.md` when the architecture
-  contract changes or needs clarification.
-- **`docs/release-checklist.md`** is only a compatibility pointer to
-  `docs/release-validation.md`; it is retained as a stub to avoid breaking
-  references.
+- **README** is a project overview and should not carry long phase chronology.
+- **`docs/current-state.md`** is the current shipped behavior source.
+- **`architecture.md`** is the current architecture contract.
+- **`docs/ui-webview-migration.md`** is migration history, not a current architecture owner.
+- **`docs/history/webview-phases.md`** is the closed migration archive.
+- **`docs/release-validation.md`** is the release baseline.
+- Ordinary maintenance does not create new migration phases. Update `current-state.md` only when shipped behavior changes and `architecture.md` when an architecture contract changes.
+- **`docs/release-checklist.md`** is only a compatibility pointer to `docs/release-validation.md`.
 
 ## 4. Research Docs
 
-- Research / scan docs live under [`docs/research/`](research/). They are
-  **not default context**.
-- Only read `docs/research/*` when the task explicitly concerns that research
-  topic (e.g. v0.2 field encryption design).
-- `docs/current-state.md` remains the single source for current shipped
-  behavior; research docs describe future / unimplemented design only.
+- Research / scan docs live under [`docs/research/`](research/). They are not default context.
+- Read them only when the task explicitly concerns that research topic.
+- Current shipped behavior always comes from `docs/current-state.md`.
 
 ## 5. Task Prompt Hygiene
 
 Each task prompt / plan should state explicitly:
 
 - **Goal files**: the exact files the task will modify.
-- **Allowed reads**: the files the agent may read to do the job (prefer the
-  minimal set above).
-- **No broad scans**: do not grep/scan the whole repo "to understand it"
-  unless the task is genuinely exploratory. Targeted `Grep` / `Glob` on a
-  known directory is fine; full-tree reads are not.
+- **Allowed reads**: the files the agent may read to do the job.
+- **No broad scans**: do not scan the whole repo merely to understand it unless the task is genuinely exploratory. Targeted search on a known directory is fine.
 
 ## 6. When To Expand Search
 
-Expand reading / search beyond the minimal set **only** when:
+Expand beyond the minimal set only when:
 
-- A test fails and the cause is not in the touched files.
-- A boundary or contract is unclear from `current-state.md` and
-  `architecture.md`.
-- The task explicitly references a past phase's data semantics.
+- a test fails and the cause is not in the touched files;
+- a boundary or contract is unclear from `current-state.md` and `architecture.md`;
+- the task explicitly references historical semantics.
 
-Otherwise stay narrow.
-
-WorkTrace has not shipped a public compatibility surface for internal display
-model modules, payload fields, or tests. Maintenance tasks should remove
-unused aliases, stale import paths, old wrappers, and compatibility shims when
-all current callers and tests can be updated in the same change.
+WorkTrace has not shipped a public compatibility surface for internal display-model modules, payload fields, tests, or developer-only scripts. Remove unused aliases, stale import paths, wrappers, and compatibility shims when all current callers/tests can be updated in the same change.
 
 ## 7. Context Diet Cadence
 
-Every 4–6 feature phases, run a **context diet** pass like Phase R1 / DG1:
+Periodically:
 
-- Ensure `current-state.md` still matches the latest shipped behavior.
-  Post-WebView migration, there is no "current phase label" to sync;
-  `current-state.md` describes the shipped state directly.
-- Ensure `architecture.md` still matches current owner boundaries and does
-  not conflict with source-file headers.
-- Move any newly-accumulated per-phase prose out of README /
-  `ui-webview-migration.md` and into `history/webview-phases.md`. The
-  migration archive is closed; do not create new phase entries for ordinary
-  maintenance.
-- Split or parametrize test files that have grown past ~1500 lines /
-  accumulated duplicated static-contract assertions.
-- Keep the default reading set (current-state + architecture contract + slim
-  migration doc only when needed) small.
-
-Phase DG1 executed this pass: README and `ui-webview-migration.md` were
-slimmed, `current-state.md` was restored to a one-screen snapshot, release
-docs were consolidated, and research docs were downgraded from default
-context.
+- ensure `current-state.md` matches shipped behavior;
+- ensure `architecture.md` matches current owner boundaries;
+- move accumulated chronology out of current docs and into history when it is genuinely historical;
+- split or parameterize test files that accumulate unrelated scenarios or duplicated static contracts;
+- keep the default reading set small.
 
 ## 8. Don't Break The Boundaries
 
-When editing docs or tests, never weaken the hard constraints in project
-memory: WebView bridge may only import `worktrace.api`; no external links /
-CDN / Google Fonts / `localStorage` in frontend resources; no tracebacks to
-JS; `schema.sql` is the single source of DB structure; no new product
-features or dependencies are introduced by a docs/tests-only phase.
+When editing docs or tests, never weaken the hard constraints in project memory: WebView bridge may only import `worktrace.api`; no external links / CDN / Google Fonts / `localStorage` in frontend resources; no tracebacks to JS; `schema.sql` is the single source of DB structure; and docs/tests-only work must not introduce product features or runtime dependencies.
 
-## 9. Default Test Selection (Phase TG1)
+## 9. Test Selection
 
-Keep the "narrow read, narrow test" principle. WorkTrace has a large and
-growing test suite, so do **not** default to the full `pytest` on every
-change.
+Keep local feedback explicit rather than maintaining an inferred changed-file dependency graph.
 
-- **Default for ordinary feature / hardening phases**: run
-  `python scripts/run_affected_tests.py`. It maps the changed source / docs /
-  packaging paths to a finite, conservative pytest target set, runs the
-  `import worktrace.webview_main` smoke when WebView frontend resources
-  change, and — when nothing changed — falls back to a light smoke set
-  (startup imports, WebView bridge boundary, WebView static contracts). It
-  never silently runs the full suite and introduces no new dependencies
-  (pure standard library). Marker shard output is diagnostic/focused
-  selection guidance; concrete target selection remains the compatibility
-  path while marker coverage is incremental.
-- **Inventory / governance**: run `python scripts/test_inventory.py` for a
-  local marker and test-structure summary, and
-  `python scripts/test_inventory.py --check` for the lightweight governance
-  gate. The check warns about unmarked tests but hard-fails unregistered
-  markers, stale affected-runner targets, explicit sleep, budget overruns
-  without reason overrides, and obvious risk/marker mismatches configured in
-  [`test_policy.json`](../test_policy.json). Use
-  `python scripts/run_affected_tests.py --governance` for the focused
-  inventory + comment hygiene + runner/inventory self-test gate.
-- **Fast marker-covered feedback**: use
-  `python scripts/run_affected_tests.py --fast` for
-  `python -m pytest -m "unit and not slow"`. This is intentionally described
-  as marker-covered feedback because marker coverage is incremental; it does
-  not replace affected tests or full pytest.
-- **Test policy**: suite definitions, file budgets, risk signals, marker
-  requirements, owner/contract paths, and reasoned overrides live in
-  [`test_policy.json`](../test_policy.json). Keep new tests inside an owner
-  area and avoid exceeding file budgets unless the owner contract genuinely
-  needs a documented matrix.
-- **Marker-focused local feedback** can use commands such as
-  `pytest -m "webview_static and contract"`,
-  `pytest -m "live_display and contract"`,
-  `pytest -m "collector_runtime and integration"`,
-  `pytest -m "security_privacy"`, or `pytest -m "packaging"`.
-- **Default to the full `pytest` only** when the change is DB / schema /
-  core cross-cutting (collector, resource model, path utils), or when
-  validating a release / pre-push. The affected runner prints an explicit
-  warning recommending full pytest for DB/schema and unknown `worktrace/`
-  source changes.
-- **Never** move PyInstaller or the per-user installer build into the
-  affected runner; those remain manual release-validation steps.
-- **Do not introduce parallel pytest in TG1**. The `parallel_safe` and
-  `serial` markers are future-planning labels only.
-- For a single known failure, prefer `pytest --lf` or a specific test file
-  / case over the full suite.
+- For a known owner/regression, run the specific test file or case.
+- For fast feedback, use `python -m pytest -m "unit and not slow"`.
+- For cross-layer/static contracts, use `python -m pytest -m contract` or a narrower marker expression such as `webview_static and contract`, `live_display and contract`, `collector_runtime and integration`, or `security_privacy`.
+- For a known failure, prefer `python -m pytest --lf`.
+- For cross-cutting/pre-push confidence, use `python -m pytest -m "not benchmark"`.
+- Standard CI always runs the complete non-benchmark Python suite; local selection never replaces that gate.
+- Marker names live only in `pytest.ini`, which enables strict marker validation.
+- Do not introduce a custom affected-test scheduler, source-string risk classifier, test owner registry, or CI file-size budget layer.
+- PyInstaller/installer lifecycle and performance/timing validation stay in their dedicated workflows.
+- Parallel pytest is not enabled; `parallel_safe` and `serial` remain planning labels only.
 
-See [`docs/release-validation.md`](release-validation.md) for the release
-baseline the affected runner does **not** replace.
+See [`docs/testing/test-governance.md`](testing/test-governance.md) for test-maintenance rules and [`docs/release-validation.md`](release-validation.md) for the release baseline.
 
 ## 10. Comment Hygiene Gate
 
 After each AI coding pass, run `python scripts/comment_hygiene.py --check`.
 If it fails, use `python scripts/comment_hygiene.py --json` together with
-[`.ai/comment-hygiene-fixer.md`](../.ai/comment-hygiene-fixer.md) to fix it
-automatically; no manual review is required. Do not add historical migration
-narratives or comments that restate nearby code.
+[`.ai/comment-hygiene-fixer.md`](../.ai/comment-hygiene-fixer.md) to fix it.
+Do not add historical migration narratives or comments that restate nearby code.

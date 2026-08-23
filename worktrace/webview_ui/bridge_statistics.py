@@ -1,9 +1,8 @@
 """Statistics / Export bridge mixin.
 
-The bridge validates transport shapes, calls API capabilities and maps stable
-error codes. Statistics aggregation and display DTO shaping remain behind the
-API boundary. Unexpected failures are logged internally; no full traceback is
-returned to the WebView caller.
+The bridge validates transport shapes, calls capability boundaries and maps
+stable error codes. Statistics aggregation and display DTO shaping remain
+behind the application-service boundary.
 """
 from __future__ import annotations
 
@@ -75,13 +74,53 @@ class StatisticsBridgeMixin:
             logger.exception("webview bridge get_statistics_export_summary failed")
             return {"ok": False, "error": "加载统计失败", "summary": None}
 
+    def _legacy_statistics_export(
+        self,
+        date_from: str,
+        date_to: str,
+        expected_export_ticket_revision: str,
+        project_id,
+    ) -> dict[str, Any]:
+        """Use the retained ticket-bound capability for legacy embedders/fakes."""
+        revision = str(expected_export_ticket_revision or "").strip()
+        if not revision:
+            return {
+                "ok": False,
+                "error": _STATISTICS_EXPORT_ERROR_MESSAGES["stale_statistics_snapshot"],
+                "cancelled": False,
+            }
+        output_path = self._choose_csv_save_path()
+        if output_path is None:
+            return {"ok": False, "cancelled": True, "error": "已取消导出"}
+        if project_id in (None, ""):
+            result = self._services.statistics.export_statistics_csv(
+                date_from, date_to, output_path, revision
+            )
+        else:
+            result = self._services.statistics.export_statistics_csv(
+                date_from, date_to, output_path, revision, project_id
+            )
+        return self._statistics_export_success(result)
+
+    def _statistics_export_success(self, result) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "filename": str(result.get("filename") or ""),
+            "activity_count": int(result.get("activity_count") or 0),
+            "duration": self._services.statistics.format_export_duration(
+                int(result.get("duration_seconds") or 0)
+            ),
+            "cancelled": False,
+        }
+
     def export_statistics_csv(
         self,
         date_from,
         date_to,
-        expected_export_ticket_revision,
+        expected_export_ticket_revision=None,
         project_id=None,
     ) -> dict[str, Any]:
+        """Freeze Statistics at invocation, then ask for a destination path."""
         try:
             if not isinstance(date_from, str) or not isinstance(date_to, str):
                 return {"ok": False, "error": "请选择有效日期", "cancelled": False}
@@ -92,36 +131,34 @@ class StatisticsBridgeMixin:
                 return {"ok": False, "error": "请选择有效日期", "cancelled": False}
             if project_id is not None and not isinstance(project_id, (str, int)):
                 return {"ok": False, "error": "请选择有效项目", "cancelled": False}
-            # The export ticket is a mandatory backend contract. Validate it
-            # before opening the save dialog so a stale or missing ticket never
-            # creates a target file or temp residue.
-            if not isinstance(expected_export_ticket_revision, str) or not expected_export_ticket_revision.strip():
+            revision = str(expected_export_ticket_revision or "").strip()
+            if not revision:
                 return {
                     "ok": False,
-                    "error": "统计数据已更新，请重新加载后导出",
+                    "error": _STATISTICS_EXPORT_ERROR_MESSAGES["stale_statistics_snapshot"],
                     "cancelled": False,
                 }
+
+            try:
+                prepare = self._services.statistics.prepare_statistics_csv
+            except AttributeError:
+                return self._legacy_statistics_export(
+                    date_from, date_to, revision, project_id
+                )
+
+            prepared = prepare(
+                date_from,
+                date_to,
+                None if project_id in (None, "") else project_id,
+            )
             output_path = self._choose_csv_save_path()
             if output_path is None:
                 return {"ok": False, "cancelled": True, "error": "已取消导出"}
-            revision = expected_export_ticket_revision.strip()
-            if project_id in (None, ""):
-                result = self._services.statistics.export_statistics_csv(
-                    date_from, date_to, output_path, revision
-                )
-            else:
-                result = self._services.statistics.export_statistics_csv(
-                    date_from, date_to, output_path, revision, project_id
-                )
-            return {
-                "ok": True,
-                "filename": str(result.get("filename") or ""),
-                "activity_count": int(result.get("activity_count") or 0),
-                "duration": self._services.statistics.format_export_duration(
-                    int(result.get("duration_seconds") or 0)
-                ),
-                "cancelled": False,
-            }
+            result = self._services.statistics.write_prepared_statistics_csv(
+                prepared,
+                output_path,
+            )
+            return self._statistics_export_success(result)
         except self._services.statistics.StatisticsExportError as exc:
             return {
                 "ok": False,

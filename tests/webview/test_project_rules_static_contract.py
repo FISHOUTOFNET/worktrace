@@ -27,7 +27,7 @@ from static_helpers import (  # noqa: E402
 
 
 def _rules_section() -> str:
-    source = read_resource("index.html")
+    source = read_resource("index_fd_work_v5.html")
     start = source.find('id="page-rules"')
     assert start != -1
     end = source.find('<section id="page-settings"', start)
@@ -81,6 +81,37 @@ def test_project_rules_unified_panel_contains_project_and_rule_flows():
     assert 'maxlength="500"' in textarea.group(0)
 
 
+def test_fd_work_case_semantics_are_enabled_only_by_shared_capability_status():
+    section = _rules_section()
+    name_input = re.search(r'id="rules-panel-project-name"[^>]*>', section)
+    assert name_input is not None
+    assert 'maxlength="100"' in name_input.group(0)
+    assert "readonly" not in name_input.group(0)
+    assert 'role="combobox"' not in name_input.group(0)
+    assert 'aria-autocomplete="list"' not in name_input.group(0)
+    assert 'id="rules-panel-fd-work-selected-label"' not in section
+    assert 'id="rules-panel-fd-work-pick"' in section
+    source = read_js("rules_create_panel_v5.js")
+    identity_source = read_js("fd_work_v5.js")
+    presentation = func_body(identity_source, "syncIdentityStatus")
+    assert "input.hidden = false" in presentation
+    assert "input.readOnly = identityState.pickerPending" in presentation
+    assert "picker.hidden = !enabled" in presentation
+    assert "App.projectIdentity = Object.freeze" in identity_source
+    assert "App.projectIdentity.syncStatus()" in source
+    assert 'nameInput.addEventListener("focus"' not in source
+    assert 'nameInput.addEventListener("click"' not in source
+    assert 'nameInput.addEventListener("input"' not in source
+    assert "searchFDWorkCases" not in source
+
+
+def test_fd_work_frontend_contract_scripts_are_cache_versioned_together():
+    index = read_resource("index_fd_work_v5.html")
+
+    for name in ("fd_work_v5.js", "rules_create_panel_v5.js", "init_fd_work_v5.js"):
+        assert re.search(rf'src="js/{re.escape(name)}\?v=[0-9a-f]+"', index)
+
+
 def test_project_rules_folder_path_uses_native_readonly_picker_contract():
     section = _rules_section()
     path_input = re.search(r'id="rules-panel-folder-path"[^>]*>', section)
@@ -90,7 +121,7 @@ def test_project_rules_folder_path_uses_native_readonly_picker_contract():
     assert 'id="rules-panel-choose-folder"' in section
     assert "选择文件夹" in section
 
-    source = read_js("rules_create_panel.js")
+    source = read_js("rules_create_panel_v5.js")
     assert "App.bridge.chooseProjectRuleFolder()" in source
     assert "App.rulesChoosingFolder" in source
     assert "选择文件夹失败" in source
@@ -110,7 +141,7 @@ def test_project_rules_folder_picker_and_drawer_stay_bounded_at_supported_sizes(
 
 
 def test_project_rules_panel_presentation_context_and_tab_state_are_single_owner():
-    source = read_js("rules_create_panel.js")
+    source = read_js("rules_create_panel_v5.js")
     presentation = func_body(source, "syncProjectPanelPresentation")
     for expected in (
         "新建项目",
@@ -124,9 +155,9 @@ def test_project_rules_panel_presentation_context_and_tab_state_are_single_owner
         assert expected in presentation
 
     context = func_body(source, "renderRulesPanelProjectContext")
-    assert "为项目“" in context
-    assert "项目已新增：“" in context
-    assert "请继续添加自动归类规则。" in context
+    assert "项目已新增" in context
+    assert '项目已新增：“' not in context
+    assert "请继续添加自动归类规则" not in context
     assert "is-success" in context
 
     rule_type = func_body(source, "setRuleType")
@@ -135,13 +166,19 @@ def test_project_rules_panel_presentation_context_and_tab_state_are_single_owner
     assert 'classList.toggle("is-active"' in rule_type
     assert "folderGroup.hidden" in rule_type
     assert "keywordRow.hidden" in rule_type
-    assert "recursive.checked = true" in rule_type
+    assert "recursive.checked = rulesPanelFolderRecursiveDraft" in rule_type
     assert "folderRow" not in rule_type
     assert "recursiveRow" not in rule_type
 
+    keyboard = func_body(source, "handleRuleTypeKeydown")
+    for key in ("ArrowLeft", "ArrowRight", "Home", "End"):
+        assert key in keyboard
+    assert "setRuleType(targetType)" in keyboard
+    assert "target.focus()" in keyboard
+
 
 def test_project_rule_drawer_has_session_guard_and_shared_discard_reset():
-    source = read_js("rules_create_panel.js")
+    source = read_js("rules_create_panel_v5.js")
     assert "App.rulesPanelSessionToken" in source
     assert "function resetRulesTransientUi" in source
     assert "App.resetRulesTransientUi = resetRulesTransientUi" in source
@@ -152,27 +189,32 @@ def test_project_rule_drawer_has_session_guard_and_shared_discard_reset():
 
 def test_project_rules_deletion_uses_shared_dialog_and_explicit_history_policy():
     section = _rules_section()
-    index = read_resource("index.html")
+    index = read_resource("index_fd_work_v5.html")
     assert 'id="rules-delete-modal"' not in section
     assert 'id="confirm-dialog"' in index
-    delete = func_body(read_js("rules_keyword_actions.js"), "deleteRule")
-    assert "deleteProjectFolderRule(ruleId, applyToHistory)" in delete
-    assert "deleteProjectKeywordRule(ruleId, applyToHistory)" in delete
-    assert "deleteRule(kind, ruleId, false)" in read_js("rules_keyword_actions.js")
+    delete_source = read_js("rules_delete_actions.js")
+    delete = func_body(delete_source, "deleteRule")
+    assert "deleteProjectFolderRule(ruleId, restoreHistory)" in delete
+    assert "deleteProjectKeywordRule(ruleId, restoreHistory)" in delete
+    assert 'historyMode === "restore"' in delete_source
+    assert "保留已有归类" in delete_source
+    assert "视同规则不存在" in delete_source
 
 
 def test_project_rules_script_order_includes_create_panel_before_actions():
     assert ALL_JS_FILES.index("rules.js") < ALL_JS_FILES.index("rules_render.js")
-    assert ALL_JS_FILES.index("rules_create_panel.js") == ALL_JS_FILES.index("rules_render.js") + 1
-    assert ALL_JS_FILES.index("rules_rule_actions.js") == ALL_JS_FILES.index("rules_create_panel.js") + 1
-    assert ALL_JS_FILES.index("rules_folder_actions.js") < ALL_JS_FILES.index("init.js")
+    assert ALL_JS_FILES.index("rules_create_panel_v5.js") == ALL_JS_FILES.index("rules_render.js") + 1
+    assert ALL_JS_FILES.index("rules_rule_actions.js") == ALL_JS_FILES.index("rules_create_panel_v5.js") + 1
+    assert ALL_JS_FILES.index("rules_delete_actions.js") < ALL_JS_FILES.index("init_fd_work_v5.js")
+    assert "rules_keyword_actions.js" not in ALL_JS_FILES
+    assert "rules_folder_actions.js" not in ALL_JS_FILES
 
 
 def test_project_rules_static_helper_reads_create_panel_module():
     source = read_rules_module_js()
     assert "function initRulesPanelEvents" in source
     assert "function savePanelRule" in source
-    assert "function openProjectRuleDeleteModal" in read_js("rules_keyword_actions.js")
+    assert "function openProjectRuleDeleteModal" in read_js("rules_delete_actions.js")
 
 
 def test_project_rules_home_render_only_exposes_edit_project_add_rule_and_delete():
@@ -204,26 +246,24 @@ def test_project_rules_header_places_description_left_and_actions_with_metadata_
     source = read_js("rules_render.js")
     body = func_body(source, "renderProjectRuleProject")
     css = read_resource("styles.css")
-    title_start = body.index('<div class="rules-project-title-group">')
-    description = body.index("rules-project-description")
-    side = body.index('<div class="rules-project-side">')
-    actions = body.index('<div class="rules-project-actions">')
-    meta = body.index('<div class="rules-project-meta">')
+    rendered = body[body.index("return '<article"):]
+    title_start = rendered.index('<div class="rules-project-title-group">')
+    description = rendered.index("descriptionMarkup")
+    side = rendered.index('<div class="rules-project-side">')
+    actions = rendered.index('<div class="rules-project-actions">')
+    meta = rendered.index("metaMarkup")
     assert title_start < description < side < actions < meta
-    side_markup = body[side:body.index('</div></div><div class="rules-row-list"')]
-    assert side_markup.count("<button") == 3
-    assert "rules-project-meta" in side_markup
-    assert 'projectDescription ? "" : " is-empty"' in body
-    assert 'projectDescription || "无描述"' in body
+    assert re.search(r"var descriptionMarkup\s*=\s*projectDescription\s*\?", body)
+    assert 'projectDescription || "无描述"' not in body
+    assert re.search(r"var metaMarkup\s*=\s*lastUsedAt\s*\?", body)
+    assert "暂无使用记录" not in body
     head = re.search(r"\.rules-project-head\s*\{([^}]*)\}", css)
     assert head is not None
     assert "grid-template-columns: 22px minmax(0, 1fr) auto" in head.group(1)
     side_style = re.search(r"\.rules-project-side\s*\{([^}]*)\}", css)
     meta_style = re.search(r"\.rules-project-meta\s*\{([^}]*)\}", css)
-    empty_style = re.search(r"\.rules-project-description\.is-empty\s*\{([^}]*)\}", css)
     assert side_style is not None
     assert meta_style is not None and "text-align: right" in meta_style.group(1)
-    assert empty_style is not None and "var(--color-text-tertiary)" in empty_style.group(1)
     assert "minmax(250px, auto)" not in css
     assert "minmax(220px, auto)" not in css
     assert (
@@ -236,8 +276,7 @@ def test_project_rules_header_places_description_left_and_actions_with_metadata_
 
 def test_project_rule_folder_fields_are_one_aligned_group():
     section = _rules_section()
-    styles = read_resource("styles.css")
-    source = read_js("rules_create_panel.js")
+    source = read_js("rules_create_panel_v5.js")
     folder_start = section.index('id="rules-panel-folder-group"')
     keyword_start = section.index('id="rules-panel-keyword-row"')
     folder = section[folder_start:keyword_start]
@@ -248,14 +287,8 @@ def test_project_rule_folder_fields_are_one_aligned_group():
     ):
         assert f'id="{control_id}"' in folder
     assert "文件夹规则默认匹配该文件夹及全部子文件夹。" not in section
-    assert "默认匹配该文件夹及全部子文件夹" in folder
-    checkbox = re.search(r"\.rule-folder-recursive\s*\{([^}]*)\}", styles)
-    checkbox_input = re.search(r"\.rule-folder-recursive input\s*\{([^}]*)\}", styles)
-    assert checkbox is not None and "align-items: flex-start" in checkbox.group(1)
-    assert checkbox_input is not None
-    assert "width: 14px" in checkbox_input.group(1)
-    assert "height: 14px" in checkbox_input.group(1)
-    assert "min-height: 0" in checkbox_input.group(1)
+    assert "默认匹配该文件夹及全部子文件夹" not in folder
+    assert "包含子文件夹" in folder
     rule_type = func_body(source, "setRuleType")
     assert "folderGroup.hidden" in rule_type
     assert "keywordRow.hidden" in rule_type
@@ -297,10 +330,10 @@ def test_project_rules_show_does_not_bind_removed_home_actions():
         "bindExcludedKeywordRuleEvents",
         "bindExcludedFolderRuleEvents",
         "bindProjectRuleKeywordEditEvents",
+        "bindProjectRuleFolderEvents",
     ):
         assert forbidden not in body
-    assert "bindProjectRuleDelete" in body
-    assert "bindProjectRuleFolderEvents" in body
+    assert "bindProjectRuleDeleteEvents" in body
 
 
 def test_project_rules_panel_create_backfill_contract_is_stable():
@@ -310,7 +343,8 @@ def test_project_rules_panel_create_backfill_contract_is_stable():
     assert "App.bridge.createProjectKeywordRule" in body
     assert "App.backfillCreatedRule" in body
     assert "规则已新增，但应用到历史记录失败" in body
-    assert "同时应用到历史记录" in _rules_section()
+    assert "应用到历史记录" in _rules_section()
+    assert "同时应用到历史记录" not in _rules_section()
     assert ".catch(function ()" in body
     for forbidden in ("err.message", "error.message", "reason.message", ".toString"):
         assert forbidden not in body

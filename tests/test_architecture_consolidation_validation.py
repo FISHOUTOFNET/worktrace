@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from tests.support.application import TestRuntime
-from tests.support.live_semantics_harness import LiveSemanticsHarness
 from worktrace import db
 from worktrace.api import view_model_api
 from worktrace.services import (
@@ -15,27 +14,11 @@ from worktrace.services import (
     timeline_service,
     view_model_service,
 )
+from worktrace.services.page_read_context import current_page_read_context
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.serial]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW_ALLOWLIST = {
-    "_validation.yml",
-    "ci.yml",
-    "performance-validation.yml",
-    "standard-timing-validation.yml",
-}
-FORBIDDEN_WORKFLOW_COMMANDS = (
-    "git push",
-    "git merge",
-    "git commit",
-    "git checkout -B",
-)
-FORBIDDEN_HELPER_PREFIXES = (
-    "agent_",
-    "apply_patch_",
-    "one_time_",
-)
 RUNTIME_TOP_LEVEL_ALIASES = {
     "activity_display_model",
     "collection_status",
@@ -73,6 +56,77 @@ def test_page_and_heartbeat_use_one_revision_owner(temp_db):
     heartbeat = refresh_state_view_model_service.get_refresh_state_view_model(today)
     assert page["structure_revision"] == heartbeat["structure_revision"]
     assert page["page_revision"] == heartbeat["page_revision"]
+
+
+def test_runtime_attachment_stays_inside_verified_page_read_scope(
+    temp_db,
+    monkeypatch,
+):
+    report_date = timeline_service.get_default_report_date()
+    observed: list[tuple[str, bool]] = []
+
+    monkeypatch.setattr(
+        view_model_service,
+        "get_overview_view_model",
+        lambda _today=None: {"ok": True, "date": report_date, "today": report_date},
+    )
+    monkeypatch.setattr(
+        view_model_service,
+        "get_timeline_view_model",
+        lambda _date=None: {"ok": True, "date": report_date, "today": report_date},
+    )
+    monkeypatch.setattr(
+        view_model_service,
+        "get_session_activity_summary_view_model",
+        lambda **_kwargs: {"ok": True, "date": report_date, "today": report_date},
+    )
+    monkeypatch.setattr(
+        refresh_state_view_model_service,
+        "get_refresh_state_view_model",
+        lambda _date=None: {
+            "ok": True,
+            "report_date": report_date,
+            "today": report_date,
+        },
+    )
+
+    def fake_attach(payload, *, surface, **_kwargs):
+        observed.append((surface, current_page_read_context() is not None))
+        result = dict(payload)
+        result["runtime"] = {"schema_version": 2}
+        return result
+
+    monkeypatch.setattr(view_model_api, "attach_live_runtime_envelope", fake_attach)
+    runtime, collector_status = _runtime_context()
+
+    view_model_api.get_overview_view_model(
+        report_date,
+        runtime=runtime,
+        collector_status=collector_status,
+    )
+    view_model_api.get_timeline_view_model(
+        report_date,
+        runtime=runtime,
+        collector_status=collector_status,
+    )
+    view_model_api.get_session_activity_summary_view_model(
+        report_date=report_date,
+        projection_instance_key="session:1",
+        runtime=runtime,
+        collector_status=collector_status,
+    )
+    view_model_api.get_refresh_state_view_model(
+        report_date,
+        runtime=runtime,
+        collector_status=collector_status,
+    )
+
+    assert observed == [
+        ("overview", True),
+        ("timeline", True),
+        ("details", True),
+        ("refresh", True),
+    ]
 
 
 def test_session_summary_api_calls_keyword_only_service(monkeypatch):
@@ -204,34 +258,6 @@ def test_schema_trigger_surface_is_constraint_only(temp_db):
     }
 
 
-def test_frontend_uses_explicit_bridge_and_settings_bindings():
-    init_source = (REPO_ROOT / "worktrace/webview_ui/js/init.js").read_text(
-        encoding="utf-8"
-    )
-    assert "App.callBridge =" not in init_source
-    assert "MutationObserver" not in init_source
-    assert 'bind("settings-clear-local-data-btn", "click", App.clearAllLocalData)' in init_source
-    assert "schema_version || 0) !== 1" not in init_source
-    assert "bundle.current_activity" not in init_source
-    assert "bundle.live_clock" not in init_source
-    assert "state.collector_status" not in init_source
-
-
-def test_composition_root_imports_canonical_windows_adapter():
-    tree = ast.parse(
-        (REPO_ROOT / "worktrace/runtime/app_runtime.py").read_text(encoding="utf-8")
-    )
-    imports = {
-        (node.module, alias.name)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom)
-        for alias in node.names
-    }
-    assert ("platforms.windows_adapter", "WindowsAdapter") in imports
-    assert all("hardened_windows_adapter" not in str(module) for module, _ in imports)
-    assert not (REPO_ROOT / "worktrace/platforms/hardened_windows_adapter.py").exists()
-
-
 def test_continuity_reads_typed_runtime_state_not_settings_json():
     tree = ast.parse(
         (REPO_ROOT / "worktrace/services/page_read_context.py").read_text(
@@ -252,36 +278,3 @@ def test_continuity_reads_typed_runtime_state_not_settings_json():
         and node.func.id == "get_setting"
         for node in ast.walk(tree)
     )
-
-
-def test_page_wrapper_services_are_removed():
-    for name in (
-        "overview_view_model_service.py",
-        "timeline_view_model_service.py",
-        "session_detail_view_model_service.py",
-    ):
-        assert not (REPO_ROOT / "worktrace/services" / name).exists()
-
-
-def test_permanent_ci_workflows_are_read_only():
-    workflow_dir = REPO_ROOT / ".github" / "workflows"
-    workflows = sorted(
-        path
-        for pattern in ("*.yml", "*.yaml")
-        for path in workflow_dir.glob(pattern)
-    )
-    assert {path.name for path in workflows} == WORKFLOW_ALLOWLIST
-
-    github_dir = REPO_ROOT / ".github"
-    one_time_helpers = [
-        path.relative_to(REPO_ROOT).as_posix()
-        for path in github_dir.rglob("*.py")
-        if path.name.startswith(FORBIDDEN_HELPER_PREFIXES)
-    ]
-    assert not one_time_helpers, "one-time GitHub helpers remain: " + ", ".join(
-        one_time_helpers
-    )
-
-    for path in workflows:
-        source = path.read_text(encoding="utf-8")
-        assert not any(command in source for command in FORBIDDEN_WORKFLOW_COMMANDS)

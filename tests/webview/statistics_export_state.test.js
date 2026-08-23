@@ -34,8 +34,15 @@ function summaryResult(dateFrom, dateTo, projectId = "", revision = "revision-1"
       session_count: 4,
       project_count: 2,
       app_count: 2,
-      by_project: [{ display_name: "Client", duration: "01:00:00", activity_count: 4, percentage: 100 }],
-      by_app: [],
+      by_project: [{
+        key: "project:client", display_name: "Client", duration: "01:00:00",
+        record_count: 3, activity_count: 4, percentage: 100,
+      }],
+      by_file: [
+        { key: "file:client", display_name: "client.docx", duration: "00:50:00", record_count: 3, activity_count: 4, percentage: 83.3 },
+        { key: "file:excluded", display_name: "已排除", duration: "00:10:00", record_count: 1, activity_count: 1, percentage: 16.7 },
+      ],
+      by_app: [{ key: "Word", display_name: "Word", duration: "01:00:00", record_count: 3, activity_count: 4, percentage: 100 }],
       by_status: [],
       export_preview: { session_count: 4, included_duration: "01:00:00" },
     },
@@ -54,15 +61,18 @@ function harness() {
   const statisticsCalls = [];
   let nextTimer = 0;
   let latestRequest = 0;
+  let activeElement = null;
 
   function element(id) {
     if (!elements.has(id)) {
       const listeners = new Map();
       const attributes = new Map();
-      elements.set(id, {
+      const node = {
         id,
         hidden: false,
         disabled: false,
+        type: id.startsWith("statistics-date-") ? "date" : "text",
+        tabIndex: 0,
         value: "",
         textContent: "",
         innerHTML: "",
@@ -70,18 +80,34 @@ function harness() {
         dataset: {},
         selectedIndex: 0,
         options: [{ text: "全部项目" }],
-        addEventListener(name, handler) { listeners.set(name, handler); },
-        dispatch(name) {
-          const handler = listeners.get(name);
-          if (handler) handler.call(this, { target: this });
+        addEventListener(name, handler) {
+          if (!listeners.has(name)) listeners.set(name, []);
+          listeners.get(name).push(handler);
         },
+        dispatch(name, event = {}) {
+          for (const handler of listeners.get(name) || []) {
+            handler.call(node, {
+              target: node,
+              currentTarget: node,
+              key: event.key || "",
+              preventDefault() {},
+              ...event,
+            });
+          }
+        },
+        focus() { activeElement = node; },
         setAttribute(name, value) { attributes.set(name, String(value)); },
-        getAttribute(name) { return attributes.get(name) || null; },
-      });
+        getAttribute(name) { return attributes.has(name) ? attributes.get(name) : null; },
+      };
+      elements.set(id, node);
     }
     return elements.get(id);
   }
 
+  const document = {
+    get activeElement() { return activeElement; },
+    getElementById: element,
+  };
   const appWindow = {
     WorkTraceApp: {},
     setTimeout(handler, delay) {
@@ -100,8 +126,9 @@ function harness() {
     Math,
     Date: FixedDate,
     setImmediate,
+    parseInt,
     window: appWindow,
-    document: { getElementById: element },
+    document,
   };
   vm.createContext(context);
 
@@ -146,7 +173,6 @@ function harness() {
   );
 
   element("statistics-results").hidden = true;
-  element("statistics-all-time-label").hidden = true;
   element("stats-export-action-btn").disabled = true;
 
   function runTimers() {
@@ -173,14 +199,12 @@ function harness() {
     App.setStatisticsLoading(false);
   }
 
-  return { App, element, runTimers, seedAcceptedPresentation, statisticsCalls };
+  return { App, element, runTimers, seedAcceptedPresentation, statisticsCalls, activeElement: () => activeElement };
 }
 
 test("first initialization defaults to Monday through today without querying", () => {
   const { App, element, statisticsCalls } = harness();
-
   App.initStatisticsDefaults();
-
   assert.deepEqual(JSON.parse(JSON.stringify(App.statisticsSelection)), {
     allTime: false,
     dateFrom: "2026-07-13",
@@ -193,6 +217,8 @@ test("first initialization defaults to Monday through today without querying", (
   });
   assert.equal(element("statistics-date-from").value, "2026-07-13");
   assert.equal(element("statistics-date-to").value, "2026-07-17");
+  assert.equal(element("statistics-date-from").type, "date");
+  assert.equal(element("statistics-date-from").getAttribute("data-empty"), "false");
   assert.equal(element("statistics-week-btn").getAttribute("aria-pressed"), "true");
   assert.equal(statisticsCalls.length, 0);
 });
@@ -200,9 +226,7 @@ test("first initialization defaults to Monday through today without querying", (
 test("today quick range queries today through today", async () => {
   const { App, element, statisticsCalls } = harness();
   App.initStatisticsDefaults();
-
   await App.applyStatisticsQuickRange("today");
-
   assert.deepEqual(statisticsCalls.at(-1), ["2026-07-17", "2026-07-17", ""]);
   assert.equal(statisticsCalls.length, 1);
   assert.equal(element("statistics-today-btn").getAttribute("aria-pressed"), "true");
@@ -211,9 +235,7 @@ test("today quick range queries today through today", async () => {
 test("week quick range queries Monday through today", async () => {
   const { App, element, statisticsCalls } = harness();
   App.initStatisticsDefaults();
-
   await App.applyStatisticsQuickRange("week");
-
   assert.deepEqual(statisticsCalls.at(-1), ["2026-07-13", "2026-07-17", ""]);
   assert.equal(statisticsCalls.length, 1);
   assert.equal(element("statistics-week-btn").getAttribute("aria-pressed"), "true");
@@ -222,26 +244,39 @@ test("week quick range queries Monday through today", async () => {
 test("month quick range queries month start through today", async () => {
   const { App, element, statisticsCalls } = harness();
   App.initStatisticsDefaults();
-
   await App.applyStatisticsQuickRange("month");
-
   assert.deepEqual(statisticsCalls.at(-1), ["2026-07-01", "2026-07-17", ""]);
   assert.equal(statisticsCalls.length, 1);
   assert.equal(element("statistics-month-btn").getAttribute("aria-pressed"), "true");
 });
 
-test("all quick range sends empty dates and shows all-time label", async () => {
+test("all quick range keeps native date controls and controlled empty presentation", async () => {
   const { App, element, statisticsCalls } = harness();
   App.initStatisticsDefaults();
-
   await App.applyStatisticsQuickRange("all");
-
   assert.deepEqual(statisticsCalls.at(-1), ["", "", ""]);
   assert.equal(statisticsCalls.length, 1);
-  assert.equal(element("statistics-date-inputs").hidden, true);
-  assert.equal(element("statistics-all-time-label").hidden, false);
+  assert.equal(element("statistics-date-from").value, "");
+  assert.equal(element("statistics-date-to").value, "");
+  assert.equal(element("statistics-date-from").type, "date");
+  assert.equal(element("statistics-date-to").type, "date");
+  assert.equal(element("statistics-date-from").getAttribute("data-empty"), "true");
+  assert.equal(element("statistics-date-to").getAttribute("data-empty"), "true");
   assert.equal(element("statistics-all-btn").getAttribute("aria-pressed"), "true");
-  assert.equal(element("stats-scope").textContent, "当前范围：全部时间 · 全部项目");
+
+  element("statistics-date-from").value = "2026-07-01";
+  element("statistics-date-from").dispatch("change");
+  element("statistics-date-to").value = "2026-07-17";
+  element("statistics-date-to").dispatch("change");
+  assert.equal(App.statisticsDraftSelection.allTime, false);
+  assert.equal(element("statistics-date-from").getAttribute("data-empty"), "false");
+  assert.equal(element("statistics-date-to").getAttribute("data-empty"), "false");
+  assert.equal(element("statistics-date-status").textContent, "日期范围尚未应用");
+
+  await App.applyStatisticsDraftSelection();
+  assert.deepEqual(statisticsCalls.at(-1), ["2026-07-01", "2026-07-17", ""]);
+  assert.equal(element("statistics-month-btn").getAttribute("aria-pressed"), "true");
+  assert.equal(element("statistics-all-btn").getAttribute("aria-pressed"), "false");
 });
 
 test("manual start and end date changes only update draft and preserve accepted results", () => {
@@ -252,7 +287,6 @@ test("manual start and end date changes only update draft and preserve accepted 
   element("statistics-date-from").dispatch("change");
   element("statistics-date-to").value = "2026-07-16";
   element("statistics-date-to").dispatch("input");
-
   assert.equal(statisticsCalls.length, 0);
   assert.equal(App.statisticsAcceptedPayload.exportTicket.revision, "old-revision");
   assert.equal(App.statisticsSnapshotRevision, "old-revision");
@@ -278,9 +312,7 @@ test("apply commits the complete draft and starts exactly one query", async () =
   element("statistics-date-from").dispatch("change");
   element("statistics-date-to").value = "2026-07-16";
   element("statistics-date-to").dispatch("change");
-
   await App.applyStatisticsDraftSelection();
-
   assert.deepEqual(statisticsCalls, [["2026-07-14", "2026-07-16", ""]]);
   assert.equal(App.statisticsLoaded, true);
   assert.equal(element("statistics-results").hidden, false);
@@ -297,9 +329,7 @@ test("invalid or incomplete draft stays local and never queries", async () => {
   element("statistics-date-to").value = "2026-07-17";
   element("statistics-date-from").dispatch("input");
   element("statistics-date-to").dispatch("change");
-
   await App.applyStatisticsDraftSelection();
-
   assert.equal(statisticsCalls.length, 0);
   assert.equal(element("statistics-date-status").textContent, "请选择有效日期范围");
   assert.equal(element("statistics-date-status").className.includes("error"), true);
@@ -315,9 +345,7 @@ test("project change immediately hides results and starts a scoped query", () =>
     return pending.promise;
   };
   element("statistics-project-filter").value = "7";
-
   element("statistics-project-filter").dispatch("change");
-
   assert.equal(element("statistics-results").hidden, true);
   assert.equal(App.statisticsAcceptedPayload, null);
   assert.equal(App.statisticsLoading, true);
@@ -337,9 +365,7 @@ test("generic loading state blocks export without implicitly discarding a snapsh
     calls += 1;
     return Promise.resolve({ ok: true });
   };
-
   App.exportStatisticsCsv();
-
   assert.equal(calls, 0);
   assert.equal(App.statisticsAcceptedPayload, accepted);
 });
@@ -350,19 +376,21 @@ test("successful latest query accepts its ticket and shows fresh results", async
   App.initStatisticsDefaults();
   seedAcceptedPresentation();
   App.bridge.getStatisticsExportSummary = () => pending.promise;
-
   const load = App.applyStatisticsQuickRange("month");
   assert.equal(element("statistics-results").hidden, true);
   pending.resolve(summaryResult("2026-07-01", "2026-07-17", "", "fresh-revision"));
   await load;
-
   assert.equal(App.statisticsSnapshotRevision, "fresh-revision");
   assert.equal(App.statisticsAcceptedPayload.exportTicket.revision, "fresh-revision");
   assert.equal(App.statisticsLoaded, true);
   assert.equal(App.statisticsLoading, false);
   assert.equal(element("statistics-results").hidden, false);
   assert.equal(element("stats-total").textContent, "01:00:00");
+  assert.equal(element("stats-activity-count").textContent, "4");
+  assert.equal(element("stats-file-count").textContent, "1");
   assert.equal(element("stats-export-action-btn").disabled, false);
+  assert.match(element("stats-by-project").innerHTML, />3<\/td>/);
+  assert.doesNotMatch(element("stats-by-project").innerHTML, />4<\/td>/);
 });
 
 test("failed latest query never restores stale results or ticket", async () => {
@@ -370,9 +398,7 @@ test("failed latest query never restores stale results or ticket", async () => {
   App.initStatisticsDefaults();
   seedAcceptedPresentation();
   App.bridge.getStatisticsExportSummary = () => Promise.reject(new Error("failed"));
-
   await App.applyStatisticsQuickRange("month");
-
   assert.equal(App.statisticsAcceptedPayload, null);
   assert.equal(App.statisticsLoaded, false);
   assert.equal(App.statisticsLoading, false);
@@ -391,16 +417,13 @@ test("stale request cannot render or end loading owned by the latest request", a
     call += 1;
     return call === 1 ? first.promise : second.promise;
   };
-
   const firstLoad = App.applyStatisticsQuickRange("month");
   const secondLoad = App.applyStatisticsQuickRange("all");
   first.resolve(summaryResult("2026-07-01", "2026-07-17", "", "stale-revision"));
   await firstLoad;
-
   assert.equal(App.statisticsAcceptedPayload, null);
   assert.equal(App.statisticsLoading, true);
   assert.equal(element("statistics-results").hidden, true);
-
   second.resolve(summaryResult("", "", "", "latest-revision"));
   await secondLoad;
   assert.equal(App.statisticsAcceptedPayload.exportTicket.revision, "latest-revision");
@@ -416,13 +439,33 @@ test("applied manual dates derive shortcut highlighting without a custom mode", 
   element("statistics-date-from").dispatch("change");
   await App.applyStatisticsDraftSelection();
   assert.equal(element("statistics-month-btn").getAttribute("aria-pressed"), "true");
-
   element("statistics-date-from").value = "2026-07-02";
   element("statistics-date-from").dispatch("change");
   await App.applyStatisticsDraftSelection();
   for (const name of ["today", "week", "month", "all"]) {
     assert.equal(element(`statistics-${name}-btn`).getAttribute("aria-pressed"), "false");
   }
+});
+
+test("statistics tabs use one roving keyboard lifecycle", () => {
+  const { App, element, activeElement } = harness();
+  App.initStatisticsDefaults();
+  const project = element("stats-project-tab");
+  const file = element("stats-file-tab");
+  const app = element("stats-app-tab");
+  assert.equal(project.tabIndex, 0);
+  assert.equal(file.tabIndex, -1);
+  project.dispatch("keydown", { key: "ArrowRight" });
+  assert.equal(file.getAttribute("aria-selected"), "true");
+  assert.equal(file.tabIndex, 0);
+  assert.equal(project.tabIndex, -1);
+  assert.equal(activeElement(), file);
+  file.dispatch("keydown", { key: "End" });
+  assert.equal(app.getAttribute("aria-selected"), "true");
+  assert.equal(activeElement(), app);
+  app.dispatch("keydown", { key: "Home" });
+  assert.equal(project.getAttribute("aria-selected"), "true");
+  assert.equal(activeElement(), project);
 });
 
 test("export uses only the newest successfully accepted ticket", async () => {
@@ -434,11 +477,9 @@ test("export uses only the newest successfully accepted ticket", async () => {
     calls.push(args);
     return Promise.resolve({ ok: true, filename: "worktrace.csv" });
   };
-
   App.exportStatisticsCsv();
   await flush();
   await flush();
-
   assert.deepEqual(calls, [["2026-07-01", "2026-07-17", "revision-1", ""]]);
 });
 
@@ -453,12 +494,10 @@ test("in-flight export guard suppresses duplicate clicks", async () => {
     calls += 1;
     return pending.promise;
   };
-
   App.exportStatisticsCsv();
   App.exportStatisticsCsv();
   assert.equal(calls, 1);
   assert.equal(App.statisticsExportSaving, true);
-
   pending.resolve({ ok: true, filename: "worktrace.csv" });
   await flush();
   await flush();

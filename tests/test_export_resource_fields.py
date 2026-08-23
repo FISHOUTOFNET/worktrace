@@ -64,7 +64,7 @@ def _sessions_sheet(path: str):
     return wb["Sessions"]
 
 
-def test_excel_sessions_sheet_omits_activity_resource_detail_columns(temp_db):
+def test_excel_sessions_sheet_omits_internal_and_resource_detail_columns(temp_db):
     _insert_closed_activity(
         "Word",
         "winword.exe",
@@ -80,23 +80,29 @@ def test_excel_sessions_sheet_omits_activity_resource_detail_columns(temp_db):
         export_excel_file("2026-06-18", "2026-06-18", path)
         ws = _sessions_sheet(path)
         headers = [cell.value for cell in ws[1]]
-        for removed in ("应用", "资源类型", "资源名称", "路径", "域名"):
+        for removed in (
+            "应用",
+            "资源类型",
+            "资源名称",
+            "路径",
+            "域名",
+            "结束时间",
+            "时长秒数",
+            "状态",
+            "修正时长",
+            "是否已修正",
+        ):
             assert removed not in headers
         assert headers == [
             "日期",
             "开始时间",
-            "结束时间",
             "时长",
-            "时长秒数",
             "项目",
-            "状态",
             "备注",
-            "修正时长",
-            "是否已修正",
         ]
 
 
-def test_excel_sessions_status_and_project_display_contract(temp_db):
+def test_excel_sessions_project_display_contract_without_internal_status(temp_db):
     pid = project_service.create_project("Client")
     _insert_closed_activity(
         "Word",
@@ -131,13 +137,12 @@ def test_excel_sessions_status_and_project_display_contract(temp_db):
         export_excel_file("2026-06-18", "2026-06-18", path)
         ws = _sessions_sheet(path)
         headers = [cell.value for cell in ws[1]]
-        status_col = headers.index("状态")
+        assert "状态" not in headers
         project_col = headers.index("项目")
         rows = [[cell.value for cell in row] for row in ws.iter_rows(min_row=2)]
 
-        by_status = {row[status_col]: row for row in rows}
-        assert set(by_status) == {"空闲、正常", "异常、已排除"}
-        assert by_status["空闲、正常"][project_col] == "Client"
-        assert by_status["异常、已排除"][project_col] == "Client"
+        assert len(rows) == 2
+        assert {row[project_col] for row in rows} == {"Client"}
+        exported_text = "\n".join(str(cell) for row in rows for cell in row)
         for raw in ("normal", "idle", "paused", "excluded", "error"):
-            assert raw not in by_status
+            assert raw not in exported_text

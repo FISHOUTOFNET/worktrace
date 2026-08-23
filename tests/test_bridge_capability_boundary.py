@@ -23,6 +23,7 @@ EXPECTED_SHIPPING_METHODS = frozenset(
         "backfill_project_rules_batch",
         "clear_all_local_data",
         "choose_project_rule_folder",
+        "clear_fd_work_binding_for_rules",
         "copy_timeline_session",
         "create_excluded_folder_rule",
         "create_excluded_keyword_rule",
@@ -34,6 +35,7 @@ EXPECTED_SHIPPING_METHODS = frozenset(
         "delete_project_keyword_rule",
         "export_encrypted_backup",
         "export_statistics_csv",
+        "get_fd_work_status",
         "get_first_run_notice",
         "get_overview",
         "get_project_rules",
@@ -46,14 +48,19 @@ EXPECTED_SHIPPING_METHODS = frozenset(
         "hide_timeline_session",
         "hide_timeline_session_activity",
         "import_encrypted_backup",
+        "list_project_catalog",
         "list_projects_for_timeline",
         "merge_timeline_session",
+        "open_fd_work_case_picker",
+        "open_fd_work_entry",
+        "show_fd_work_login",
         "preview_encrypted_backup_manifest",
         "preview_project_rule_impact",
         "preview_project_rules_batch_impact",
         "recover_database_maintenance",
         "save_timeline_session_edit",
         "set_clipboard_capture_enabled",
+        "set_fd_work_enabled",
         "set_launch_at_login",
         "set_excluded_rules_enabled",
         "set_project_enabled_for_rules",
@@ -142,7 +149,7 @@ def test_shipping_bridge_public_methods_equal_allowlist() -> None:
 
 def test_project_folder_picker_is_fixed_and_does_not_expose_filesystem_browsing() -> None:
     source = (
-        ROOT / "worktrace" / "webview_ui" / "js" / "init.js"
+        ROOT / "worktrace" / "webview_ui" / "js" / "init_fd_work_v5.js"
     ).read_text(encoding="utf-8")
     assert (
         'chooseProjectRuleFolder: fixedBridgeMethod("choose_project_rule_folder")'

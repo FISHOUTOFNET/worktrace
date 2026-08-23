@@ -5,6 +5,11 @@
     function text(value, fallback) { return App.escapeHtml(App.safeText(value, fallback)); }
     function count(value) { return App.escapeHtml(String(parseInt(value, 10) || 0)); }
     function kind(value) { return value === "folder" ? "folder" : "keyword"; }
+    function visibleRuleDetail(rule) {
+        return kind(rule && rule.kind) === "folder"
+            ? (rule && rule.recursive === false ? "仅直接文件" : "包含子文件夹")
+            : "";
+    }
 
     function renderProjectRuleProject(project) {
         var id = parseInt(project && project.id, 10) || 0;
@@ -12,9 +17,16 @@
         var rows = rules.length ? rules.map(renderProjectRuleRow).join("")
             : '<div class="rules-project-empty">此项目暂无规则</div>';
         var searchable = [project && project.name, project && project.description]
-            .concat(rules.map(function (rule) { return (rule.target || "") + " " + (rule.detail || ""); }))
+            .concat(rules.map(function (rule) { return (rule.target || "") + " " + visibleRuleDetail(rule); }))
             .join(" ").toLocaleLowerCase();
         var projectDescription = String((project && project.description) || "").trim();
+        var lastUsedAt = String((project && project.last_used_at) || "").trim();
+        var descriptionMarkup = projectDescription
+            ? '<div class="rules-project-description">' + text(projectDescription, "") + '</div>'
+            : '<div class="rules-project-description is-empty">' + text("暂无描述", "暂无描述") + '</div>';
+        var metaMarkup = lastUsedAt
+            ? '<div class="rules-project-meta"><span>上次使用：' + text(lastUsedAt, "") + '</span></div>'
+            : "";
         return '<article class="rules-project-card" data-project-id="' + count(id)
             + '" data-rules-search="' + text(searchable, "") + '">'
             + '<div class="rules-project-head">'
@@ -22,9 +34,7 @@
             + ' aria-label="展开 ' + text(project && project.name, "项目") + ' 的规则" data-tooltip="展开规则">'
             + App.iconMarkup("chevron-right") + '</button>'
             + '<div class="rules-project-title-group"><div class="rules-project-title">'
-            + text(project && project.name, "未命名项目") + '</div>'
-            + '<div class="rules-project-description' + (projectDescription ? "" : " is-empty") + '">'
-            + text(projectDescription || "无描述", "无描述") + '</div></div>'
+            + text(project && project.name, "未命名项目") + '</div>' + descriptionMarkup + '</div>'
             + '<div class="rules-project-side"><div class="rules-project-actions">'
             + '<button class="rules-project-add-rule-button icon-button compact-icon-button inline-icon-button" type="button" data-project-id="' + count(id)
             + '" aria-label="新建规则" data-tooltip="新建规则">' + App.iconMarkup("plus") + '</button>'
@@ -32,20 +42,19 @@
             + '" aria-label="编辑项目" data-tooltip="编辑项目">' + App.iconMarkup("pencil") + '</button>'
             + '<button class="rules-project-delete-button icon-button compact-icon-button inline-icon-button danger-icon-button" type="button" data-project-id="' + count(id)
             + '" aria-label="删除项目" data-tooltip="删除项目">' + App.iconMarkup("trash") + '</button>'
-            + '</div><div class="rules-project-meta"><span>上次使用：'
-            + text(project && project.last_used_at, "暂无使用记录")
-            + '</span></div></div></div><div class="rules-row-list" hidden>' + rows + '</div></article>';
+            + '</div>' + metaMarkup + '</div></div><div class="rules-row-list" hidden>' + rows + '</div></article>';
     }
     App.renderProjectRuleProject = renderProjectRuleProject;
 
     function renderProjectRuleRow(rule) {
         var ruleKind = kind(rule && rule.kind);
         var id = parseInt(rule && rule.id, 10) || 0;
+        var detail = visibleRuleDetail(rule);
         return '<div class="rules-row"><span class="rules-kind-badge rules-kind-' + ruleKind + '">'
             + text(rule && rule.kind_label, "规则") + '</span><div class="rules-row-main"><div class="rules-target">'
-            + text(rule && rule.target, "未设置") + '</div>'
-            + (rule && rule.detail ? '<div class="rules-detail">' + text(rule.detail, "") + '</div>' : '')
-            + '</div><button class="rules-' + ruleKind + '-delete-button icon-button compact-icon-button danger-icon-button" type="button" data-rule-kind="'
+            + text(rule && rule.target, "未设置")
+            + (detail ? '<span class="rules-detail"> · ' + text(detail, "") + '</span>' : '')
+            + '</div></div><button class="rules-' + ruleKind + '-delete-button icon-button compact-icon-button danger-icon-button" type="button" data-rule-kind="'
             + ruleKind + '" data-rule-id="' + count(id) + '" aria-label="删除规则" data-tooltip="删除规则">'
             + App.iconMarkup("trash") + '</button></div>';
     }

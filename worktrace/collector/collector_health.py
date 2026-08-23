@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -181,10 +182,13 @@ def record_fatal_failure(
             "collector_last_failure_kind": safe_code,
         }
     )
+    exception_type, exception_stack = _current_exception_diagnostic()
     logging.error(
-        "collector fatal failure phase=%s code=%s",
+        "collector fatal failure phase=%s code=%s exception_type=%s stack=%s",
         _safe_phase(phase),
         safe_code,
+        exception_type,
+        exception_stack,
     )
 
 
@@ -241,6 +245,25 @@ def _safe_health_code(code: str) -> str:
     value = str(code or "").strip().lower()
     normalized = _SAFE_CODE_PATTERN.sub("_", value).strip("_")
     return (normalized or CollectorFailureCode.UNEXPECTED_FAILURE.value)[:64]
+
+
+def _current_exception_diagnostic() -> tuple[str, str]:
+    """Return exception type and code locations without exception text."""
+
+    exc_type, _exc_value, tb = sys.exc_info()
+    if exc_type is None or tb is None:
+        return "none", "none"
+    locations: list[str] = []
+    while tb is not None:
+        frame = tb.tb_frame
+        normalized = str(frame.f_code.co_filename or "").replace("\\", "/")
+        parts = [part for part in normalized.split("/") if part]
+        safe_path = "/".join(parts[-3:]) or "unknown"
+        locations.append(
+            f"{safe_path}:{tb.tb_lineno}:{frame.f_code.co_name}"
+        )
+        tb = tb.tb_next
+    return exc_type.__name__, ">".join(locations[-6:]) or "none"
 
 
 def format_time(value: datetime | str | None = None) -> str:

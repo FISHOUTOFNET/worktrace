@@ -23,23 +23,35 @@ def test_shipping_js_has_no_retired_replacement_reset_reason():
     assert 'resetClientGeneration("database_clear")' not in source
 
 
-def test_client_generation_reset_clears_all_runtime_owners():
-    source = (JS / "init.js").read_text(encoding="utf-8")
+def test_client_generation_reset_delegates_page_state_to_fixed_owners():
+    source = (JS / "init_fd_work_v5.js").read_text(encoding="utf-8")
     start = source.index("function resetClientGeneration(reason)")
     end = source.index("App.resetClientGeneration = resetClientGeneration", start)
     body = source[start:end]
     for required in (
         "bumpDataEpoch()",
-        "selectedProjectionInstanceKey = null",
-        "detailsOwner = null",
-        "mutationOwner = null",
-        "projectsCache = null",
+        "App.overview.resetGeneration()",
+        "App.timeline.resetGeneration()",
+        "App.statistics.resetGeneration()",
+        "App.rules.resetGeneration()",
+        "App.settings.resetGeneration()",
+        "App.fdWork.resetGeneration()",
         "lastRefreshState = null",
         "activePageRefreshPending = null",
         "liveRuntimeStore.reset()",
         "_monotonicRenderState = {}",
     ):
         assert required in body
+    for page_private_field in (
+        "selectedProjectionInstanceKey",
+        "detailsOwner",
+        "mutationOwner",
+        "projectsCache",
+        "rulesLoadPromise",
+        "statisticsDraftSelection",
+        "timelineAutosaveQueued",
+    ):
+        assert page_private_field not in body
 
 
 def test_first_run_notice_failure_remains_retryable():

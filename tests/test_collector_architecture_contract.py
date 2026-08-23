@@ -298,10 +298,10 @@ def test_pending_short_settings_are_limited_to_compatibility_cleanup():
 
 
 def test_frontend_keeps_single_live_runtime_clock():
-    init = _source("worktrace/webview_ui/js/init.js")
+    init = _source("worktrace/webview_ui/js/init_fd_work_v5.js")
     shipping_js = "\n".join(
         _source(f"worktrace/webview_ui/js/{name}")
-        for name in ("core.js", "init.js", "overview.js", "timeline.js")
+        for name in ("core.js", "init_fd_work_v5.js", "overview.js", "timeline.js")
     )
     assert "App.liveRuntimeStore = liveRuntimeStore" in init
     assert 'Object.defineProperty(App, "liveRuntime"' in init

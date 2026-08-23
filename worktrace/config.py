@@ -20,10 +20,11 @@ def get_local_appdata() -> Path:
 
 
 def get_default_export_dir() -> Path:
-    return Path.home() / "Documents" / "WorkTrace Exports"
+    return Path.home() / "Documents" / "有迹"
 
 
 def resolve_paths() -> AppPaths:
+    # This legacy storage identity is intentionally stable across the rename.
     base_dir = get_local_appdata() / "WorkTrace"
     data_dir = base_dir / "data"
     log_dir = base_dir / "logs"

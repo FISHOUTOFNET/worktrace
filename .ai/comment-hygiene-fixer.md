@@ -40,6 +40,4 @@ Hard rules:
     - `python scripts/comment_hygiene.py --check`
     - `python scripts/comment_hygiene.py --summary`
     - `pytest tests/test_comment_hygiene.py tests/test_code_comment_hygiene.py`
-    - `pytest tests/test_run_affected_tests.py`
-    - `python scripts/run_affected_tests.py`
-    - `pytest`
+    - `python -m pytest -m "not benchmark"`

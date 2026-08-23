@@ -33,7 +33,7 @@ records.
 - Overview page (KPIs, current activity, recent activities, pause toggle).
 - Timeline / Time Details page with editing: project reclassification,
   session-note editing, single-activity time correction / split / merge /
-  hide / soft delete / restore, batch project and batch note editing, and a
+  hide / soft delete / restore, batch project + batch note editing, and a
   read-only correction shell.
 - Statistics / Export page: read-only summary cards and grouped tables, plus
   CSV export (display-safe, UTF-8 BOM, no raw window title / file path /
@@ -90,44 +90,57 @@ tray menu for a complete graceful shutdown.
 
 ## Windows Packaging
 
-Packaging is optional and relies on extra build dependencies that are not
-part of the runtime requirements. Install the runtime dependencies first,
-then add the build dependencies only when packaging:
+Local Windows packaging supports Python 3.11+ and Inno Setup 6.3.0+.
+Install the normal build dependencies without forcing the CI baseline:
 
 ```powershell
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
+python -m pip install -r requirements-dev.txt
 ```
 
-Build the single-file executable:
+Then run the canonical release build entry point:
 
 ```powershell
-python -m PyInstaller --noconfirm --clean WorkTrace.spec
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_release.ps1
 ```
 
-Install the fixed Inno Setup 6 toolchain, then build the per-user installer
-after the single-file executable. The build script locates `ISCC.exe` and
-fails clearly if it is unavailable:
+The release script checks only the supported Python minimum, builds the
+single-file executable with PyInstaller in an isolated temporary
+`build\release-staging\...` directory, publishes the versioned portable
+executable to `dist\`, and builds the versioned installer from that staged
+binary. `dist\` is therefore a publication boundary rather than a PyInstaller
+work directory. The installer build verifies that the discovered `ISCC.exe`
+is Inno Setup 6.3.0 or newer before compiling the original
+`installer\WorkTrace.iss`; it does not rewrite a generated copy of the
+installer source. The compiled installer is also checked directly to confirm
+that it embeds the canonical 有迹 icon resource.
+
+CI deliberately remains stricter for reproducibility: its verified baseline
+uses Python 3.11.9, the checked-in `constraints-release.txt`, and Inno Setup
+6.7.3. Those versions define the CI reference environment, not the only
+supported local build environment.
+
+Canonical release outputs are exactly `dist\Trace-<version>.exe` and
+`dist\Trace-Setup-<version>.exe`. Unversioned release aliases such as
+`dist\Trace.exe` and `dist\Trace-Setup.exe`, plus historical `WorkTrace*.exe`
+release artifacts, are retired and removed by canonical release builds. The
+installed application is still named `Trace.exe`; Inno Setup applies that
+installed filename independently of the versioned release package filename.
+Fresh installs go to `%LOCALAPPDATA%\Programs\Trace`, create the current-user
+Start Menu shortcut `有迹`, install per-user only, and do not request
+administrator privileges. Build artifacts under `build/` and `dist/` must not
+be committed to Git.
+
+If the portable release already exists and only the installer must be rebuilt,
+pass that versioned executable explicitly:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1 -ExePath "dist\Trace-<version>.exe"
 ```
-
-Build outputs: `dist\WorkTrace.exe` (single-file application) and
-`dist\WorkTrace-Setup.exe` (current-user installer). The installer copies
-WorkTrace to `%LOCALAPPDATA%\Programs\WorkTrace`, creates a current-user
-Start Menu shortcut, installs per-user only, and does not request
-administrator privileges. Its default-selected task registers the current
-user's HKCU Run value; the task can be deselected during install or changed
-later in Settings → General. Build artifacts (`build/`, `dist/`, generated
-`.spec` files other than `WorkTrace.spec`) must not be committed to Git.
 
 ## Release Validation
 
 Before a Windows release, use
-[`docs/release-validation.md`](docs/release-validation.md) as the v0.1 Lite
-release-candidate baseline. Run `pytest`, require GitHub Actions CI to pass,
-and validate both the PyInstaller exe and the per-user installer.
+[`docs/release-validation.md`](docs/release-validation.md) as the release-candidate baseline. Require the full non-benchmark Python suite and GitHub Actions CI to pass, and validate both the PyInstaller executable and the per-user installer lifecycle.
 
 ## v0.2 Boundary And Local Security
 
@@ -148,98 +161,40 @@ Tests run without requiring a real Windows foreground window and use
 
 ### Local Test Strategy
 
-WorkTrace has a large and growing test suite, so running the full `pytest` on
-every small change is wasteful. Default to the affected-test runner for
-day-to-day iteration; reserve the full suite for cross-cutting changes,
-pre-push, and release validation.
+Local test selection is explicit. There is no changed-file/affected-test dependency map and no separate machine-readable test policy or inventory gate. Pytest owns collection and marker validation; `pytest.ini` enables strict markers. Standard CI remains the regression backstop and always runs the complete non-benchmark Python suite.
 
 ```powershell
-# Day-to-day: run only the tests affected by the current workspace changes
-# (staged + unstaged vs HEAD). Pure standard library; no new dependencies.
-python scripts/run_affected_tests.py
+# Known failure or owner
+python -m pytest --lf
+python -m pytest tests/test_timeline_service.py
+python -m pytest tests/test_timeline_service.py::TestClassName::test_case
 
-# Print the detected changed files and selected targets without running pytest
-python scripts/run_affected_tests.py --list
+# Fast marker-covered feedback
+python -m pytest -m "unit and not slow"
 
-# Print the final pytest command without executing it
-python scripts/run_affected_tests.py --print-only
+# Cross-layer/static contract feedback
+python -m pytest -m contract
+python -m pytest -m "webview_static and contract"
+python -m pytest -m "live_display and contract"
+python -m pytest -m "collector_runtime and integration"
+python -m pytest -m "security_privacy"
 
-# Marker-covered fast feedback (incremental marker coverage; not a full
-# fast universe yet)
-python scripts/run_affected_tests.py --fast
-
-# Test/comment/runner governance gate
-python scripts/run_affected_tests.py --governance
-
-# Explicit full-suite fallback
-python scripts/run_affected_tests.py --all
-
-# Only consider staged changes; or diff against a custom base ref
-python scripts/run_affected_tests.py --staged
-python scripts/run_affected_tests.py --base HEAD
-
-# Pass extra pytest arguments after --
-python scripts/run_affected_tests.py -- --maxfail=1 -q
-
-# Audit test structure, marker coverage, and governance warnings
-python scripts/test_inventory.py
-python scripts/test_inventory.py --check
+# Full Standard-CI Python correctness surface
+python -m pytest -m "not benchmark"
 ```
 
-The runner maps changed source / docs / packaging paths to a conservative,
-finite set of pytest targets and now prints marker-shard diagnostics for some
-well-known domains (`webview_static`, `live_display`, `collector_runtime`,
-`security_privacy`, `packaging`). The default command still runs concrete
-targets so unmarked tests are not skipped. When nothing changed it runs a
-light smoke set (startup imports, WebView bridge boundary, WebView
-static-contract suite) plus the `import worktrace.webview_main` import smoke —
-it never silently runs the full suite. PyInstaller and the per-user installer
-are **not** part of the affected runner; they remain manual release-validation
-steps.
+Use the narrowest explicit target that gives useful feedback during iteration. Use the full non-benchmark suite for DB/schema, collector/runtime, live display, privacy/security, recovery/concurrency, broad architecture changes, pre-push confidence, and release validation. Performance benchmarks and installer lifecycle acceptance stay in their dedicated workflows.
 
-Test governance lives in [`docs/testing/test-governance.md`](docs/testing/test-governance.md)
-and `test_policy.json`. `--fast` is `python -m pytest -m "unit and not slow"`
-over the currently marked unit surface. `--governance` runs inventory,
-comment hygiene, and focused runner/inventory tests without becoming another
-full suite. `python scripts/test_inventory.py --check` hard-fails explicit
-sleep, stale affected-runner targets, unregistered markers, budget overruns
-without reason overrides, and obvious risk/marker mismatches; unmarked tests
-remain warnings while marker coverage is incremental.
+Test maintenance rules live in [`docs/testing/test-governance.md`](docs/testing/test-governance.md). Shared helpers live under `tests/support/`: use small domain factories for repeated setup, keep scenarios readable, and avoid large fixtures that hide behavior.
 
-### Targeted and Full Test Commands
-
-```powershell
-# Single point of failure / known-failing tests from the last run
-pytest --lf
-
-# A specific test file or test case
-pytest tests/test_timeline_service.py
-pytest tests/test_timeline_service.py::TestClassName::test_case
-
-# Marker shards for focused local feedback
-pytest -m "webview_static and contract"
-pytest -m "live_display and contract"
-pytest -m "collector_runtime and integration"
-pytest -m "security_privacy"
-pytest -m "packaging"
-
-# Full suite — use for core cross-cutting changes, pre-push, or release
-# validation. Also runs in GitHub Actions CI.
-pytest
-```
-
-This phase does **not** enable parallel testing. The `parallel_safe` and
-`serial` markers are planning labels for future work only; default `pytest`
-and the affected runner remain non-parallel. Shared helpers live under
-`tests/support/`: use small domain factories for repeated setup, but keep each
-test's scenario readable and avoid large fixtures that hide behavior.
+This project does **not** currently enable parallel pytest. The `parallel_safe` and `serial` markers remain planning labels only.
 
 ## Local Paths
 
-- Database: `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`
-- Logs: `%LOCALAPPDATA%\WorkTrace\logs\worktrace.log`
-- Optional COM path catalog: `%LOCALAPPDATA%\WorkTrace\com_path_catalog.json`
-- Default exports: `Documents\WorkTrace Exports`
+- Database: `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`.
+- Logs: `%LOCALAPPDATA%\WorkTrace\logs\worktrace.log`.
+- Optional COM path catalog: `%LOCALAPPDATA%\WorkTrace\com_path_catalog.json`.
+- Default exports: `Documents\WorkTrace Exports`.
 
 `schema.sql` is the single source of truth for the local database structure.
 The project is in pre-release development, so old databases are not

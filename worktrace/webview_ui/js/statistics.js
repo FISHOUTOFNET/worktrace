@@ -4,6 +4,160 @@
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
     function element(id) { return document.getElementById(id); }
+
+    function nonNegativeInt(value) {
+        var parsed = parseInt(value, 10);
+        return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    }
+
+    function cloneGroups(groups) {
+        return (Array.isArray(groups) ? groups : []).map(function (group) {
+            return Object.assign({}, group || {});
+        });
+    }
+
+    function updateLiveGroup(groups, key, delta, totalSeconds) {
+        if (!key || !delta) return;
+        var target = null;
+        for (var i = 0; i < groups.length; i++) {
+            if (String(groups[i].key || "") === String(key)) {
+                target = groups[i];
+                break;
+            }
+        }
+        if (!target) return;
+        target.duration_seconds = nonNegativeInt(target.duration_seconds) + delta;
+        target.duration = App.formatDuration(target.duration_seconds);
+        for (var j = 0; j < groups.length; j++) {
+            var seconds = nonNegativeInt(groups[j].duration_seconds);
+            groups[j].percentage = totalSeconds > 0
+                ? Math.round(seconds / totalSeconds * 1000) / 10
+                : 0;
+        }
+    }
+
+    function liveTargetElapsedSeconds(target, nowMs) {
+        var sampledSeconds = nonNegativeInt(target && target.elapsed_seconds_at_sample);
+        if (!target || target.enabled !== true || target.ticking !== true) return sampledSeconds;
+        var sampledAt = nonNegativeInt(target.sampled_at_epoch_ms);
+        if (!sampledAt) return sampledSeconds;
+        return sampledSeconds + Math.max(0, Math.floor((nowMs - sampledAt) / 1000));
+    }
+
+    function statisticsLiveSummaryAtNow(baseSummary, nowMs, targetOverride) {
+        if (!baseSummary || typeof baseSummary !== "object") return baseSummary;
+        var target = targetOverride || baseSummary.live_target;
+        if (!target || target.enabled !== true) return baseSummary;
+        var sampledSeconds = nonNegativeInt(target.elapsed_seconds_at_sample);
+        var currentSeconds = liveTargetElapsedSeconds(target, nowMs);
+        var delta = Math.max(0, currentSeconds - sampledSeconds);
+        if (!delta) return baseSummary;
+
+        var summary = Object.assign({}, baseSummary);
+        summary.by_project = cloneGroups(baseSummary.by_project);
+        summary.by_file = cloneGroups(baseSummary.by_file);
+        summary.by_app = cloneGroups(baseSummary.by_app);
+        summary.by_status = cloneGroups(baseSummary.by_status);
+        summary.total_duration_seconds = nonNegativeInt(baseSummary.total_duration_seconds) + delta;
+        summary.total_duration = App.formatDuration(summary.total_duration_seconds);
+
+        if (target.contributes_project_duration === true) {
+            summary.project_duration_seconds = nonNegativeInt(baseSummary.project_duration_seconds) + delta;
+            summary.project_duration = App.formatDuration(summary.project_duration_seconds);
+        }
+
+        updateLiveGroup(summary.by_project, target.project_key, delta, summary.total_duration_seconds);
+        updateLiveGroup(summary.by_file, target.file_key, delta, summary.total_duration_seconds);
+        updateLiveGroup(summary.by_app, target.app_key, delta, summary.total_duration_seconds);
+        updateLiveGroup(summary.by_status, target.status_key, delta, summary.total_duration_seconds);
+
+        if (baseSummary.export_preview && typeof baseSummary.export_preview === "object") {
+            summary.export_preview = Object.assign({}, baseSummary.export_preview);
+            summary.export_preview.included_duration_seconds =
+                nonNegativeInt(baseSummary.export_preview.included_duration_seconds) + delta;
+            summary.export_preview.included_duration = App.formatDuration(
+                summary.export_preview.included_duration_seconds
+            );
+        }
+        summary._live_delta_seconds = delta;
+        return summary;
+    }
+    App.statisticsLiveSummaryAtNow = statisticsLiveSummaryAtNow;
+
+    function statisticsLiveGroupPatch(tbodyId, groups) {
+        var body = element(tbodyId);
+        if (!body || typeof body.querySelectorAll !== "function") return null;
+        var rows = body.querySelectorAll("tr");
+        groups = Array.isArray(groups) ? groups : [];
+        if (rows.length !== groups.length) return null;
+        var patch = [];
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            var group = groups[i] || {};
+            if (typeof row.getAttribute === "function"
+                && String(row.getAttribute("data-statistics-key") || "")
+                !== statisticsGroupKey(group, i)) {
+                return null;
+            }
+            var cells = row.children;
+            var bar = typeof row.querySelector === "function"
+                ? row.querySelector(".stats-share-bar i")
+                : null;
+            if (!cells || cells.length < 4 || !bar || !bar.style) return null;
+            patch.push({ cells: cells, bar: bar, group: group });
+        }
+        return patch;
+    }
+
+    function patchStatisticsLiveSummary(summary) {
+        if (!summary) return false;
+        var total = element("stats-total");
+        var projectPatch = statisticsLiveGroupPatch("stats-by-project", summary.by_project || []);
+        var filePatch = statisticsLiveGroupPatch("stats-by-file", summary.by_file || []);
+        var appPatch = statisticsLiveGroupPatch("stats-by-app", summary.by_app || []);
+        if (!total || !projectPatch || !filePatch || !appPatch) return false;
+        total.textContent = summary.total_duration || "00:00:00";
+        [projectPatch, filePatch, appPatch].forEach(function (groupPatch) {
+            groupPatch.forEach(function (entry) {
+                var group = entry.group;
+                var duration = group.duration || App.formatDuration(group.duration_seconds || 0);
+                var percentage = Math.max(0, Math.min(100, parseFloat(group.percentage) || 0));
+                entry.cells[1].textContent = duration;
+                entry.cells[3].textContent = String(group.percentage || 0) + "%";
+                entry.bar.style.width = percentage + "%";
+            });
+        });
+        return true;
+    }
+    App.patchStatisticsLiveSummary = patchStatisticsLiveSummary;
+
+    function applyStatisticsLocalTicker() {
+        if (App.currentPage !== "statistics" || App.statisticsLiveTickerSuspended === true) return null;
+        var accepted = App.statisticsAcceptedPayload;
+        if (!accepted || !accepted.summary || !accepted.filters) return null;
+        var liveTarget = accepted.exportTicket && accepted.exportTicket.live_target;
+        var summary = statisticsLiveSummaryAtNow(accepted.summary, Date.now(), liveTarget);
+        var delta = nonNegativeInt(summary && summary._live_delta_seconds);
+        var renderKey = [
+            String(accepted.summary.snapshot_revision
+                || accepted.exportTicket && accepted.exportTicket.revision || ""),
+            String(delta)
+        ].join("|");
+        if (App.statisticsLastLiveRenderKey === renderKey) return null;
+        if (patchStatisticsLiveSummary(summary)) {
+            App.statisticsLastLiveRenderKey = renderKey;
+            return null;
+        }
+        if (liveTarget && liveTarget.enabled === true && delta > 0) {
+            return {
+                refreshRequired: true,
+                reason: "statistics_live_projection_mismatch"
+            };
+        }
+        return null;
+    }
+    App.applyStatisticsLocalTicker = applyStatisticsLocalTicker;
+
     function showStatisticsError(message) {
         var banner = element("statistics-error");
         if (!banner) return;
@@ -16,15 +170,34 @@
     function setStatisticsLoading(loading) {
         App.statisticsLoading = !!loading;
         if (element("statistics-loading")) element("statistics-loading").hidden = !loading;
-        if (element("statistics-update-status")) {
-            element("statistics-update-status").textContent = loading
-                ? "更新中…" : (App.statisticsLoaded ? "已自动更新" : "");
-        }
         var button = element("stats-export-action-btn");
         if (button) button.disabled = !!loading || !!App.statisticsExportSaving
             || !App.statisticsAcceptedPayload;
     }
     App.setStatisticsLoading = setStatisticsLoading;
+
+    if (typeof App.statisticsLiveTickerSuspended !== "boolean") {
+        App.statisticsLiveTickerSuspended = false;
+    }
+
+    function suspendStatisticsLiveTicker() {
+        if (App.statisticsLiveTickerSuspended === true) return;
+        applyStatisticsLocalTicker();
+        App.statisticsLiveTickerSuspended = true;
+    }
+    App.suspendStatisticsLiveTicker = suspendStatisticsLiveTicker;
+
+    function resumeStatisticsLiveTicker() {
+        App.statisticsLiveTickerSuspended = false;
+        App.statisticsLastLiveRenderKey = "";
+    }
+    App.resumeStatisticsLiveTicker = resumeStatisticsLiveTicker;
+
+    function onStatisticsRuntimeTransition(change) {
+        change = change || {};
+        if (change.source !== "refresh-state" || change.reportStructureChanged !== true) return;
+        suspendStatisticsLiveTicker();
+    }
 
     function validateStatisticsDateRange(dateFrom, dateTo) {
         if (!dateFrom || !dateTo) return "请选择完整日期范围";
@@ -127,10 +300,6 @@
     }
     App.setStatisticsSelection = setStatisticsSelection;
 
-    function displayDate(value) {
-        return String(value || "").replace(/-/g, "/");
-    }
-
     function setStatisticsDraftStatus(message, isError) {
         var status = element("statistics-date-status");
         if (!status) return;
@@ -141,23 +310,6 @@
             var input = element(id);
             if (input) input.setAttribute("aria-invalid", isError ? "true" : "false");
         });
-    }
-
-    function selectedProjectLabel() {
-        var select = element("statistics-project-filter");
-        return select && select.selectedIndex >= 0 && select.options
-            ? select.options[select.selectedIndex].text
-            : "全部项目";
-    }
-
-    function updateStatisticsScope(filters) {
-        filters = filters || selectedFilters();
-        var scope = filters.allTime
-            ? "全部时间"
-            : displayDate(filters.dateFrom) + " 至 " + displayDate(filters.dateTo);
-        if (element("stats-scope")) {
-            element("stats-scope").textContent = "当前范围：" + scope + " · " + selectedProjectLabel();
-        }
     }
 
     function syncStatisticsSelection() {
@@ -173,15 +325,14 @@
             var button = element("statistics-" + type + "-btn");
             if (button) button.setAttribute("aria-pressed", pressed ? "true" : "false");
         });
-        updateStatisticsScope({
-            allTime: selection.allTime,
-            dateFrom: selection.dateFrom,
-            dateTo: selection.dateTo,
-            projectId: element("statistics-project-filter")
-                ? element("statistics-project-filter").value : ""
-        });
     }
     App.syncStatisticsSelection = syncStatisticsSelection;
+
+    function syncStatisticsDateInputPresentation(input) {
+        if (!input) return;
+        input.setAttribute("data-empty", String(!String(input.value || "")));
+    }
+    App.syncStatisticsDateInputPresentation = syncStatisticsDateInputPresentation;
 
     function syncStatisticsDraftSelection() {
         var selection = currentDraftSelection();
@@ -189,12 +340,8 @@
         var to = element("statistics-date-to");
         if (from) from.value = selection.dateFrom;
         if (to) to.value = selection.dateTo;
-        if (element("statistics-date-inputs")) {
-            element("statistics-date-inputs").hidden = selection.allTime;
-        }
-        if (element("statistics-all-time-label")) {
-            element("statistics-all-time-label").hidden = !selection.allTime;
-        }
+        syncStatisticsDateInputPresentation(from);
+        syncStatisticsDateInputPresentation(to);
         setStatisticsDraftStatus(
             App.statisticsDraftDirty ? "日期范围尚未应用" : "",
             false
@@ -216,14 +363,14 @@
     function clearStatisticsPresentation() {
         var results = element("statistics-results");
         if (results) results.hidden = true;
-        ["stats-total", "stats-activity-count", "stats-project-count", "stats-app-count"]
+        ["stats-total", "stats-activity-count", "stats-project-count", "stats-file-count", "stats-app-count"]
             .forEach(function (id) {
                 if (element(id)) element(id).textContent = "";
             });
-        ["stats-by-project", "stats-by-app"].forEach(function (id) {
+        ["stats-by-project", "stats-by-file", "stats-by-app"].forEach(function (id) {
             if (element(id)) element(id).innerHTML = "";
         });
-        ["stats-empty-project", "stats-empty-app"].forEach(function (id) {
+        ["stats-empty-project", "stats-empty-file", "stats-empty-app"].forEach(function (id) {
             if (element(id)) element(id).hidden = true;
         });
     }
@@ -236,19 +383,128 @@
         setStatisticsExportStatus("", "");
         clearStatisticsPresentation();
         setStatisticsLoading(false);
+        resumeStatisticsLiveTicker();
     }
     App.invalidateStatisticsSelection = invalidateStatisticsSelection;
+
+    function statisticsGroupKey(group, index) {
+        group = group || {};
+        var key = String(group.key || "");
+        if (key) return key;
+        return "display:" + String(group.display_name || "未知") + "|" + String(index || 0);
+    }
+
+    function statisticsGroupRecordCount(group) {
+        group = group || {};
+        var value = group.record_count;
+        if (value === undefined || value === null) value = group.session_count;
+        if (value === undefined || value === null) value = group.activity_count;
+        var parsed = parseInt(value, 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+    }
+    App.statisticsGroupRecordCount = statisticsGroupRecordCount;
+
+    function statisticsConcreteFileCount(groups) {
+        return (Array.isArray(groups) ? groups : []).filter(function (group) {
+            return String(group && group.key || "") !== "file:excluded";
+        }).length;
+    }
+    App.statisticsConcreteFileCount = statisticsConcreteFileCount;
+
+    function patchStatsTable(tbodyId, groups) {
+        var body = element(tbodyId);
+        if (!body || typeof body.querySelectorAll !== "function") return false;
+        var rows = body.querySelectorAll("tr");
+        groups = Array.isArray(groups) ? groups : [];
+        if (rows.length !== groups.length) return false;
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            var group = groups[i] || {};
+            var expectedKey = statisticsGroupKey(group, i);
+            if (typeof row.getAttribute === "function"
+                && String(row.getAttribute("data-statistics-key") || "") !== expectedKey) {
+                return false;
+            }
+            var cells = row.children;
+            if (!cells || cells.length < 4) return false;
+            var displayName = String(group.display_name || "未知");
+            var duration = group.duration || App.formatDuration(group.duration_seconds || 0);
+            var recordCount = String(statisticsGroupRecordCount(group));
+            var percentage = Math.max(0, Math.min(100, parseFloat(group.percentage) || 0));
+            var percentageText = String(group.percentage || 0) + "%";
+            if (cells[0].title !== displayName) cells[0].title = displayName;
+            var name = typeof row.querySelector === "function"
+                ? row.querySelector(".stats-name > span")
+                : null;
+            if (name && name.textContent !== displayName) name.textContent = displayName;
+            if (cells[1].textContent !== duration) cells[1].textContent = duration;
+            if (cells[2].textContent !== recordCount) cells[2].textContent = recordCount;
+            if (cells[3].textContent !== percentageText) cells[3].textContent = percentageText;
+            var bar = typeof row.querySelector === "function"
+                ? row.querySelector(".stats-share-bar i")
+                : null;
+            if (bar && bar.style) bar.style.width = percentage + "%";
+        }
+        return true;
+    }
+    App.patchStatsTable = patchStatsTable;
+
+    function reconcileStatsTable(tbodyId, emptyId, groups) {
+        groups = Array.isArray(groups) ? groups : [];
+        if (!patchStatsTable(tbodyId, groups)) {
+            renderStatsTable(tbodyId, emptyId, groups);
+            return;
+        }
+        var empty = element(emptyId);
+        if (empty) empty.hidden = groups.length > 0;
+    }
+
+    function renderStatisticsMetrics(summary) {
+        var byFile = Array.isArray(summary && summary.by_file) ? summary.by_file : [];
+        if (element("stats-total")) {
+            element("stats-total").textContent = summary.total_duration || "00:00:00";
+        }
+        if (element("stats-activity-count")) {
+            element("stats-activity-count").textContent = String(summary.session_count || 0);
+        }
+        if (element("stats-project-count")) {
+            element("stats-project-count").textContent = String(summary.project_count || 0);
+        }
+        if (element("stats-file-count")) {
+            element("stats-file-count").textContent = String(statisticsConcreteFileCount(byFile));
+        }
+        if (element("stats-app-count")) {
+            element("stats-app-count").textContent = String(summary.app_count || 0);
+        }
+    }
+    App.renderStatisticsMetrics = renderStatisticsMetrics;
+
+    function reconcileStatisticsPresentation(summary) {
+        renderStatisticsMetrics(summary);
+        reconcileStatsTable("stats-by-project", "stats-empty-project", summary.by_project || []);
+        reconcileStatsTable("stats-by-file", "stats-empty-file", summary.by_file || []);
+        reconcileStatsTable("stats-by-app", "stats-empty-app", summary.by_app || []);
+        if (element("statistics-results")) element("statistics-results").hidden = false;
+    }
+    App.reconcileStatisticsPresentation = reconcileStatisticsPresentation;
 
     function executeStatisticsQuery(owner) {
         var filters = owner.filters;
         var token = owner.token;
+        var accepted = false;
         var request = App.bridge.getStatisticsExportSummary(
             filters.dateFrom, filters.dateTo, filters.projectId
         );
         var pending = request.then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return null;
-            var data = App.handleResult(result, showStatisticsError);
+            var data = App.handleResult(
+                result,
+                owner.preservePresentation === true ? function () {} : showStatisticsError
+            );
             if (!data || !data.summary || !data.export_ticket) {
+                if (owner.preservePresentation === true) {
+                    throw new Error("statistics_background_refresh_failed");
+                }
                 if (!data) return null;
                 showStatisticsError("加载统计失败");
                 return null;
@@ -259,38 +515,70 @@
                 filters: filters
             };
             App.statisticsSnapshotRevision = String(data.export_ticket.revision || "");
-            showStatistics(data.summary, filters);
+            if (owner.preservePresentation === true && App.statisticsLoaded === true) {
+                reconcileStatisticsPresentation(data.summary);
+            } else {
+                showStatistics(data.summary);
+            }
             App.statisticsLoaded = true;
+            accepted = true;
+            resumeStatisticsLiveTicker();
+            App.clearStatisticsError();
+            if (typeof App.markPageFresh === "function") App.markPageFresh("statistics");
             return data;
-        }).catch(function () {
-            if (App.requestCoordinator.isCurrent(token)) showStatisticsError("加载统计失败");
+        }).catch(function (error) {
+            if (!App.requestCoordinator.isCurrent(token)) return null;
+            if (owner.preservePresentation === true) throw error;
+            showStatisticsError("加载统计失败");
             return null;
         }).finally(function () {
-            if (App.requestCoordinator.isCurrent(token)) setStatisticsLoading(false);
+            if (!App.requestCoordinator.isCurrent(token)) return;
+            if (owner.preservePresentation !== true) setStatisticsLoading(false);
+            if (accepted && owner.preservePresentation === true) {
+                var button = element("stats-export-action-btn");
+                if (button) button.disabled = !!App.statisticsExportSaving
+                    || !App.statisticsAcceptedPayload;
+            }
         });
         App.statisticsLoadPromise = pending;
         return pending;
     }
 
-    function beginStatisticsQuery(delay) {
+    function beginStatisticsQuery(delay, options) {
+        options = options || {};
+        var preservePresentation = options.preservePresentation === true
+            && App.statisticsLoaded === true
+            && !!App.statisticsAcceptedPayload;
+        if (preservePresentation && App.statisticsLoading === true) {
+            return App.statisticsLoadPromise || Promise.resolve(null);
+        }
         if (App.statisticsQueryTimer) window.clearTimeout(App.statisticsQueryTimer);
         App.statisticsQueryTimer = null;
+        if (!preservePresentation && typeof App.clearScheduledAutomaticPageRefresh === "function") {
+            App.clearScheduledAutomaticPageRefresh();
+        }
         var filters = selectedFilters();
         var key = JSON.stringify(filters);
         var token = App.requestCoordinator.beginLatest("statistics", key);
-        invalidateStatisticsSelection();
-        App.clearStatisticsError();
-        updateStatisticsScope(filters);
-        setStatisticsLoading(true);
+        if (!preservePresentation) {
+            invalidateStatisticsSelection();
+            App.clearStatisticsError();
+        }
+        if (!preservePresentation) setStatisticsLoading(true);
         if (!filters.allTime) {
             var message = validateStatisticsDateRange(filters.dateFrom, filters.dateTo);
             if (message) {
+                if (preservePresentation) return Promise.reject(new Error("statistics_background_scope_invalid"));
                 showStatisticsError(message);
                 setStatisticsLoading(false);
                 return Promise.resolve(null);
             }
         }
-        var owner = { filters: filters, token: token };
+        var owner = {
+            filters: filters,
+            token: token,
+            preservePresentation: preservePresentation
+        };
         if (delay > 0) {
             App.statisticsQueryTimer = window.setTimeout(function () {
                 App.statisticsQueryTimer = null;
@@ -302,19 +590,16 @@
     }
     App.beginStatisticsQuery = beginStatisticsQuery;
 
-    function loadStatisticsExportSummary() {
-        return beginStatisticsQuery(0);
+    function loadStatisticsExportSummary(options) {
+        return beginStatisticsQuery(0, options);
     }
     App.loadStatisticsExportSummary = loadStatisticsExportSummary;
 
-    function showStatistics(summary, filters) {
-        element("stats-total").textContent = summary.total_duration || "00:00:00";
-        element("stats-activity-count").textContent = String(summary.session_count || 0);
-        element("stats-project-count").textContent = String(summary.project_count || 0);
-        element("stats-app-count").textContent = String(summary.app_count || 0);
+    function showStatistics(summary) {
+        renderStatisticsMetrics(summary);
         renderStatsTable("stats-by-project", "stats-empty-project", summary.by_project || []);
+        renderStatsTable("stats-by-file", "stats-empty-file", summary.by_file || []);
         renderStatsTable("stats-by-app", "stats-empty-app", summary.by_app || []);
-        updateStatisticsScope(filters);
         if (element("statistics-results")) element("statistics-results").hidden = false;
     }
     App.showStatistics = showStatistics;
@@ -325,18 +610,54 @@
         groups = Array.isArray(groups) ? groups : [];
         if (!groups.length) { body.innerHTML = ""; empty.hidden = false; return; }
         empty.hidden = true;
-        body.innerHTML = groups.map(function (group) {
+        body.innerHTML = groups.map(function (group, index) {
             var percentage = Math.max(0, Math.min(100, parseFloat(group.percentage) || 0));
-            return '<tr><td title="' + App.escapeHtml(group.display_name || "未知") + '"><div class="stats-name">'
+            return '<tr data-statistics-key="' + App.escapeHtml(statisticsGroupKey(group, index))
+                + '"><td title="' + App.escapeHtml(group.display_name || "未知") + '"><div class="stats-name">'
                 + '<span>' + App.escapeHtml(group.display_name || "未知") + '</span>'
                 + '<span class="stats-share-bar" aria-hidden="true"><i style="width:' + percentage + '%"></i></span>'
                 + '</div></td><td class="number">'
                 + App.escapeHtml(group.duration || App.formatDuration(group.duration_seconds || 0))
-                + '</td><td class="number">' + App.escapeHtml(String(group.activity_count || 0))
+                + '</td><td class="number">' + App.escapeHtml(String(statisticsGroupRecordCount(group)))
                 + '</td><td class="number">' + App.escapeHtml(String(group.percentage || 0)) + '%</td></tr>';
         }).join("");
     }
     App.renderStatsTable = renderStatsTable;
+
+    var statisticsTabs = {
+        project: { tab: "stats-project-tab", panel: "stats-project-panel" },
+        file: { tab: "stats-file-tab", panel: "stats-file-panel" },
+        app: { tab: "stats-app-tab", panel: "stats-app-panel" }
+    };
+    var statisticsTabOrder = ["project", "file", "app"];
+
+    function activateStatisticsTab(view) {
+        Object.keys(statisticsTabs).forEach(function (name) {
+            var descriptor = statisticsTabs[name];
+            var selected = name === view;
+            var tab = element(descriptor.tab);
+            tab.setAttribute("aria-selected", selected ? "true" : "false");
+            tab.tabIndex = selected ? 0 : -1;
+            element(descriptor.panel).hidden = !selected;
+        });
+    }
+    App.activateStatisticsTab = activateStatisticsTab;
+
+    function handleStatisticsTabKeydown(event, view) {
+        var key = event && event.key;
+        if (["ArrowLeft", "ArrowRight", "Home", "End"].indexOf(key) < 0) return;
+        if (event.preventDefault) event.preventDefault();
+        var index = statisticsTabOrder.indexOf(view);
+        if (key === "Home") index = 0;
+        else if (key === "End") index = statisticsTabOrder.length - 1;
+        else if (key === "ArrowRight") index = (index + 1) % statisticsTabOrder.length;
+        else index = (index + statisticsTabOrder.length - 1) % statisticsTabOrder.length;
+        var targetView = statisticsTabOrder[index];
+        activateStatisticsTab(targetView);
+        var target = element(statisticsTabs[targetView].tab);
+        if (target && target.focus) target.focus();
+    }
+    App.handleStatisticsTabKeydown = handleStatisticsTabKeydown;
 
     function applyStatisticsQuickRange(type) {
         var today = new Date();
@@ -365,6 +686,10 @@
 
     function applyStatisticsDraftSelection() {
         var draft = currentDraftSelection();
+        if (draft.allTime) {
+            setStatisticsSelection(true, "", "");
+            return beginStatisticsQuery(0);
+        }
         var message = validateStatisticsDateRange(draft.dateFrom, draft.dateTo);
         if (message) {
             setStatisticsDraftStatus(message, true);
@@ -393,29 +718,42 @@
     }
     App.populateStatisticsProjectFilter = populateProjectFilter;
 
+    function loadStatisticsProjectCatalog() {
+        if (!App.projectCatalog) return Promise.resolve(null);
+        return App.projectCatalog.load().then(function (catalog) {
+            if (!catalog) return null;
+            populateProjectFilter(catalog.filterProjects);
+            return catalog;
+        });
+    }
+    App.loadStatisticsProjectCatalog = loadStatisticsProjectCatalog;
+
     function initStatisticsDefaults() {
         currentSelection();
         syncStatisticsSelection();
         syncStatisticsDraftSelection();
+        activateStatisticsTab("project");
         if (!App.statisticsControlsBound) {
             App.statisticsControlsBound = true;
             ["statistics-date-from", "statistics-date-to"].forEach(function (id) {
-                element(id).addEventListener("input", handleStatisticsDraftDateChange);
-                element(id).addEventListener("change", handleStatisticsDraftDateChange);
+                var input = element(id);
+                input.addEventListener("input", handleStatisticsDraftDateChange);
+                input.addEventListener("change", handleStatisticsDraftDateChange);
             });
             element("statistics-project-filter").addEventListener("change", function () {
                 syncStatisticsSelection();
                 scheduleStatisticsQuery(0);
             });
-            [["stats-project-tab", "stats-project-panel", "stats-app-tab", "stats-app-panel"],
-             ["stats-app-tab", "stats-app-panel", "stats-project-tab", "stats-project-panel"]]
-                .forEach(function (ids) {
-                    element(ids[0]).addEventListener("click", function () {
-                        element(ids[0]).setAttribute("aria-selected", "true"); element(ids[1]).hidden = false;
-                        element(ids[2]).setAttribute("aria-selected", "false"); element(ids[3]).hidden = true;
-                    });
+            Object.keys(statisticsTabs).forEach(function (view) {
+                var tab = element(statisticsTabs[view].tab);
+                tab.addEventListener("click", function () {
+                    activateStatisticsTab(view);
                 });
-            if (App.loadProjects) App.loadProjects().then(populateProjectFilter);
+                tab.addEventListener("keydown", function (event) {
+                    handleStatisticsTabKeydown(event, view);
+                });
+            });
+            loadStatisticsProjectCatalog();
         }
     }
     App.initStatisticsDefaults = initStatisticsDefaults;
@@ -465,4 +803,27 @@
         }).finally(function () { setStatisticsExportSaving(false); });
     }
     App.exportStatisticsCsv = exportStatisticsCsv;
+
+    function resetStatisticsGeneration() {
+        App.statisticsLoaded = false;
+        App.statisticsAcceptedPayload = null;
+        App.statisticsSnapshotRevision = "";
+        App.statisticsSelection = null;
+        App.statisticsDraftSelection = null;
+        App.statisticsDraftDirty = false;
+        App.statisticsSelectionInitialized = false;
+        App.statisticsRequestToken = (App.statisticsRequestToken || 0) + 1;
+        App.statisticsLiveTickerSuspended = false;
+        App.statisticsLastLiveRenderKey = "";
+        if (App.statisticsQueryTimer) window.clearTimeout(App.statisticsQueryTimer);
+        App.statisticsQueryTimer = null;
+        clearStatisticsPresentation();
+        setStatisticsLoading(false);
+        setStatisticsExportStatus("", "");
+    }
+    App.statistics = Object.freeze({
+        applyLocalTick: applyStatisticsLocalTicker,
+        onRuntimeTransition: onStatisticsRuntimeTransition,
+        resetGeneration: resetStatisticsGeneration
+    });
 })();

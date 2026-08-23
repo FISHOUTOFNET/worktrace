@@ -36,8 +36,45 @@ def _normalize_project_language(language: str | None = None) -> str:
     return cleaned or "中文"
 
 
+def _project_last_used_by_id(conn) -> dict[int, str | None]:
+    """Return one canonical activity-backed last-used timestamp per project."""
+
+    rows = dict_rows(
+        conn.execute(
+            """
+            SELECT apa.project_id AS project_id,
+                   MAX(COALESCE(al.end_time, al.start_time)) AS last_used_at
+            FROM activity_log al
+            LEFT JOIN activity_project_assignment apa
+              ON apa.activity_id = al.id
+            WHERE al.is_deleted = 0
+              AND apa.project_id IS NOT NULL
+            GROUP BY apa.project_id
+            """
+        ).fetchall()
+    )
+    return {
+        int(row["project_id"]): row.get("last_used_at")
+        for row in rows
+        if row.get("project_id") is not None
+    }
+
+
+def _attach_project_last_used(
+    projects: list[dict],
+    last_used_by_project: dict[int, str | None],
+) -> list[dict]:
+    return [
+        {
+            **project,
+            "last_used_at": last_used_by_project.get(int(project["id"])),
+        }
+        for project in projects
+    ]
+
+
 def require_mutable_user_project(conn, project_id: int) -> dict:
-    """Load and validate one mutable, active user project in this transaction."""
+    """Load and validate one mutable user project in this transaction."""
 
     row = conn.execute(
         "SELECT * FROM project WHERE id = ?",
@@ -239,6 +276,21 @@ def list_user_projects() -> list[dict]:
     ]
 
 
+def list_user_project_identities() -> list[dict]:
+    """Return current user project identities for external reconciliation."""
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, created_at, is_deleted, is_archived
+            FROM project
+            WHERE created_by = 'user'
+            ORDER BY id
+            """
+        ).fetchall()
+    return [row for row in dict_rows(rows) if not bool(row.get("is_deleted"))]
+
+
 def list_selectable_projects() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
@@ -250,11 +302,13 @@ def list_selectable_projects() -> list[dict]:
             """,
             (UNCATEGORIZED_PROJECT,),
         ).fetchall()
-    return [
+        last_used_by_project = _project_last_used_by_id(conn)
+    projects = [
         row
         for row in dict_rows(rows)
         if project_lifecycle_policy.project_selectable_for_editing(row)
     ]
+    return _attach_project_last_used(projects, last_used_by_project)
 
 
 def list_rule_target_projects() -> list[dict]:
@@ -284,19 +338,17 @@ def list_filter_projects() -> list[dict]:
             ORDER BY name COLLATE NOCASE
             """,
         ).fetchall()
-    return [
+        last_used_by_project = _project_last_used_by_id(conn)
+    projects = [
         row
         for row in dict_rows(rows)
         if project_lifecycle_policy.project_selectable_for_filter(row)
     ]
+    return _attach_project_last_used(projects, last_used_by_project)
 
 
 def list_project_bindings(include_system_special: bool = True) -> list[dict]:
-    """Return the lightweight project/rule catalog without historical projection.
-
-    This read stays bounded to the current catalog state (projects, rules, last
-    used timestamps) and never rebuilds the all-time report projection.
-    """
+    """Return the lightweight project/rule catalog without historical projection."""
 
     with get_connection() as conn:
         conn.execute("BEGIN")
@@ -309,20 +361,7 @@ def list_project_bindings(include_system_special: bool = True) -> list[dict]:
             """,
             (EXCLUDED_PROJECT,),
         ).fetchall()
-        last_used_rows = dict_rows(
-            conn.execute(
-                """
-                SELECT apa.project_id AS project_id,
-                       MAX(COALESCE(al.end_time, al.start_time)) AS last_used_at
-                FROM activity_log al
-                LEFT JOIN activity_project_assignment apa
-                  ON apa.activity_id = al.id
-                WHERE al.is_deleted = 0
-                  AND apa.project_id IS NOT NULL
-                GROUP BY apa.project_id
-                """
-            ).fetchall()
-        )
+        last_used_by_project = _project_last_used_by_id(conn)
         folder_rows = dict_rows(
             conn.execute(
                 """
@@ -354,11 +393,6 @@ def list_project_bindings(include_system_special: bool = True) -> list[dict]:
             include_system_special=include_system_special,
         )
     ]
-    last_used_by_project = {
-        int(row["project_id"]): row.get("last_used_at")
-        for row in last_used_rows
-        if row.get("project_id") is not None
-    }
     by_project = {
         int(project["id"]): {
             **project,
@@ -396,12 +430,36 @@ def archive_project(project_id: int) -> None:
         )
 
 
-def delete_project(project_id: int) -> None:
-    soft_delete_project(project_id)
+def delete_project_identity_in_transaction(
+    uow: DomainUnitOfWork,
+    conn,
+    project_id: int,
+) -> None:
+    """Delete only the project identity; caller owns cross-domain cleanup."""
+
+    require_mutable_user_project(conn, project_id)
+    cursor = conn.execute(
+        "DELETE FROM project WHERE id = ?",
+        (int(project_id),),
+    )
+    if cursor.rowcount != 1:
+        raise ProjectLifecycleError("not_found")
+    uow.mark_changed(
+        DataGenerationNamespace.CLASSIFICATION_CATALOG,
+        DataGenerationNamespace.REPORT_STRUCTURE,
+    )
+
+
+def delete_project(project_id: int) -> dict[str, int]:
+    """Permanently delete a user project through the atomic application workflow."""
+
+    from . import project_deletion_command_service
+
+    return project_deletion_command_service.delete_project(project_id)
 
 
 def soft_delete_project(project_id: int) -> None:
-    """Tombstone a mutable user project without deleting facts or rules."""
+    """Internal legacy helper retained outside the public project-delete path."""
 
     with _catalog_uow() as uow:
         conn = uow.connection
@@ -428,6 +486,7 @@ __all__ = [
     "archive_project",
     "create_project",
     "delete_project",
+    "delete_project_identity_in_transaction",
     "get_project",
     "get_project_by_name",
     "is_concrete_project_id",
@@ -437,6 +496,7 @@ __all__ = [
     "list_rule_target_projects",
     "list_selectable_projects",
     "list_user_projects",
+    "list_user_project_identities",
     "require_mutable_user_project",
     "set_excluded_project_enabled",
     "set_project_enabled",

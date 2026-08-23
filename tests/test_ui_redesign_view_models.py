@@ -6,6 +6,7 @@ import pytest
 from tests.support import activity_factory as activity_service
 from worktrace.api import project_api
 from worktrace.api.application_capabilities import RulesApplicationService
+from worktrace.api.external_project_identity import LocalProjectIdentityCapability
 from worktrace.services import (
     project_service,
     report_projection_snapshot_service,
@@ -162,4 +163,8 @@ def test_rules_application_service_routes_to_lightweight_catalog(monkeypatch):
     )
 
     assert not hasattr(project_api, "list_project_rule_summaries")
-    assert RulesApplicationService().list_project_bindings() == expected
+    identity = LocalProjectIdentityCapability(
+        create_project=project_api.create_project_for_rules,
+        update_project=project_api.update_project_for_rules,
+    )
+    assert RulesApplicationService(identity).list_project_bindings() == expected

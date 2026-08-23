@@ -33,6 +33,8 @@ def build_base_projection(
         _finalize_session(session, uncategorized_id)
         _attach_projection_defaults(session)
     _attach_contributions(sessions, rows)
+    for session in sessions:
+        _apply_wall_clock_duration_basis(session)
     return BaseProjectionResult(sessions=tuple(sessions))
 
 
@@ -88,6 +90,65 @@ def _attach_contributions(sessions: list[dict], rows: list[dict]) -> None:
             )
             if key in by_member
         ]
+
+
+def _apply_wall_clock_duration_basis(session: dict[str, Any]) -> None:
+    """Preserve explicit wall-clock session duration through operation replay.
+
+    Short-return merging can span a small interval with no persisted activity.
+    Operation replay derives ordinary session duration from contribution basis,
+    so these sessions carry a private wall-clock target. Keep each contribution's
+    observed duration intact while allocating replay basis to that target.
+    """
+    target_value = session.get("_wall_clock_duration_seconds")
+    if target_value is None:
+        return
+    target = max(0, int(target_value or 0))
+    contributions = list(session.get("_projection_contributions") or [])
+    if not contributions:
+        return
+    observed = [
+        max(0, int(row.get("duration_seconds") or 0))
+        for row in contributions
+    ]
+    allocated = _allocate_duration_basis(target, observed)
+    for row, observed_seconds, basis_seconds in zip(
+        contributions,
+        observed,
+        allocated,
+    ):
+        row["observed_duration_seconds"] = observed_seconds
+        row["_basis_duration_seconds"] = basis_seconds
+    session["_projection_contributions"] = contributions
+    session["duration_seconds"] = target
+    if not bool(session.get("is_in_progress")):
+        session["closed_duration_seconds"] = target
+
+
+def _allocate_duration_basis(total: int, bases: list[int]) -> list[int]:
+    if not bases:
+        return []
+    target = max(0, int(total))
+    normalized = [max(0, int(value)) for value in bases]
+    basis_total = sum(normalized)
+    if basis_total <= 0:
+        quotient, remainder = divmod(target, len(normalized))
+        return [
+            quotient + (1 if index < remainder else 0)
+            for index in range(len(normalized))
+        ]
+    if basis_total == target:
+        return normalized
+    raw = [target * value / basis_total for value in normalized]
+    result = [int(value) for value in raw]
+    remainder = target - sum(result)
+    order = sorted(
+        range(len(result)),
+        key=lambda index: (-(raw[index] - result[index]), index),
+    )
+    for index in order[:remainder]:
+        result[index] += 1
+    return result
 
 
 def _display_safe_contribution(row: Mapping[str, Any]) -> dict:

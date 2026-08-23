@@ -8,7 +8,11 @@ import threading
 from ctypes import wintypes
 
 from ..worker_health import WorkerHealthReporter
-from .base import ActiveWindow, ClipboardTextEvent
+from .base import (
+    ActiveWindow,
+    ClipboardTextEvent,
+    PlatformTemporarilyUnavailableError,
+)
 from .windows_clipboard import ClipboardMonitor
 from .windows_path_resolver import WindowsPathResolver, resolve_title_file_path
 
@@ -29,27 +33,65 @@ class WindowsAdapter:
         import win32gui
         import win32process
 
-        hwnd = win32gui.GetForegroundWindow()
-        title = win32gui.GetWindowText(hwnd) or ""
-        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        try:
+            hwnd = int(win32gui.GetForegroundWindow() or 0)
+            if hwnd <= 0:
+                raise PlatformTemporarilyUnavailableError(
+                    "foreground_window_unavailable"
+                )
+            title = win32gui.GetWindowText(hwnd) or ""
+            _, raw_pid = win32process.GetWindowThreadProcessId(hwnd)
+            pid = int(raw_pid)
+            if pid <= 0:
+                raise PlatformTemporarilyUnavailableError(
+                    "foreground_process_unavailable"
+                )
+        except PlatformTemporarilyUnavailableError:
+            raise
+        except Exception as exc:
+            raise PlatformTemporarilyUnavailableError(
+                "active_window_sampling_failed"
+            ) from exc
+
         process_name = "unknown"
         app_name = "unknown"
         try:
             process = psutil.Process(pid)
             process_name = process.name()
             app_name = process_name
+        except ValueError as exc:
+            # psutil rejects invalid PIDs with ValueError rather than psutil.Error.
+            # A foreground window can disappear between Win32 calls, so this is
+            # an observation race, not a Collector invariant failure.
+            raise PlatformTemporarilyUnavailableError(
+                "foreground_process_unavailable"
+            ) from exc
         except psutil.Error:
             pass
 
         requires_path = self._path_resolver.privacy_path_required(process_name, title)
+        probe_policy = getattr(
+            self._path_resolver,
+            "should_probe_path",
+            self._path_resolver.privacy_path_required,
+        )
+        should_probe_path = probe_policy(process_name, title)
         file_path_hint = resolve_title_file_path(title)
-        if not file_path_hint and requires_path:
+        if not file_path_hint and should_probe_path:
             file_path_hint = self._path_resolver.resolve(
                 (hwnd, pid, process_name, title),
                 process_name,
                 title,
                 pid,
             )
+
+        # ``None`` after an explicit authoritative probe is not proof that the
+        # document has no local path. Keep that uncertainty at the platform /
+        # privacy boundary so folder-exclusion policy can fail closed without
+        # polluting persisted resource facts or report projections.
+        path_resolution_uncertain = bool(
+            should_probe_path and not file_path_hint and not requires_path
+        )
 
         window_class = None
         try:
@@ -65,6 +107,7 @@ class WindowsAdapter:
             hwnd=hwnd,
             window_class=window_class,
             privacy_path_required=requires_path,
+            path_resolution_uncertain=path_resolution_uncertain,
         )
 
     def get_idle_seconds(self) -> int:

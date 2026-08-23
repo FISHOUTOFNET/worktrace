@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..db import get_connection
+from ..domain_limits import RULE_PREVIEW_SCAN_LIMIT
 from . import rule_planning_service as planner
 
 MAX_BATCH_PROJECT_RULES = 20
@@ -53,7 +54,12 @@ def _normalize_rules(rules: Any) -> list[dict[str, Any]]:
 def preview_project_rules_batch_impact(rules: Any) -> dict[str, Any]:
     normalized = _normalize_rules(rules)
     with get_connection() as conn:
-        plan = _build_plan(conn, normalized, require_applicable=False)
+        plan = _build_plan(
+            conn,
+            normalized,
+            require_applicable=False,
+            scan_limit=RULE_PREVIEW_SCAN_LIMIT,
+        )
     samples: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
     winner_ids = set(plan["winners"])
@@ -93,11 +99,15 @@ def preview_project_rules_batch_impact(rules: Any) -> dict[str, Any]:
         "rules": summaries,
         "counts": plan["aggregate"],
         "samples": samples,
+        "scan_complete": bool(plan["scan_complete"]),
+        "truncated": not bool(plan["scan_complete"]),
+        "scanned_activity_count": int(plan["scanned_activity_count"]),
+        "scan_limit": RULE_PREVIEW_SCAN_LIMIT,
     }
 
 
 def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
-    """Submit one durable ordered history job; this facade never writes facts."""
+    """Submit one durable ordered history job with a bounded synchronous fast path."""
 
     normalized = _normalize_rules(rules)
     from . import history_mutation_job_service
@@ -171,8 +181,13 @@ def _build_plan(
     normalized: list[dict[str, Any]],
     *,
     require_applicable: bool,
+    scan_limit: int | None = None,
 ) -> dict[str, Any]:
-    activities = planner.load_candidate_activities(conn)
+    query_limit = int(scan_limit) + 1 if scan_limit is not None else None
+    activities = planner.load_candidate_activities(conn, limit=query_limit)
+    scan_complete = scan_limit is None or len(activities) <= int(scan_limit)
+    if scan_limit is not None and not scan_complete:
+        activities = activities[: int(scan_limit)]
     resolved: list[dict[str, Any]] = []
     winners: dict[int, int] = {}
     collision_counts: dict[int, int] = {}
@@ -226,6 +241,8 @@ def _build_plan(
         "winners": winners,
         "collision_counts": collision_counts,
         "aggregate": aggregate,
+        "scan_complete": bool(scan_complete),
+        "scanned_activity_count": len(activities),
     }
 
 

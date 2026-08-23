@@ -50,17 +50,17 @@ def get_overview_view_model(
 ) -> dict[str, Any]:
     scoped_date = _scoped_report_date(today, None)
     with projection_perf_scope(scoped_date, surface="overview"):
-        with stage("page_read_scope"):
-            with page_read_scope():
+        with page_read_scope():
+            with stage("page_read_scope"):
                 payload = view_model_service.get_overview_view_model(today)
-        with stage("bridge_attach"):
-            return _attach_runtime(
-                payload,
-                surface="overview",
-                runtime=runtime,
-                collector_status=collector_status,
-                scope_report_date=str(payload.get("date") or today or ""),
-            )
+            with stage("bridge_attach"):
+                return _attach_runtime(
+                    payload,
+                    surface="overview",
+                    runtime=runtime,
+                    collector_status=collector_status,
+                    scope_report_date=str(payload.get("date") or today or ""),
+                )
 
 
 def get_timeline_view_model(
@@ -71,17 +71,17 @@ def get_timeline_view_model(
 ) -> dict[str, Any]:
     scoped_date = _scoped_report_date(report_date, None)
     with projection_perf_scope(scoped_date, surface="timeline"):
-        with stage("page_read_scope"):
-            with page_read_scope():
+        with page_read_scope():
+            with stage("page_read_scope"):
                 payload = view_model_service.get_timeline_view_model(report_date)
-        with stage("bridge_attach"):
-            return _attach_runtime(
-                payload,
-                surface="timeline",
-                runtime=runtime,
-                collector_status=collector_status,
-                scope_report_date=str(payload.get("date") or report_date or ""),
-            )
+            with stage("bridge_attach"):
+                return _attach_runtime(
+                    payload,
+                    surface="timeline",
+                    runtime=runtime,
+                    collector_status=collector_status,
+                    scope_report_date=str(payload.get("date") or report_date or ""),
+                )
 
 
 def get_session_activity_summary_view_model(
@@ -95,22 +95,22 @@ def get_session_activity_summary_view_model(
 ) -> dict[str, Any]:
     scoped_date = _scoped_report_date(report_date, None)
     with projection_perf_scope(scoped_date, surface="details"):
-        with stage("page_read_scope"):
-            with page_read_scope():
+        with page_read_scope():
+            with stage("page_read_scope"):
                 payload = view_model_service.get_session_activity_summary_view_model(
                     report_date=report_date,
                     projection_instance_key=projection_instance_key,
                     expected_projection_revision=expected_projection_revision,
                     expected_source_version=expected_source_version,
                 )
-        with stage("bridge_attach"):
-            return _attach_runtime(
-                payload,
-                surface="details",
-                runtime=runtime,
-                collector_status=collector_status,
-                scope_report_date=str(payload.get("date") or report_date or ""),
-            )
+            with stage("bridge_attach"):
+                return _attach_runtime(
+                    payload,
+                    surface="details",
+                    runtime=runtime,
+                    collector_status=collector_status,
+                    scope_report_date=str(payload.get("date") or report_date or ""),
+                )
 
 
 def get_refresh_state_view_model(
@@ -121,19 +121,19 @@ def get_refresh_state_view_model(
 ) -> dict[str, Any]:
     scoped_date = _scoped_report_date(report_date, None)
     with projection_perf_scope(scoped_date, surface="refresh"):
-        with stage("page_read_scope"):
-            with page_read_scope():
+        with page_read_scope():
+            with stage("page_read_scope"):
                 payload = refresh_state_view_model_service.get_refresh_state_view_model(
                     report_date
                 )
-        with stage("bridge_attach"):
-            return _attach_runtime(
-                payload,
-                surface="refresh",
-                runtime=runtime,
-                collector_status=collector_status,
-                scope_report_date=str(payload.get("report_date") or report_date or ""),
-            )
+            with stage("bridge_attach"):
+                return _attach_runtime(
+                    payload,
+                    surface="refresh",
+                    runtime=runtime,
+                    collector_status=collector_status,
+                    scope_report_date=str(payload.get("report_date") or report_date or ""),
+                )
 
 
 __all__ = [

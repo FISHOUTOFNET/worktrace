@@ -130,11 +130,15 @@ class ReportContribution:
     activity_identity_key: str = ""
     is_in_progress: bool = False
     privacy_redacted: bool = False
+    observed_duration_seconds: int = 0
+    report_duration_seconds: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "member_identity": self.member_identity.to_dict(),
             "duration_seconds": self.duration_seconds,
+            "observed_duration_seconds": self.observed_duration_seconds,
+            "report_duration_seconds": self.report_duration_seconds,
             "status": self.status,
             "project": self.project.to_dict() if self.project else None,
             "activity_identity_key": self.activity_identity_key,
@@ -339,6 +343,11 @@ ProjectNotSelectableError = _error_type("ProjectNotSelectableError", "project_no
 OperationNotAllowedError = _error_type("OperationNotAllowedError", "operation_not_allowed", "当前记录不允许此操作")
 OperationNoEffectError = _error_type("OperationNoEffectError", "operation_no_effect", "操作未产生变化")
 DatabaseBusyError = _error_type("DatabaseBusyError", "database_busy", "数据库正忙，请稍后重试")
+DayDurationExceedsLimitError = _error_type(
+    "DayDurationExceedsLimitError",
+    "day_duration_exceeds_limit",
+    "修改后当日总时长将超过 24 小时，本次修改未保存。",
+)
 
 
 def project_state_from_row(
@@ -354,9 +363,15 @@ def project_state_from_row(
     archived = bool(value("is_archived", value("project_is_archived", False)))
     enabled = bool(value("is_enabled", value("enabled", True)))
     uncategorized = bool(value("is_report_uncategorized", False))
-    if not project_name and uncategorized_id is not None and project_id == int(uncategorized_id):
-        project_name, uncategorized = UNCATEGORIZED_PROJECT, True
-    report_project = bool(value("is_report_project", not uncategorized and project_id > 0))
+    if uncategorized_id is not None and project_id == int(uncategorized_id):
+        uncategorized = True
+        if not project_name:
+            project_name = UNCATEGORIZED_PROJECT
+    elif project_name == UNCATEGORIZED_PROJECT:
+        uncategorized = True
+    report_project = False if uncategorized else bool(
+        value("is_report_project", project_id > 0)
+    )
     project_key = str(value("project_key", "") or (f"project:{project_id}" if project_id else "project:none"))
     report_key = str(value("report_project_key", "") or "")
     if not report_key:
@@ -371,9 +386,13 @@ def project_state_from_row(
         is_system=str(value("created_by", "") or "") == "system",
         is_special=project_name in {UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT},
         is_report_project=report_project,
-        is_report_classified=bool(value("is_report_classified", report_project)),
+        is_report_classified=False if uncategorized else bool(
+            value("is_report_classified", report_project)
+        ),
         is_report_uncategorized=uncategorized,
-        is_official_project=bool(value("is_official_project", report_project)),
+        is_official_project=False if uncategorized else bool(
+            value("is_official_project", report_project)
+        ),
         report_attribution_kind=str(value("report_attribution_kind", "none") or "none"),
         project_key=project_key,
         report_project_key=report_key,
@@ -381,7 +400,7 @@ def project_state_from_row(
 
 
 __all__ = [
-    "DatabaseBusyError", "FrozenDict", "InvalidInputError", "MutationResult", "OperationDiagnostic",
+    "DatabaseBusyError", "DayDurationExceedsLimitError", "FrozenDict", "InvalidInputError", "MutationResult", "OperationDiagnostic",
     "OperationNoEffectError", "OperationNotAllowedError", "OperationRecord", "ProjectNotSelectableError",
     "ProjectState", "ReportContribution", "ReportDomainError", "ReportMemberIdentity",
     "ReportProjectionSnapshot", "ReportSessionEntry", "RequestIdConflictError", "RevisionConflictError",

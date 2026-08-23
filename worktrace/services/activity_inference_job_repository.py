@@ -2,7 +2,7 @@
 
 This module is the sole runtime DML owner for ``activity_inference_job``.
 Activity facts and their inference jobs are created in the same caller-owned
-transaction. Consumers complete assignments and delete jobs atomically.
+transaction. Consumers complete assignments and delete or defer jobs atomically.
 """
 
 from __future__ import annotations
@@ -170,6 +170,43 @@ def read_activity_and_assignment(conn, activity_id: int):
     ).fetchone()
 
 
+def _scheduled_time(at: str, delay_seconds: int) -> str:
+    try:
+        return (
+            datetime.strptime(at, TIME_FORMAT)
+            + timedelta(seconds=max(0, int(delay_seconds)))
+        ).strftime(TIME_FORMAT)
+    except (TypeError, ValueError):
+        return at
+
+
+def defer_job(
+    conn,
+    activity_id: int,
+    *,
+    delay_seconds: int,
+    at_time: str | None = None,
+) -> bool:
+    """Keep a semantic miss pending without counting it as an inference failure."""
+
+    at = str(at_time or now_str())
+    cursor = conn.execute(
+        """
+        UPDATE activity_inference_job
+        SET status = ?, next_attempt_at = ?, last_error_code = NULL,
+            updated_at = ?
+        WHERE activity_id = ?
+        """,
+        (
+            InferenceJobStatus.PENDING.value,
+            _scheduled_time(at, delay_seconds),
+            at,
+            int(activity_id),
+        ),
+    )
+    return cursor.rowcount == 1
+
+
 def delete_job(conn, activity_id: int) -> bool:
     cursor = conn.execute(
         "DELETE FROM activity_inference_job WHERE activity_id = ?",
@@ -198,12 +235,6 @@ def record_failure(
         return 0
     attempts = max(0, int(row["attempt_count"] or 0)) + 1
     delay_seconds = min(3600, 2 ** min(attempts, 11))
-    try:
-        next_attempt = (
-            datetime.strptime(at, TIME_FORMAT) + timedelta(seconds=delay_seconds)
-        ).strftime(TIME_FORMAT)
-    except (TypeError, ValueError):
-        next_attempt = at
     conn.execute(
         """
         UPDATE activity_inference_job
@@ -214,7 +245,7 @@ def record_failure(
         (
             InferenceJobStatus.FAILED.value,
             attempts,
-            next_attempt,
+            _scheduled_time(at, delay_seconds),
             error_code.value,
             at,
             int(activity_id),
@@ -235,6 +266,7 @@ __all__ = [
     "InferenceJobReason",
     "InferenceJobStatus",
     "clear_all_jobs",
+    "defer_job",
     "delete_job",
     "enqueue_closed_activity_ids",
     "list_runnable_jobs",

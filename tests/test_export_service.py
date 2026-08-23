@@ -30,18 +30,16 @@ def test_excel_export_file_creation(temp_db, tmp_path):
     assert "Summary" in wb.sheetnames
     assert "Sessions" in wb.sheetnames
     assert "Activity Logs" not in wb.sheetnames
+    summary = wb["Summary"]
+    assert [cell.value for cell in summary[1]] == ["项目", "总时长", "记录数"]
+    assert summary.cell(row=2, column=2).value == "00:30:00"
     headers = [cell.value for cell in wb["Sessions"][1]]
     assert headers == [
         "日期",
         "开始时间",
-        "结束时间",
         "时长",
-        "时长秒数",
         "项目",
-        "状态",
         "备注",
-        "修正时长",
-        "是否已修正",
     ]
 
 

@@ -2,10 +2,26 @@
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 from collections.abc import Callable
 from enum import Enum
 from typing import Any, Protocol
+
+from .. import PRODUCT_DISPLAY_NAME
+from ..platforms.window_activation import (
+    GWL_EXSTYLE as _GWL_EXSTYLE,
+    SW_RESTORE as _SW_RESTORE,
+    SWP_FRAMECHANGED as _SWP_FRAMECHANGED,
+    SWP_NOACTIVATE as _SWP_NOACTIVATE,
+    SWP_NOMOVE as _SWP_NOMOVE,
+    SWP_NOSIZE as _SWP_NOSIZE,
+    SWP_NOZORDER as _SWP_NOZORDER,
+    WS_EX_NOACTIVATE as _WS_EX_NOACTIVATE,
+    make_window_activatable,
+    native_window_handle,
+    request_window_foreground,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +36,18 @@ class TrayHost(Protocol):
     def start(self) -> bool: ...
     def stop(self) -> None: ...
     def show_background_notice(self) -> None: ...
+    def set_collection_active(self, active: bool) -> None: ...
+
+
+class WindowIconHost(Protocol):
+    def set_collection_active(self, active: bool) -> None: ...
+    def refresh(self) -> None: ...
+    def stop(self) -> None: ...
+
+
+class WebViewPowerHost(Protocol):
+    def enter_hidden_mode(self) -> None: ...
+    def prepare_for_show(self) -> None: ...
 
 
 def _run_window_action_deferred(action: Callable[[], None]) -> None:
@@ -31,7 +59,7 @@ def _run_window_action_deferred(action: Callable[[], None]) -> None:
 
 
 class DesktopShellController:
-    """Own visible/hidden/exiting transitions and the real window exit."""
+    """Own visible/hidden/exiting transitions and desktop state projection."""
 
     def __init__(
         self,
@@ -42,9 +70,20 @@ class DesktopShellController:
         deferred_window_action_executor: (
             Callable[[Callable[[], None]], None] | None
         ) = None,
+        window_icons: WindowIconHost | None = None,
+        webview_power: WebViewPowerHost | None = None,
+        collection_active_provider: Callable[[], bool] | None = None,
+        collection_icon_refresh_seconds: float = 1.0,
     ) -> None:
         self._window = window
         self._tray = tray
+        self._window_icons = window_icons
+        self._webview_power = webview_power
+        self._collection_active_provider = collection_active_provider
+        self._collection_icon_refresh_seconds = max(
+            0.25,
+            float(collection_icon_refresh_seconds),
+        )
         self._lock = threading.RLock()
         self._window_action_lock = threading.Lock()
         self._defer_window_action = (
@@ -57,8 +96,13 @@ class DesktopShellController:
         self._exit_requested = False
         self._window_loaded = False
         self._show_when_loaded = not initial_hidden
+        self._activation_requested = False
         self._hide_scheduled = False
         self._show_scheduled = False
+        self._collection_active = False
+        self._icon_provider_failed = False
+        self._icon_monitor_stop = threading.Event()
+        self._icon_monitor_thread: threading.Thread | None = None
         self.state = ShellState.HIDDEN if initial_hidden else ShellState.VISIBLE
 
     @property
@@ -85,17 +129,24 @@ class DesktopShellController:
                 self._tray.stop()
             except Exception:
                 logger.warning("failed tray initialization cleanup", exc_info=True)
+        self._start_icon_monitor()
         return available
 
     def handle_window_loaded(self) -> None:
         with self._lock:
             self._window_loaded = True
-            if self.state is ShellState.EXITING:
-                return
-            if self.state is ShellState.VISIBLE:
+            logger.info("desktop shell window loaded")
+            exiting = self.state is ShellState.EXITING
+            visible = self.state is ShellState.VISIBLE
+            if visible:
                 self._show_when_loaded = False
+        self._refresh_window_icon()
+        if exiting:
+            return
+        if visible:
+            with self._lock:
                 self._schedule_show_locked()
-                return
+            return
         self._submit_window_action(self._sync_hidden_visibility)
 
     def handle_window_closing(self) -> bool:
@@ -106,11 +157,13 @@ class DesktopShellController:
                 return True
             if not self._tray_available:
                 self.state = ShellState.EXITING
+                self._activation_requested = False
                 return True
             if self.state is ShellState.HIDDEN:
                 return False
             self.state = ShellState.HIDDEN
             self._show_when_loaded = False
+            self._activation_requested = False
             self._schedule_hide_locked()
         return False
 
@@ -124,14 +177,18 @@ class DesktopShellController:
                 return False
             self.state = ShellState.HIDDEN
             self._show_when_loaded = False
+            self._activation_requested = False
             self._schedule_hide_locked()
             return True
 
     def show_window(self) -> bool:
+        """Accept an explicit request to reveal and activate the main window."""
+
         with self._lock:
             if self.state is ShellState.EXITING:
                 return False
             self.state = ShellState.VISIBLE
+            self._activation_requested = True
             if not self._window_loaded:
                 self._show_when_loaded = True
                 return True
@@ -146,8 +203,10 @@ class DesktopShellController:
             self._exit_requested = True
             self.state = ShellState.EXITING
             self._show_when_loaded = False
+            self._activation_requested = False
             tray_available = self._tray_available
             self._tray_available = False
+        self._stop_icon_monitor()
         if tray_available:
             try:
                 self._tray.stop()
@@ -157,18 +216,110 @@ class DesktopShellController:
             self._window.destroy()
         except Exception:
             logger.exception("desktop shell failed to destroy window")
+        self._stop_window_icons()
         return True
 
     def stop(self) -> None:
+        self._stop_icon_monitor()
         with self._lock:
             tray_available = self._tray_available
             self._tray_available = False
             self._show_when_loaded = False
+            self._activation_requested = False
         if tray_available:
             try:
                 self._tray.stop()
             except Exception:
                 logger.warning("desktop shell tray cleanup failed", exc_info=True)
+        self._stop_window_icons()
+
+    def _start_icon_monitor(self) -> None:
+        if self._collection_active_provider is None:
+            return
+        with self._lock:
+            if self._icon_monitor_thread is not None:
+                return
+            self._icon_monitor_stop.clear()
+        self._refresh_collection_icon_state(force=True)
+        thread = threading.Thread(
+            target=self._run_icon_monitor,
+            name="WorkTraceCollectionIcon",
+            daemon=True,
+        )
+        with self._lock:
+            self._icon_monitor_thread = thread
+        thread.start()
+
+    def _stop_icon_monitor(self) -> None:
+        self._icon_monitor_stop.set()
+        with self._lock:
+            thread = self._icon_monitor_thread
+            self._icon_monitor_thread = None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+
+    def _run_icon_monitor(self) -> None:
+        while not self._icon_monitor_stop.wait(self._collection_icon_refresh_seconds):
+            self._refresh_collection_icon_state(force=False)
+
+    def _refresh_collection_icon_state(self, *, force: bool) -> None:
+        provider = self._collection_active_provider
+        if provider is None:
+            return
+        try:
+            active = bool(provider())
+        except Exception:
+            with self._lock:
+                first_failure = not self._icon_provider_failed
+                self._icon_provider_failed = True
+            if first_failure:
+                logger.warning("collection icon state provider failed", exc_info=True)
+            active = False
+        else:
+            with self._lock:
+                recovered = self._icon_provider_failed
+                self._icon_provider_failed = False
+            if recovered:
+                logger.info("collection icon state provider recovered")
+        self._apply_collection_icon_state(active, force=force)
+
+    def _apply_collection_icon_state(self, active: bool, *, force: bool) -> None:
+        active = bool(active)
+        with self._lock:
+            changed = active != self._collection_active
+            self._collection_active = active
+            tray_available = self._tray_available
+            window_icons = self._window_icons
+        if not force and not changed:
+            return
+        if tray_available:
+            try:
+                self._tray.set_collection_active(active)
+            except Exception:
+                logger.warning("desktop shell tray icon update failed", exc_info=True)
+        if window_icons is not None:
+            try:
+                window_icons.set_collection_active(active)
+            except Exception:
+                logger.warning("desktop shell window icon update failed", exc_info=True)
+
+    def _refresh_window_icon(self) -> None:
+        window_icons = self._window_icons
+        if window_icons is None:
+            return
+        try:
+            window_icons.refresh()
+        except Exception:
+            logger.debug("desktop shell window icon refresh failed", exc_info=True)
+
+    def _stop_window_icons(self) -> None:
+        window_icons = self._window_icons
+        if window_icons is None:
+            return
+        try:
+            window_icons.stop()
+        except Exception:
+            logger.debug("desktop shell window icon cleanup failed", exc_info=True)
 
     def _schedule_hide_locked(self) -> None:
         if self._hide_scheduled:
@@ -220,6 +371,7 @@ class DesktopShellController:
                 ):
                     return
             self._set_webview_visibility(False)
+            self._enter_webview_hidden_mode()
             if show_notice:
                 try:
                     self._tray.show_background_notice()
@@ -241,6 +393,10 @@ class DesktopShellController:
                     or not self._window_loaded
                 ):
                     return
+                activation_requested = self._activation_requested
+                self._activation_requested = False
+            self._make_window_activatable()
+            self._prepare_webview_for_show()
             try:
                 self._window.show()
             except Exception:
@@ -253,7 +409,8 @@ class DesktopShellController:
                     "desktop shell failed to restore window",
                     exc_info=True,
                 )
-            self._focus_native_window()
+            if activation_requested:
+                self._focus_native_window()
             self._set_webview_visibility(True)
 
     def _sync_hidden_visibility(self) -> None:
@@ -265,6 +422,7 @@ class DesktopShellController:
                 ):
                     return
             self._set_webview_visibility(False)
+            self._enter_webview_hidden_mode()
 
     def _set_webview_visibility(self, visible: bool) -> None:
         source = (
@@ -279,18 +437,54 @@ class DesktopShellController:
                 exc_info=True,
             )
 
-    @staticmethod
-    def _focus_native_window() -> None:
+    def _enter_webview_hidden_mode(self) -> None:
+        power = self._webview_power
+        if power is None:
+            return
         try:
-            import win32con
-            import win32gui
-
-            hwnd = win32gui.FindWindow(None, "WorkTrace")
-            if hwnd:
-                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                win32gui.SetForegroundWindow(hwnd)
+            power.enter_hidden_mode()
         except Exception:
-            logger.debug("desktop shell foreground request failed", exc_info=True)
+            logger.debug("desktop shell WebView suspend failed", exc_info=True)
+
+    def _prepare_webview_for_show(self) -> None:
+        power = self._webview_power
+        if power is None:
+            return
+        try:
+            power.prepare_for_show()
+        except Exception:
+            logger.debug("desktop shell WebView resume failed", exc_info=True)
+
+    def _make_window_activatable(self) -> None:
+        make_window_activatable(
+            self._window,
+            fallback_title=PRODUCT_DISPLAY_NAME,
+            logger=logger,
+        )
+
+    def _native_window_handle(self) -> int:
+        return native_window_handle(
+            self._window,
+            fallback_title=PRODUCT_DISPLAY_NAME,
+            logger=logger,
+        )
+
+    def _focus_native_window(self) -> None:
+        if not sys.platform.startswith("win"):
+            return
+        if not request_window_foreground(
+            self._window,
+            fallback_title=PRODUCT_DISPLAY_NAME,
+            restore=True,
+            logger=logger,
+        ):
+            logger.warning("desktop shell foreground activation was not accepted")
 
 
-__all__ = ["DesktopShellController", "ShellState", "TrayHost"]
+__all__ = [
+    "DesktopShellController",
+    "ShellState",
+    "TrayHost",
+    "WebViewPowerHost",
+    "WindowIconHost",
+]

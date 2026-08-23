@@ -1,0 +1,200 @@
+// WorkTrace frontend composition root for cross-surface capability notifications.
+(function () {
+    "use strict";
+    var App = window.WorkTraceApp = window.WorkTraceApp || {};
+
+    function clearSettledFDWorkAuthOverride(status) {
+        if (!status || status.operation !== "none") return;
+        if (["ready", "idle", "error", "disabled", "shutdown"].indexOf(status.session_state) < 0) {
+            return;
+        }
+        var override = App.fdWorkStatusOverride;
+        var reason = String(override && override.reason || "");
+        if (/登录|连接 FD Work/.test(reason)) App.fdWorkStatusOverride = null;
+    }
+
+    function syncFDWorkConsumers(status) {
+        clearSettledFDWorkAuthOverride(status || App.fdWorkStatus);
+        if (App.settings && typeof App.settings.onFDWorkStatusChanged === "function") {
+            App.settings.onFDWorkStatusChanged(status || App.fdWorkStatus || null);
+        }
+        if (typeof App.updateFDWorkEntryButton === "function") {
+            App.updateFDWorkEntryButton();
+        }
+        if (App.projectIdentity && typeof App.projectIdentity.syncStatus === "function") {
+            App.projectIdentity.syncStatus();
+        }
+    }
+    App.syncFDWorkConsumers = syncFDWorkConsumers;
+
+    function reconnectFDWorkThroughSharedSession() {
+        if (!App.fdWork || typeof App.fdWork.ensureSession !== "function") {
+            if (typeof App.showSettingsError === "function") {
+                App.showSettingsError("打开 FD Work 失败");
+            }
+            return Promise.resolve(false);
+        }
+        return App.fdWork.ensureSession().then(function (result) {
+            if (!result || result.ok !== true) {
+                if (typeof App.showSettingsError === "function") {
+                    App.showSettingsError(result && result.message || "打开 FD Work 失败");
+                }
+                return false;
+            }
+            if (typeof App.clearSettingsError === "function") App.clearSettingsError();
+            return true;
+        }).catch(function () {
+            if (typeof App.showSettingsError === "function") {
+                App.showSettingsError("打开 FD Work 失败");
+            }
+            return false;
+        });
+    }
+    App.reconnectFDWork = reconnectFDWorkThroughSharedSession;
+
+    function nonNegativeInt(value) {
+        var parsed = parseInt(value, 10);
+        return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    }
+
+    function runtimeGeneration(runtime, name) {
+        var generations = runtime && runtime.generations;
+        return nonNegativeInt(generations && generations[name]);
+    }
+
+    function handleAcceptedRuntimeTransition(previous, accepted, source) {
+        var current = App.liveRuntimeStore && App.liveRuntimeStore.get
+            ? App.liveRuntimeStore.get()
+            : null;
+        if (!accepted || !previous || !current) return accepted;
+
+        var structureChanged = String(previous.structureRevision || "")
+            !== String(current.structureRevision || "");
+        var liveChanged = String(previous.liveRevision || "")
+            !== String(current.liveRevision || "");
+        var reportStructureChanged = runtimeGeneration(previous, "report_structure")
+            !== runtimeGeneration(current, "report_structure");
+        var classificationChanged = runtimeGeneration(previous, "classification_catalog")
+            !== runtimeGeneration(current, "classification_catalog");
+        var settingsChanged = runtimeGeneration(previous, "settings")
+            !== runtimeGeneration(current, "settings");
+        var rulesDataChanged = structureChanged || classificationChanged;
+        var page = String(App.currentPage || "");
+
+        // Project-rule presentation includes activity-backed last_used_at, so it
+        // depends on report structure as well as on the classification catalog.
+        if (rulesDataChanged && App.rules && typeof App.rules.onDataChanged === "function") {
+            App.rules.onDataChanged({
+                source: source,
+                structureChanged: structureChanged,
+                classificationChanged: classificationChanged
+            });
+        }
+        if (settingsChanged && App.settings && typeof App.settings.onDataChanged === "function") {
+            App.settings.onDataChanged({
+                source: source,
+                settingsChanged: true
+            });
+        }
+
+        // A page payload is itself the authoritative refresh for the active page.
+        // Cross-surface invalidation still applies, but current-page reconcile is
+        // reserved for heartbeat refresh-state transitions to avoid double fetches.
+        if (source !== "refresh-state") return accepted;
+
+        if (page === "timeline" && App.timeline
+            && typeof App.timeline.onRuntimeTransition === "function") {
+            App.timeline.onRuntimeTransition({
+                source: source,
+                structureChanged: structureChanged,
+                liveChanged: liveChanged
+            });
+        }
+
+        if (page === "overview" && App.overview
+            && typeof App.overview.onRuntimeTransition === "function") {
+            App.overview.onRuntimeTransition({
+                source: source,
+                structureChanged: structureChanged,
+                liveChanged: liveChanged
+            });
+        }
+
+        if (page === "statistics" && App.statistics
+            && typeof App.statistics.onRuntimeTransition === "function") {
+            App.statistics.onRuntimeTransition({
+                source: source,
+                structureChanged: structureChanged,
+                liveChanged: liveChanged,
+                reportStructureChanged: reportStructureChanged
+            });
+        }
+
+        return accepted;
+    }
+
+    function wrapRuntimeAcceptance(methodName, source) {
+        var base = App[methodName];
+        if (typeof base !== "function") return;
+        App[methodName] = function () {
+            var previous = App.liveRuntimeStore && App.liveRuntimeStore.get
+                ? App.liveRuntimeStore.get()
+                : null;
+            var accepted = base.apply(App, arguments);
+            return handleAcceptedRuntimeTransition(previous, accepted, source);
+        };
+    }
+
+    wrapRuntimeAcceptance("acceptRefreshStateRuntime", "refresh-state");
+    wrapRuntimeAcceptance("acceptPagePayloadRuntime", "page-payload");
+
+    var baseShowStatus = App.showStatus;
+    if (typeof baseShowStatus === "function") {
+        App.showStatus = function (statusResult) {
+            if (!statusResult) return;
+            var signature = JSON.stringify([
+                String(statusResult.status || ""),
+                statusResult.paused === true,
+                String(statusResult.display || "")
+            ]);
+            if (App.lastStatusRenderSignature === signature) return;
+            App.lastStatusRenderSignature = signature;
+            return baseShowStatus.apply(App, arguments);
+        };
+    }
+
+    function navPageFromTarget(target) {
+        var node = target;
+        while (node && node !== document) {
+            if (typeof node.getAttribute === "function") {
+                var page = node.getAttribute("data-page");
+                if (page) return String(page);
+            }
+            node = node.parentNode;
+        }
+        return "";
+    }
+
+    function afterUiInteraction(event) {
+        var navPage = event && event.type === "click" ? navPageFromTarget(event.target) : "";
+        window.setTimeout(function () {
+            if (navPage && App.currentPage === navPage) {
+                if (navPage === "rules" && App.rules
+                    && typeof App.rules.onPageEntered === "function") {
+                    App.rules.onPageEntered();
+                } else if (navPage === "settings" && App.settings
+                    && typeof App.settings.onPageEntered === "function") {
+                    App.settings.onPageEntered();
+                }
+            }
+        }, 0);
+    }
+    if (document && typeof document.addEventListener === "function") {
+        document.addEventListener("click", afterUiInteraction);
+    }
+
+    if (App.fdWork && typeof App.fdWork.bindStatusHost === "function") {
+        App.fdWork.bindStatusHost({ onStatusChanged: syncFDWorkConsumers });
+    }
+    if (App.fdWorkStatus) syncFDWorkConsumers(App.fdWorkStatus);
+})();

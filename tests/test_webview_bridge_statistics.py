@@ -112,6 +112,9 @@ def test_bridge_statistics_summary_success(bridge):
         assert "duration" in group
         assert "duration_seconds" in group
         assert "percentage" in group
+    for group in summary["by_file"]:
+        assert "duration" in group
+        assert str(group["key"]).startswith("file:")
     for group in summary["by_app"]:
         assert "duration" in group
     for group in summary["by_status"]:
@@ -147,6 +150,7 @@ def test_bridge_statistics_summary_empty_range(bridge):
     assert summary["total_duration_seconds"] == 0
     assert summary["total_duration"] == "00:00:00"
     assert summary["by_project"] == []
+    assert summary["by_file"] == []
     assert summary["by_app"] == []
     assert summary["by_status"] == []
     _assert_no_sensitive_keys(result)
@@ -289,7 +293,9 @@ def test_bridge_statistics_summary_no_raw_fields(bridge):
     assert "sql" not in payload_str.lower()
     assert "top secret note" not in payload_str.lower()
     assert "c:\\users\\secret" not in payload_str.lower()
-    assert "secretreport.docx" not in payload_str.lower()
+    by_file = result["summary"]["by_file"]
+    assert [row["display_name"] for row in by_file] == ["SecretReport.docx"]
+    assert all("secret" not in row["key"].lower() for row in by_file)
     _assert_no_sensitive_keys(result)
 
 
@@ -303,7 +309,7 @@ def test_bridge_statistics_summary_display_safe_keys_only(bridge):
         "date_from", "date_to", "total_duration_seconds", "total_duration",
         "project_duration_seconds", "project_duration", "activity_count",
         "session_count", "export_row_count", "snapshot_revision",
-        "project_count", "app_count", "by_project", "by_app", "by_status",
+        "project_count", "app_count", "by_project", "by_file", "by_app", "by_status",
         "export_preview",
     }
     assert set(summary.keys()) <= allowed_top_keys
@@ -311,7 +317,7 @@ def test_bridge_statistics_summary_display_safe_keys_only(bridge):
         "date_from", "date_to", "total_duration_seconds", "total_duration",
         "project_duration_seconds", "project_duration", "activity_count",
         "session_count", "export_row_count", "project_count", "app_count",
-        "by_project", "by_app", "by_status", "export_preview",
+        "by_project", "by_file", "by_app", "by_status", "export_preview",
     }
     assert required_top_keys <= set(summary.keys()), (
         f"missing required top-level keys: "
@@ -321,7 +327,12 @@ def test_bridge_statistics_summary_display_safe_keys_only(bridge):
         "key", "display_name", "duration_seconds", "duration",
         "activity_count", "percentage",
     }
-    for group in summary["by_project"] + summary["by_app"] + summary["by_status"]:
+    for group in (
+        summary["by_project"]
+        + summary["by_file"]
+        + summary["by_app"]
+        + summary["by_status"]
+    ):
         assert set(group.keys()) <= allowed_group_keys
     allowed_preview_keys = {
         "date_from", "date_to", "included_activity_count",
@@ -386,6 +397,9 @@ def test_bridge_statistics_summary_matches_service_semantics(bridge):
             f"bridge summary {field}={bridge_summary[field]} must match "
             f"service value {service_summary[field]}"
         )
+    assert [row["display_name"] for row in bridge_summary["by_file"]] == [
+        row["display_name"] for row in service_summary["by_file"]
+    ]
     preview = bridge_summary["export_preview"]
     service_preview = service_summary["export_preview"]
     for field in (

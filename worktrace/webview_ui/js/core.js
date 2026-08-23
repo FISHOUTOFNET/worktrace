@@ -1,6 +1,6 @@
 // WorkTrace WebView frontend core module.
 // Owns UI state and rendering helpers only. Runtime transport acceptance and
-// the application clock are owned exclusively by init.js.
+// the application clock are owned exclusively by init_fd_work_v5.js.
 
 (function () {
     "use strict";
@@ -28,9 +28,6 @@
     App.refreshCheckInFlight = false;
     App.activePageRefreshInFlight = false;
     App.lastFullRefreshAtEpochMs = 0;
-    App.RECONCILE_INTERVAL_MS = 180000;
-    App.lastReconcileAtEpochMs = 0;
-    App.reconcileInFlight = false;
     App._monotonicRenderState = {};
     App.currentPage = "overview";
     App.timelineDate = null;
@@ -48,13 +45,12 @@
     App.detailsInFlight = {};
     App.overviewRequestToken = 0;
     App.recentRequestToken = 0;
-    App.projectsCache = null;
-    App.projectsLoading = false;
     App.currentSessions = [];
     App.editingSession = null;
     App.editSaving = false;
     App.timelineCompositionActive = false;
     App.timelineDurationDraftTouched = false;
+    App.timelineDurationDraftInvalid = false;
     App.statisticsLoaded = false;
     App.statisticsLoading = false;
     App.statisticsRequestToken = 0;
@@ -67,6 +63,8 @@
     App.settingsRequestToken = 0;
     App.settingsWriteInProgress = false;
     App.launchAtLoginWriteInProgress = false;
+    App.fdWorkSettingsWriteInProgress = false;
+    App.fdWorkStatus = null;
     App.settingsBackupExportInProgress = false;
     App.settingsBackupManifestInProgress = false;
     App.settingsBackupImportInProgress = false;

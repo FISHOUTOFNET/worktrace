@@ -28,6 +28,12 @@ _BROWSER_TITLE_SUFFIXES = [
     "— Mozilla Firefox",
 ]
 
+# Page-count text is browser-window state, not page identity.
+_BROWSER_DYNAMIC_PAGE_COUNT_SUFFIX = re.compile(
+    r"(?:\s*和另外\s*\d+\s*个页面|\s+and\s+\d+\s+more\s+pages?).*$",
+    re.IGNORECASE,
+)
+
 # Patterns for new tab / blank pages
 _BLANK_PAGE_PATTERNS = re.compile(
     r"^(新标签页|新标签|New Tab|NewTabPage|about:blank|about:home|about:newtab|空白页)$",
@@ -86,14 +92,18 @@ class BrowserDetector:
         )
 
     def _clean_title(self, title: str) -> str:
-        cleaned = title
+        cleaned = title.strip()
+        dynamic_cleaned = _BROWSER_DYNAMIC_PAGE_COUNT_SUFFIX.sub("", cleaned).strip()
+        if dynamic_cleaned != cleaned:
+            return dynamic_cleaned
+
         for suffix in _BROWSER_TITLE_SUFFIXES:
             if cleaned.endswith(suffix):
                 cleaned = cleaned[: -len(suffix)].strip()
                 break
-        # Also try regex-based cleanup for variations
+        # Also try regex-based cleanup for variations and Edge release channels.
         cleaned = re.sub(
-            r"\s*[-–—]\s*(Google Chrome|Microsoft Edge|Mozilla Firefox|Brave|Opera|Vivaldi)\s*$",
+            r"\s*[-–—]\s*(Google Chrome|Microsoft Edge(?: Beta| Dev| Canary)?|Mozilla Firefox|Brave|Opera|Vivaldi)\s*$",
             "",
             cleaned,
             flags=re.IGNORECASE,

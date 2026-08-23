@@ -92,6 +92,7 @@ def test_worker_registry_contains_every_declared_runtime_worker(
             "inference",
             "activity_resource_repair",
             "startup_recovery",
+            "collector_supervisor",
         )
         assert all(isinstance(spec, WorkerSpec) for spec in runtime._worker_specs.values())
     finally:
@@ -291,9 +292,15 @@ def test_worker_lifecycle_owner_remains_app_runtime() -> None:
     runtime_source = (root / "worktrace/runtime/app_runtime.py").read_text(
         encoding="utf-8"
     )
+    supervisor_source = (
+        root / "worktrace/runtime/collector_supervisor.py"
+    ).read_text(encoding="utf-8")
     assert "class WorkerSpec" in runtime_source
     assert "self._worker_handles" in runtime_source
     assert "threading.Thread(" in runtime_source
+    assert '"collector_supervisor": WorkerSpec(' in runtime_source
+    assert "target=self.collector_supervisor.run_worker" in runtime_source
+    assert "threading.Thread(" not in supervisor_source
     assert "activity_lifecycle_service.close_all_open_activities" in runtime_source
     for legacy_member in (
         "_index_thread",

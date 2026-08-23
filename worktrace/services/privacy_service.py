@@ -93,6 +93,8 @@ def evaluate_exclusion(
 
     if active_window.privacy_path_required:
         return ExclusionDecision(True, True, True)
+    if active_window.path_resolution_uncertain:
+        return ExclusionDecision(True, True, False)
     return ExclusionDecision(False, False, False)
 
 

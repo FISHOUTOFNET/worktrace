@@ -15,9 +15,9 @@ from static_helpers import read_all_js, read_js, read_resource  # noqa: E402
 
 
 def test_navigation_has_accessible_current_state_and_compact_rail() -> None:
-    html = read_resource("index.html")
+    html = read_resource("index_fd_work_v5.html")
     styles = read_resource("styles.css")
-    init = read_js("init.js")
+    init = read_js("init_fd_work_v5.js")
     assert 'aria-current="page"' in html
     assert 'setAttribute("aria-current", "page")' in init
     assert 'removeAttribute("aria-current")' in init
@@ -27,8 +27,8 @@ def test_navigation_has_accessible_current_state_and_compact_rail() -> None:
 
 
 def test_topbar_is_static_and_does_not_duplicate_page_titles() -> None:
-    html = read_resource("index.html")
-    init = read_js("init.js")
+    html = read_resource("index_fd_work_v5.html")
+    init = read_js("init_fd_work_v5.js")
     topbar = html[
         html.index('<header class="app-topbar">') :
         html.index("</header>", html.index('<header class="app-topbar">'))
@@ -43,7 +43,7 @@ def test_topbar_is_static_and_does_not_duplicate_page_titles() -> None:
 
 
 def test_focus_drawer_dialog_and_toast_are_shared_accessible_primitives() -> None:
-    html = read_resource("index.html")
+    html = read_resource("index_fd_work_v5.html")
     styles = read_resource("styles.css")
     components = read_js("ui_components.js")
     assert ":focus-visible" in styles
@@ -56,7 +56,7 @@ def test_focus_drawer_dialog_and_toast_are_shared_accessible_primitives() -> Non
 
 def test_timeline_keeps_liveclock_attributes_and_uses_autosave_owner() -> None:
     source = read_js("timeline.js")
-    init_source = read_js("init.js")
+    init_source = read_js("init_fd_work_v5.js")
     assert "App.liveClockDataAttributes" in source
     assert "App.timelineRequestState.nextMutationOwner" in source
     assert 'bind("edit-note-text", "compositionstart", App.handleTimelineCompositionStart)' in init_source
@@ -70,7 +70,7 @@ def test_timeline_keeps_liveclock_attributes_and_uses_autosave_owner() -> None:
 
 
 def test_timeline_list_and_compact_inspector_have_keyboard_semantics() -> None:
-    html = read_resource("index.html")
+    html = read_resource("index_fd_work_v5.html")
     source = read_js("timeline.js")
     styles = read_resource("styles.css")
     assert 'role="listbox"' in html
@@ -82,17 +82,21 @@ def test_timeline_list_and_compact_inspector_have_keyboard_semantics() -> None:
 
 def test_direct_deletions_use_shared_dialog_and_wait_for_backend_refresh() -> None:
     timeline = read_js("timeline.js")
-    rules = read_js("rules_keyword_actions.js") + read_js("rules_create_panel.js")
-    assert 'confirmTimelineDeletion("hideActivity"' in timeline
-    assert "App.openDeleteDialog" in timeline
-    assert "twoStep: true" in timeline
+    timeline_delete = read_js("timeline_delete_actions.js")
+    rules = read_js("rules_delete_actions.js") + read_js("rules_create_panel_v5.js")
+    assert "App.confirmTimelineDeletion = function" in timeline_delete
+    assert "App.openDeleteDialog" in timeline_delete
+    assert "twoStep: true" in timeline_delete
+    assert "App.runTimelineSessionOperation" in timeline_delete
     assert "refreshAfterConfirmedMutation" in timeline
     assert "App.openDeleteDialog" in rules
+    assert "deleteProjectFolderRule" in rules
+    assert "deleteProjectKeywordRule" in rules
     assert "window.confirm" not in read_all_js()
 
 
 def test_frontend_resources_are_local_and_do_not_create_second_runtime_store() -> None:
-    html = read_resource("index.html")
+    html = read_resource("index_fd_work_v5.html")
     source = read_all_js()
     assert not re.search(r'<(?:script|link)[^>]+https?://', html, re.I)
     for forbidden in ("fetch(", "XMLHttpRequest", "localStorage", "sessionStorage", "indexedDB"):
@@ -101,7 +105,7 @@ def test_frontend_resources_are_local_and_do_not_create_second_runtime_store() -
 
 
 def test_compact_desktop_tokens_and_single_icon_sprite_are_shared() -> None:
-    html = read_resource("index.html")
+    html = read_resource("index_fd_work_v5.html")
     styles = read_resource("styles.css")
     assert '--control-height: 30px' in styles
     assert '--control-height-compact: 24px' in styles
@@ -127,7 +131,7 @@ def test_compact_desktop_tokens_and_single_icon_sprite_are_shared() -> None:
 
 
 def test_timeline_and_statistics_share_one_project_filter_control() -> None:
-    html = read_resource("index.html")
+    html = read_resource("index_fd_work_v5.html")
     styles = read_resource("styles.css")
     for element_id in ("timeline-project-filter", "statistics-project-filter"):
         control = re.search(rf'<select id="{element_id}" class="([^"]*)"', html)

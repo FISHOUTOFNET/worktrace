@@ -4,17 +4,20 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from worktrace.api import export_api, statistics_api
+from worktrace.api import export_api, project_api, statistics_api
 from worktrace.api.app_api import ApplicationControlService
+from worktrace.api.application_lifecycle import ApplicationDataLifecycle
 from worktrace.api.application_capabilities import (
     BackupApplicationService,
     OverviewApplicationService,
+    ProjectCatalogApplicationService,
     RulesApplicationService,
     SettingsApplicationService,
     StatisticsApplicationService,
     TimelineApplicationService,
 )
 from worktrace.api.application_services import ApplicationServices
+from worktrace.api.external_project_identity import LocalProjectIdentityCapability
 from worktrace.runtime.contracts import RuntimeStartResult
 from worktrace.webview_ui.bridge import WebViewBridge
 
@@ -158,6 +161,9 @@ class FakeSettingsCapability:
         self.set_launch_at_login_return: dict[str, Any] = {"ok": True}
         self.set_launch_at_login_side_effect: BaseException | None = None
         self.set_launch_at_login_calls: list[tuple] = []
+        self.set_fd_work_enabled_return: dict[str, Any] = {"ok": True}
+        self.set_fd_work_enabled_side_effect: BaseException | None = None
+        self.set_fd_work_enabled_calls: list[tuple] = []
 
     def get_first_run_notice_for_webview(self):
         self.get_first_run_notice_for_webview_calls.append(())
@@ -188,6 +194,12 @@ class FakeSettingsCapability:
         if self.set_launch_at_login_side_effect is not None:
             raise self.set_launch_at_login_side_effect
         return self.set_launch_at_login_return
+
+    def set_fd_work_enabled(self, enabled):
+        self.set_fd_work_enabled_calls.append((enabled,))
+        if self.set_fd_work_enabled_side_effect is not None:
+            raise self.set_fd_work_enabled_side_effect
+        return self.set_fd_work_enabled_return
 
 
 class FakeBackupCapability:
@@ -344,6 +356,7 @@ class FakeTimelineCapability:
         projection_revision,
         request_id,
         project_id,
+        duration_touched,
         adjusted_duration_seconds,
         note,
     ):
@@ -354,6 +367,7 @@ class FakeTimelineCapability:
                 projection_revision,
                 request_id,
                 project_id,
+                duration_touched,
                 adjusted_duration_seconds,
                 note,
             )
@@ -511,14 +525,20 @@ class FakeRulesCapability:
             raise self.list_project_bindings_side_effect
         return self.list_project_bindings_return
 
-    def create_project_for_rules(self, name, description, language):
-        self.create_project_for_rules_calls.append((name, description, language))
+    def create_project_for_rules(self, name, description, language, selection_token=None):
+        call = (name, description, language)
+        self.create_project_for_rules_calls.append(
+            call if selection_token is None else call + (selection_token,)
+        )
         if self.create_project_for_rules_side_effect is not None:
             raise self.create_project_for_rules_side_effect
         return self.create_project_for_rules_return
 
-    def update_project_for_rules(self, project_id, name, description, language):
-        self.update_project_for_rules_calls.append((project_id, name, description, language))
+    def update_project_for_rules(self, project_id, name, description, language, selection_token=None):
+        call = (project_id, name, description, language)
+        self.update_project_for_rules_calls.append(
+            call if selection_token is None else call + (selection_token,)
+        )
         if self.update_project_for_rules_side_effect is not None:
             raise self.update_project_for_rules_side_effect
         return self.update_project_for_rules_return
@@ -638,6 +658,52 @@ class FakeRulesCapability:
         return self.automatic_rules_status_return
 
 
+class FakeFDWorkCapability:
+    """FD Work capability fake that records identity/version-only calls."""
+
+    def __init__(self) -> None:
+        self.open_entry_calls: list[tuple[str, str, str]] = []
+        self.open_entry_return: dict[str, object] = {"ok": True, "status": "opening"}
+        self.enabled = False
+        self.shutdown_calls = 0
+
+    def get_settings_status(self):
+        return {
+            "supported": True,
+            "enabled": self.enabled,
+            "session_state": "disabled",
+            "page_phase": "none",
+            "operation": "none",
+            "interaction_owner": "none",
+            "ready": False,
+            "login_required": False,
+            "error_code": None,
+            "navigation_generation": 0,
+        }
+
+    def set_enabled(self, enabled):
+        self.enabled = bool(enabled)
+        return self.get_settings_status()
+
+    def open_entry(
+        self,
+        report_date,
+        projection_instance_key,
+        expected_projection_revision,
+    ):
+        self.open_entry_calls.append(
+            (
+                report_date,
+                projection_instance_key,
+                expected_projection_revision,
+            )
+        )
+        return self.open_entry_return
+
+    def shutdown(self):
+        self.shutdown_calls += 1
+
+
 def build_test_application_services(
     runtime: TestRuntime | None = None,
     maintenance: TestMaintenance | None = None,
@@ -647,10 +713,16 @@ def build_test_application_services(
     backup: FakeBackupCapability | None = None,
     statistics: FakeStatisticsCapability | None = None,
     timeline: FakeTimelineCapability | None = None,
+    fd_work: FakeFDWorkCapability | None = None,
     rules: FakeRulesCapability | None = None,
 ) -> ApplicationServices:
     runtime_capability = runtime if runtime is not None else TestRuntime()
     maintenance_capability = maintenance if maintenance is not None else TestMaintenance()
+    data_lifecycle = ApplicationDataLifecycle(())
+    local_identity = LocalProjectIdentityCapability(
+        create_project=project_api.create_project_for_rules,
+        update_project=project_api.update_project_for_rules,
+    )
     return ApplicationServices(
         app_control=ApplicationControlService(
             runtime_capability,
@@ -658,11 +730,21 @@ def build_test_application_services(
         ),
         runtime_view=runtime_capability,
         overview=overview if overview is not None else OverviewApplicationService(),
-        settings=settings if settings is not None else SettingsApplicationService(),
-        backup=backup if backup is not None else BackupApplicationService(),
+        settings=(
+            settings
+            if settings is not None
+            else SettingsApplicationService(data_lifecycle=data_lifecycle)
+        ),
+        backup=backup if backup is not None else BackupApplicationService(data_lifecycle),
         statistics=statistics if statistics is not None else StatisticsApplicationService(),
+        projects=ProjectCatalogApplicationService(project_identity=local_identity),
         timeline=timeline if timeline is not None else TimelineApplicationService(),
-        rules=rules if rules is not None else RulesApplicationService(),
+        fd_work=fd_work if fd_work is not None else FakeFDWorkCapability(),
+        rules=(
+            rules
+            if rules is not None
+            else RulesApplicationService(project_identity=local_identity)
+        ),
     )
 
 
@@ -675,6 +757,7 @@ def build_test_bridge(
     backup: FakeBackupCapability | None = None,
     statistics: FakeStatisticsCapability | None = None,
     timeline: FakeTimelineCapability | None = None,
+    fd_work: FakeFDWorkCapability | None = None,
     rules: FakeRulesCapability | None = None,
 ) -> WebViewBridge:
     return WebViewBridge(
@@ -686,6 +769,7 @@ def build_test_bridge(
             backup=backup,
             statistics=statistics,
             timeline=timeline,
+            fd_work=fd_work,
             rules=rules,
         )
     )
@@ -693,6 +777,7 @@ def build_test_bridge(
 
 __all__ = [
     "FakeBackupCapability",
+    "FakeFDWorkCapability",
     "FakeOverviewCapability",
     "FakeRulesCapability",
     "FakeSettingsCapability",

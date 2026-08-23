@@ -24,6 +24,8 @@ OPERATION_NO_EFFECT = "operation_no_effect"
 TARGET_REVISION_CONFLICT = "target_revision_conflict"
 SESSION_NOT_ADJACENT = "session_not_adjacent"
 REQUEST_ID_CONFLICT = "request_id_conflict"
+DAY_DURATION_EXCEEDS_LIMIT = "day_duration_exceeds_limit"
+DURATION_TOO_SMALL = "duration_too_small"
 
 
 class ApiError(Exception):
@@ -53,7 +55,7 @@ def error_code_from_exception(exc: BaseException) -> str:
         return OPERATION_FAILED
     if isinstance(exc, ValueError):
         value = str(exc)
-        if value in {STALE_SELECTION, REVISION_CONFLICT, PROJECT_NOT_SELECTABLE, TARGET_REVISION_CONFLICT, SESSION_NOT_ADJACENT, REQUEST_ID_CONFLICT}:
+        if value in {STALE_SELECTION, REVISION_CONFLICT, PROJECT_NOT_SELECTABLE, TARGET_REVISION_CONFLICT, SESSION_NOT_ADJACENT, REQUEST_ID_CONFLICT, DURATION_TOO_SMALL}:
             return value
         if value in {
             "not_project_activity",
@@ -82,12 +84,16 @@ def public_message_for_code(code: str) -> str:
         OPERATION_NOT_ALLOWED: "当前活动时段不支持该操作。",
         OPERATION_FAILED: "操作失败，请刷新后重试。",
         OPERATION_NO_EFFECT: "操作未产生变化。",
+        DAY_DURATION_EXCEEDS_LIMIT: "修改后当日总时长将超过 24 小时，本次修改未保存。",
+        DURATION_TOO_SMALL: "人工修正时长至少为 0.1 小时，本次修改未保存。",
     }.get(code, "操作失败，请刷新后重试。")
 
 
 __all__ = [
     "ApiError",
     "DATABASE_BUSY",
+    "DAY_DURATION_EXCEEDS_LIMIT",
+    "DURATION_TOO_SMALL",
     "INVALID_INPUT",
     "NotFoundError",
     "OPERATION_FAILED",

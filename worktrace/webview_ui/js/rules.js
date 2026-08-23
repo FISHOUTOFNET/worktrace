@@ -3,105 +3,14 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    function installProjectCatalogCoordinator() {
-        // Unified project catalog coordinator. One bridge call returns the
-        // editing catalog (includes system ``未归类``) and the filter
-        // catalog (excludes the system project to avoid duplicate
-        // ``未归类`` entries).
-        function applyCatalogResult(result) {
-            if (!result || result.ok === false) return null;
-            var editing = result.editing_projects || result.projects || [];
-            var filter = result.filter_projects || result.projects || [];
-            App.editingProjectsCache = editing;
-            App.filterProjectsCache = filter;
-            // Backward compatibility: legacy consumers read ``projectsCache``
-            // expecting the editing catalog.
-            App.projectsCache = editing;
-            // Render every consumer from the single authoritative load.
-            if (typeof App.renderTimelineProjectFilter === "function") {
-                App.renderTimelineProjectFilter(filter);
-            }
-            if (typeof App.populateStatisticsProjectFilter === "function") {
-                App.populateStatisticsProjectFilter(filter);
-            }
-            return editing;
-        }
-
-        App.loadProjects = function () {
-            if (App.projectsCache) return Promise.resolve(App.projectsCache);
-            if (App.projectsLoadPromise) return App.projectsLoadPromise;
-            App.projectsLoading = true;
-            var epoch = App.dataEpoch || 0;
-            var request = App.bridge.listProjectsForTimeline().then(function (result) {
-                if (epoch !== (App.dataEpoch || 0)) return null;
-                return applyCatalogResult(result);
-            }).catch(function () {
-                return null;
-            }).finally(function () {
-                if (App.projectsLoadPromise === request) {
-                    App.projectsLoadPromise = null;
-                    App.projectsLoading = false;
-                }
-            });
-            App.projectsLoadPromise = request;
-            return request;
-        };
-
-        // Force a fresh load (used after project add/update/delete/generation
-        // reset). Clears the cache and re-renders all consumers.
-        App.refreshProjectCatalogs = function () {
-            App.projectsCache = null;
-            App.editingProjectsCache = null;
-            App.filterProjectsCache = null;
-            App.projectsLoading = false;
-            App.projectsLoadPromise = null;
-            return App.loadProjects();
-        };
-    }
-    installProjectCatalogCoordinator();
-
-    function closestTimelineItem(target) {
-        while (target && target !== document) {
-            if (target.classList && target.classList.contains("timeline-item")) return target;
-            target = target.parentElement;
-        }
-        return null;
-    }
-
-    function installTimelineProjectLoadGate() {
-        var list = document.getElementById("timeline-sessions-list");
-        if (!list || list.getAttribute("data-project-load-gate") === "1") return;
-        list.setAttribute("data-project-load-gate", "1");
-        list.addEventListener("click", function (event) {
-            if (!App.projectsLoading || !App.projectsLoadPromise) return;
-            var item = closestTimelineItem(event.target);
-            if (!item) return;
-            event.preventDefault();
-            event.stopImmediatePropagation();
-            var epoch = App.dataEpoch || 0;
-            App.projectsLoadPromise.then(function () {
-                if (epoch !== (App.dataEpoch || 0)) return;
-                if (document.body.contains(item)) item.click();
-            });
-        }, true);
-    }
-    installTimelineProjectLoadGate();
-
-    function refreshSharedProjectCatalog() {
-        if (typeof App.refreshProjectCatalogs === "function") {
-            return App.refreshProjectCatalogs();
-        }
-        App.projectsCache = null;
-        App.projectsLoading = false;
-        App.projectsLoadPromise = null;
-        return typeof App.loadProjects === "function" ? App.loadProjects() : Promise.resolve(null);
-    }
-    App.refreshSharedProjectCatalog = refreshSharedProjectCatalog;
-
-    function loadProjectRules() {
-        if (App.rulesLoadPromise) return App.rulesLoadPromise;
+    function loadProjectRules(options) {
+        options = options || {};
+        var forceFresh = options.forceFresh === true;
+        var showLoading = options.showLoading === true
+            || (!App.rulesLoaded && options.showLoading !== false);
+        if (App.rulesLoadPromise && !forceFresh) return App.rulesLoadPromise;
         var token = App.requestCoordinator.beginLatest("rules", "home");
-        App.setRulesLoading(true);
+        if (showLoading) App.setRulesLoading(true);
         App.clearRulesError();
         var request = App.bridge.getProjectRules().then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return null;
@@ -111,18 +20,22 @@
             }
             App.showProjectRules(result || { projects: [] });
             App.clearRulesError();
-            return refreshSharedProjectCatalog().then(function () { return result; });
+            return result;
         }).catch(function () {
             if (App.requestCoordinator.isCurrent(token)) App.showRulesError("加载项目规则失败");
             return null;
         }).finally(function () {
             if (App.rulesLoadPromise === request) App.rulesLoadPromise = null;
-            if (App.requestCoordinator.isCurrent(token)) App.setRulesLoading(false);
+            if (showLoading && App.requestCoordinator.isCurrent(token)) App.setRulesLoading(false);
         });
         App.rulesLoadPromise = request;
         return request;
     }
     App.loadProjectRules = loadProjectRules;
+    App.reloadProjectRules = function () {
+        if (App.projectCatalog) App.projectCatalog.invalidate();
+        return loadProjectRules({ forceFresh: true, showLoading: false });
+    };
 
     function sortProjectsForRulesHome(projects) {
         var list = (projects || []).slice();
@@ -146,8 +59,52 @@
     }
     App.sortProjectsForRulesHome = sortProjectsForRulesHome;
 
+    function captureExpandedProjects(list) {
+        var expanded = {};
+        if (!list || typeof list.querySelectorAll !== "function") return expanded;
+        var cards = list.querySelectorAll(".rules-project-card");
+        for (var index = 0; index < cards.length; index++) {
+            var card = cards[index];
+            var toggle = card.querySelector && card.querySelector(".rules-project-toggle");
+            var projectId = card.getAttribute && card.getAttribute("data-project-id");
+            if (projectId && toggle && toggle.getAttribute("aria-expanded") === "true") {
+                expanded[String(projectId)] = true;
+            }
+        }
+        return expanded;
+    }
+
+    function restoreExpandedProjects(list, expanded) {
+        if (!list || !expanded || typeof list.querySelectorAll !== "function") return;
+        var cards = list.querySelectorAll(".rules-project-card");
+        for (var index = 0; index < cards.length; index++) {
+            var card = cards[index];
+            var projectId = card.getAttribute && card.getAttribute("data-project-id");
+            if (!projectId || !expanded[String(projectId)]) continue;
+            var toggle = card.querySelector && card.querySelector(".rules-project-toggle");
+            var rows = card.querySelector && card.querySelector(".rules-row-list");
+            if (rows) rows.hidden = false;
+            if (toggle) {
+                toggle.setAttribute("aria-expanded", "true");
+                toggle.classList.toggle("is-expanded", true);
+                toggle.setAttribute("aria-label", "收起项目规则");
+                toggle.setAttribute("data-tooltip", "收起规则");
+            }
+        }
+    }
+
+    function renderProjectRulesList(list, projects) {
+        var expanded = captureExpandedProjects(list);
+        list.innerHTML = projects.map(function (project) {
+            return App.renderProjectRuleProject(project);
+        }).join("");
+        restoreExpandedProjects(list, expanded);
+        applyRulesSearch();
+    }
+
     function showProjectRules(data) {
         App.rulesLoaded = true;
+        App.rulesRefreshPending = false;
         App.lastProjectRulesData = data || { projects: [] };
         var list = document.getElementById("rules-list");
         var empty = document.getElementById("rules-empty");
@@ -160,12 +117,8 @@
             return;
         }
         empty.hidden = true;
-        list.innerHTML = projects.map(function (project) {
-            return App.renderProjectRuleProject(project);
-        }).join("");
-        App.bindProjectRuleDelete();
-        App.bindProjectRuleFolderEvents();
-        applyRulesSearch();
+        renderProjectRulesList(list, projects);
+        if (App.bindProjectRuleDeleteEvents) App.bindProjectRuleDeleteEvents();
     }
     App.showProjectRules = showProjectRules;
 
@@ -178,12 +131,8 @@
         }
         var projects = sortProjectsForRulesHome(App.lastProjectRulesData.projects || []);
         if (!projects.length) return;
-        list.innerHTML = projects.map(function (project) {
-            return App.renderProjectRuleProject(project);
-        }).join("");
-        App.bindProjectRuleDelete();
-        App.bindProjectRuleFolderEvents();
-        applyRulesSearch();
+        renderProjectRulesList(list, projects);
+        if (App.bindProjectRuleDeleteEvents) App.bindProjectRuleDeleteEvents();
     };
 
     function applyRulesSearch() {
@@ -210,4 +159,50 @@
         banner.textContent = message || "加载项目规则失败";
     };
     App.clearRulesError = function () { App.showRulesError(""); };
+
+    function refreshProjectRulesSilently() {
+        return loadProjectRules({ showLoading: false });
+    }
+
+    function onRulesDataChanged(change) {
+        change = change || {};
+        if (change.structureChanged !== true && change.classificationChanged !== true) {
+            return Promise.resolve(null);
+        }
+        App.rulesRefreshPending = true;
+        if (change.source !== "refresh-state"
+            || App.currentPage !== "rules"
+            || change.classificationChanged !== true) {
+            return Promise.resolve(null);
+        }
+        return refreshProjectRulesSilently();
+    }
+
+    function onRulesPageEntered() {
+        if (!App.rulesLoaded) return loadProjectRules({ showLoading: true });
+        if (App.rulesRefreshPending !== true) return Promise.resolve(null);
+        return refreshProjectRulesSilently();
+    }
+
+    function onRulesRefreshRequested() {
+        if (!App.rulesLoaded) return loadProjectRules({ showLoading: true });
+        return refreshProjectRulesSilently();
+    }
+
+    function resetRulesGeneration() {
+        App.rulesLoaded = false;
+        App.rulesRefreshPending = false;
+        App.lastProjectRulesData = null;
+        App.rulesLoadPromise = null;
+        App.rulesRequestToken = (App.rulesRequestToken || 0) + 1;
+        if (typeof App.resetRulesTransientUi === "function") {
+            App.resetRulesTransientUi({ restoreFocus: false });
+        }
+    }
+    App.rules = Object.freeze({
+        onDataChanged: onRulesDataChanged,
+        onPageEntered: onRulesPageEntered,
+        onRefreshRequested: onRulesRefreshRequested,
+        resetGeneration: resetRulesGeneration
+    });
 })();

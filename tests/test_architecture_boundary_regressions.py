@@ -28,9 +28,23 @@ def test_overview_counts_standalone_excluded_without_showing_it_in_recent(temp_d
 
     assert payload["today_total_seconds"] == 300
     assert payload["project_distribution"] == {
-        "total_seconds": 0,
-        "segments": [],
+        "total_seconds": 300,
+        "segments": [
+            {
+                "key": "other",
+                "project_id": None,
+                "label": "其他",
+                "duration_seconds": 300,
+                "category_count": 1,
+                "is_uncategorized": False,
+                "is_other": True,
+            }
+        ],
     }
+    assert sum(
+        int(segment.get("duration_seconds") or 0)
+        for segment in payload["project_distribution"]["segments"]
+    ) == payload["today_total_seconds"]
     assert all(
         str(row.get("row_kind") or "") != "standalone_status"
         for row in payload.get("activities") or []
@@ -45,6 +59,7 @@ def test_runtime_and_backup_facades_have_single_owners():
     assert "privacy_gate_service" not in runtime
     assert "capture_installation_privacy_state" not in backup_api
     assert "restore_installation_privacy_state" not in backup_api
+
 
 def test_statistics_bridge_separates_display_summary_and_export_ticket(temp_db):
     envelope = {
@@ -83,10 +98,13 @@ def test_frontend_generation_and_coalescing_contracts_are_shipping():
     request_state = (
         root / "worktrace/webview_ui/js/timeline_request_state.js"
     ).read_text(encoding="utf-8")
-    init = (root / "worktrace/webview_ui/js/init.js").read_text(encoding="utf-8")
+    init = (root / "worktrace/webview_ui/js/init_fd_work_v5.js").read_text(encoding="utf-8")
     statistics = (root / "worktrace/webview_ui/js/statistics.js").read_text(
         encoding="utf-8"
     )
+    project_catalog = (
+        root / "worktrace/webview_ui/js/project_catalog.js"
+    ).read_text(encoding="utf-8")
     rules = (root / "worktrace/webview_ui/js/rules.js").read_text(encoding="utf-8")
 
     assert "bumpDataEpoch" in request_state
@@ -97,6 +115,11 @@ def test_frontend_generation_and_coalescing_contracts_are_shipping():
     assert "statisticsLoadPromise" in statistics
     assert "exportTicket" in statistics
     assert "ticket.revision" in statistics
-    assert "projectsLoadPromise" in rules
-    assert "data-project-load-gate" in rules
-    assert "stopImmediatePropagation" in rules
+    assert "loadPromise" in project_catalog
+    assert "generation" in project_catalog
+    assert "acceptedDataEpoch" in project_catalog
+    assert "App.projectCatalog" in project_catalog
+    assert "listProjectCatalog" in project_catalog
+    assert "projectsLoadPromise" not in rules
+    assert "data-project-load-gate" not in rules
+    assert "stopImmediatePropagation" not in rules

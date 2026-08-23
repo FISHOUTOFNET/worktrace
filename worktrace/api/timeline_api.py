@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..domain_limits import ADJUSTED_DURATION_MAX_SECONDS, NOTE_MAX_LENGTH
+from ..domain_limits import (
+    ADJUSTED_DURATION_MAX_SECONDS,
+    NOTE_MAX_LENGTH,
+    normalize_timeline_duration_override_seconds,
+)
 from ..services import (
     project_service,
     report_session_operation_service,
@@ -35,6 +39,7 @@ def save_timeline_session_edit(
     expected_projection_revision: str,
     request_id: str,
     project_id: int | None,
+    duration_touched: bool,
     adjusted_duration_seconds: int | None,
     note: str,
 ) -> dict[str, Any]:
@@ -44,8 +49,11 @@ def save_timeline_session_edit(
         _validate_projection_revision(expected_projection_revision),
         _validate_request_id(request_id),
         project_id=_validate_optional_project_id(project_id),
-        adjusted_duration_seconds=_validate_adjusted_duration(
-            adjusted_duration_seconds
+        duration_touched=_validate_duration_touched(duration_touched),
+        adjusted_duration_seconds=(
+            _validate_adjusted_duration(adjusted_duration_seconds)
+            if duration_touched
+            else None
         ),
         note=_validate_note(note),
     )
@@ -239,21 +247,15 @@ def _validate_note(note: str) -> str:
 def _validate_adjusted_duration(
     adjusted_duration_seconds: int | None,
 ) -> int | None:
-    if adjusted_duration_seconds is None:
-        return None
-    if isinstance(adjusted_duration_seconds, bool):
-        raise ValueError("adjusted_duration_seconds must be an integer")
-    try:
-        value = int(adjusted_duration_seconds)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("adjusted_duration_seconds must be an integer") from exc
-    if value < 0:
-        raise ValueError(
-            "adjusted_duration_seconds must be a non-negative integer"
-        )
-    if value > TIMELINE_ADJUSTED_DURATION_MAX_SECONDS:
-        raise ValueError("adjusted_duration_seconds exceeds maximum")
-    return value
+    return normalize_timeline_duration_override_seconds(
+        adjusted_duration_seconds
+    )
+
+
+def _validate_duration_touched(duration_touched: bool) -> bool:
+    if not isinstance(duration_touched, bool):
+        raise ValueError("invalid_duration")
+    return duration_touched
 
 
 def _project_editability_code(activity: dict | None) -> str:

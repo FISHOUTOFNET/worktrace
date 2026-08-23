@@ -1,8 +1,9 @@
 """Settings / Privacy status facade + bridge tests.
 
 These tests verify the named settings/privacy capabilities and assert that
-read-only status payloads do not expose paths, clipboard content, passphrases,
-tracebacks, or unintended write-side actions.
+read-only status payloads expose only the app-owned local data directory while
+keeping arbitrary paths, clipboard content, passphrases, tracebacks, and
+unintended write-side actions private.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from worktrace.api.settings_api import (
     recover_database_maintenance_for_webview,
     set_clipboard_capture_enabled_for_webview,
 )
+from worktrace.config import resolve_paths
 from worktrace.services import database_maintenance_service, privacy_gate_service
 from worktrace.services.installation_metadata_store import set_privacy_notice_version
 from worktrace.services.secure_backup_service import (
@@ -42,9 +44,25 @@ from worktrace.services.secure_backup_service import (
     SecureBackupError,
 )
 from worktrace.services.settings_service import set_setting, set_settings
+from worktrace.integrations.fd_work.integration_service import FDWorkIntegrationService
 from worktrace.write_gate import DATABASE_RECOVERY_ERROR
 
 pytestmark = [pytest.mark.security_privacy, pytest.mark.integration, pytest.mark.db]
+
+
+def _fd_status(enabled: bool) -> dict[str, object]:
+    return {
+        "supported": True,
+        "enabled": enabled,
+        "session_state": "deferred_by_privacy" if enabled else "disabled",
+        "page_phase": "none",
+        "operation": "none",
+        "interaction_owner": "none",
+        "ready": False,
+        "login_required": False,
+        "error_code": None,
+        "navigation_generation": 0,
+    }
 
 
 def _set_notice_accepted(accepted: bool) -> None:
@@ -75,6 +93,7 @@ def test_api_returns_success_payload_with_required_keys(temp_db) -> None:
     for key in (
         "page",
         "storage_model",
+        "local_data_path",
         "clipboard_capture_enabled",
         "export_path_configured",
         *sorted(MAINTENANCE_KEYS),
@@ -85,6 +104,7 @@ def test_api_returns_success_payload_with_required_keys(temp_db) -> None:
         assert key in status, f"status missing required key: {key}"
     assert status["page"] == "settings_privacy"
     assert status["storage_model"] == "local_only"
+    assert status["local_data_path"] == str(resolve_paths().data_dir)
 
 
 def test_api_clipboard_capture_enabled_reflects_setting(temp_db) -> None:
@@ -103,7 +123,6 @@ def test_api_export_path_configured_is_bool_and_does_not_leak_path(temp_db) -> N
     assert result["status"]["export_path_configured"] is True
     serialized = json.dumps(result, ensure_ascii=False)
     assert SENSITIVE_EXPORT_PATH not in serialized
-    assert "C:\\" not in serialized
     assert "TestSettings-Alpha" not in serialized
 
 
@@ -293,6 +312,7 @@ def test_bridge_returns_narrow_success_payload(temp_db) -> None:
     assert set(result["status"]) == {
         "page",
         "storage_model",
+        "local_data_path",
         "clipboard_capture_enabled",
         "export_path_configured",
         *MAINTENANCE_KEYS,
@@ -300,7 +320,10 @@ def test_bridge_returns_narrow_success_payload(temp_db) -> None:
         "destructive_actions",
         "first_run_notice",
         "launch_at_login",
+        "fd_work",
     }
+    assert result["status"]["local_data_path"] == str(resolve_paths().data_dir)
+    assert result["status"]["fd_work"] == _fd_status(False)
 
 
 def test_bridge_accept_first_run_notice_exception_fallback_keeps_six_field_dto(
@@ -337,3 +360,19 @@ def test_bridge_accept_first_run_notice_exception_fallback_keeps_six_field_dto(
     assert result["error_code"] == "privacy_accept_failed"
     assert isinstance(result["message"], str) and result["message"]
     json.loads(json.dumps(result))
+
+
+def test_settings_bridge_delegates_fd_work_enable_and_returns_authority(temp_db):
+    fd_work = FDWorkIntegrationService()
+    bridge = build_test_bridge(fd_work=fd_work)
+
+    enabled = bridge.set_fd_work_enabled(True)
+    persisted_enabled = FDWorkIntegrationService().get_settings_status()
+    disabled = bridge.set_fd_work_enabled(False)
+
+    assert enabled["ok"] is True
+    assert enabled["status"]["fd_work"] == _fd_status(True)
+    assert persisted_enabled == _fd_status(True)
+    assert disabled["ok"] is True
+    assert disabled["status"]["fd_work"] == _fd_status(False)
+    assert FDWorkIntegrationService().get_settings_status() == _fd_status(False)

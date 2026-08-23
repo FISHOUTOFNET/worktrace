@@ -17,6 +17,7 @@ from . import (
     folder_index_query_service,
     folder_rule_service,
 )
+from .activity_inference_policy import is_assignment_unresolved
 from .system_project_service import require_uncategorized_project_id
 
 _GENERIC_FILE_PROJECT_NAMES = {
@@ -31,6 +32,8 @@ _GENERIC_FILE_PROJECT_NAMES = {
     "桌面",
     "文档",
 }
+_DEFER_REASON_FIELD = "_defer_reason"
+_FOLDER_INDEX_DEFER_REASON = "folder_index_refresh"
 _KEYWORD_RULE_CACHE_LOCK = threading.RLock()
 _KEYWORD_RULE_CACHE_DATABASE_KEY: str | None = None
 _KEYWORD_RULE_CACHE_GENERATION: tuple[int, int] | None = None
@@ -123,11 +126,11 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
             _KEYWORD_RULE_CACHE_DATABASE_KEY = database_key
             _KEYWORD_RULE_CACHE_GENERATION = current_generation
             _KEYWORD_RULE_CACHE = [dict(row) for row in rules]
-        return [dict(row) for row in rules]
+        return [dict(row) for row in _KEYWORD_RULE_CACHE]
 
 
 def assign_project_for_activity(activity_id: int) -> dict:
-    """Infer and persist one assignment through the canonical command owner."""
+    """Infer and persist one unresolved assignment through the canonical owner."""
 
     with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
         result, changed = _assign_project_for_activity_in_transaction(
@@ -145,7 +148,7 @@ def assign_project_for_activity_in_transaction(
     *,
     exclude_rule: tuple[str, int] | None = None,
 ) -> dict:
-    """Assign one activity inside a caller-owned transaction."""
+    """Assign inside a caller transaction; ``exclude_rule`` is a rule-removal gate."""
 
     result, _changed = _assign_project_for_activity_in_transaction(
         conn,
@@ -155,11 +158,110 @@ def assign_project_for_activity_in_transaction(
     return result
 
 
+def reinfer_after_resource_upgrade_in_transaction(conn, activity_id: int) -> dict:
+    """Re-evaluate automatic attribution after a stronger concrete path fact arrives."""
+
+    result, _changed = _assign_project_for_activity_in_transaction(
+        conn,
+        int(activity_id),
+        allow_resource_upgrade=True,
+    )
+    return result
+
+
+def _assignment_allows_inference(
+    existing,
+    *,
+    exclude_rule: tuple[str, int] | None,
+    allow_resource_upgrade: bool,
+) -> bool:
+    if existing is None:
+        return True
+    if int(existing["is_manual"] or 0):
+        return False
+    if str(existing["source"] or "") == "midnight_anchor":
+        return False
+    if allow_resource_upgrade:
+        return True
+    if exclude_rule is not None:
+        current_rule_type = str(existing["source_rule_type"] or "")
+        current_rule_id = (
+            int(existing["source_rule_id"])
+            if existing["source_rule_id"] is not None
+            else 0
+        )
+        return (current_rule_type, current_rule_id) == (
+            str(exclude_rule[0]),
+            int(exclude_rule[1]),
+        )
+    return is_assignment_unresolved(existing)
+
+
+def _is_pathless_file_index_candidate(resource: dict) -> bool:
+    if str(resource.get("path_hint") or "").strip():
+        return False
+    if not bool(resource.get("is_anchor")):
+        return False
+    if not str(resource.get("display_name") or "").strip():
+        return False
+    resource_kind = str(resource.get("resource_kind") or "").strip()
+    resource_subtype = str(resource.get("resource_subtype") or "").strip()
+    if resource_kind in {"office_document", "local_file"}:
+        return True
+    if resource_kind == "ide_file":
+        return resource_subtype == "code_file"
+    if resource_kind == "email":
+        return resource_subtype == "email_file"
+    return False
+
+
+def _pathless_file_index_refresh_boundary(
+    activity: dict,
+    resource: dict,
+    assignment,
+) -> str | None:
+    if assignment is None or not is_assignment_unresolved(assignment):
+        return None
+    if not _is_pathless_file_index_candidate(resource):
+        return None
+    assignment_at = str(
+        assignment["updated_at"] or assignment["created_at"] or ""
+    ).strip()
+    if not assignment_at:
+        return None
+    end_time = str(activity.get("end_time") or "").strip()
+    if end_time and end_time > assignment_at:
+        return end_time
+    return assignment_at
+
+
+def _current_index_is_newer_than_unresolved_assignment(
+    conn,
+    activity: dict,
+    resource: dict,
+    existing,
+) -> bool:
+    boundary = _pathless_file_index_refresh_boundary(
+        activity,
+        resource,
+        existing,
+    )
+    if not boundary:
+        return False
+    from . import folder_index_maintenance_service
+
+    return folder_index_maintenance_service.unresolved_file_indexes_refreshed_since(
+        boundary,
+        conn=conn,
+    )
+
+
 def _assign_project_for_activity_in_transaction(
     conn,
     activity_id: int,
     *,
     exclude_rule: tuple[str, int] | None = None,
+    allow_resource_upgrade: bool = False,
 ) -> tuple[dict, bool]:
     activity = conn.execute(
         "SELECT * FROM activity_log WHERE id = ?",
@@ -173,9 +275,11 @@ def _assign_project_for_activity_in_transaction(
         "SELECT * FROM activity_project_assignment WHERE activity_id = ?",
         (int(activity_id),),
     ).fetchone()
-    if existing is not None and int(existing["is_manual"] or 0):
-        return _assignment_dict(conn, activity_id), False
-    if existing is not None and str(existing["source"] or "") == "midnight_anchor":
+    if not _assignment_allows_inference(
+        existing,
+        exclude_rule=exclude_rule,
+        allow_resource_upgrade=allow_resource_upgrade,
+    ):
         return _assignment_dict(conn, activity_id), False
 
     uncategorized_id = require_uncategorized_project_id(conn)
@@ -190,11 +294,22 @@ def _assign_project_for_activity_in_transaction(
         return _assignment_dict(conn, activity_id), changed
 
     resource = _resource_for_activity(conn, activity_id)
+    use_current_filename_index = (
+        exclude_rule is None
+        and not allow_resource_upgrade
+        and _current_index_is_newer_than_unresolved_assignment(
+            conn,
+            activity_dict,
+            resource,
+            existing,
+        )
+    )
     decision = _infer_project_resource_first(
         conn,
         activity_dict,
         resource,
         exclude_rule=exclude_rule,
+        use_current_filename_index=use_current_filename_index,
     )
     changed = assignment_command_service.upsert_assignment(
         conn,
@@ -206,10 +321,27 @@ def _assign_project_for_activity_in_transaction(
         source_rule_type=decision.source_rule_type,
         source_rule_id=decision.source_rule_id,
     )
-    return _assignment_dict(conn, activity_id), changed
+    result = _assignment_dict(conn, activity_id)
+    unresolved_pathless_miss = (
+        exclude_rule is None
+        and not allow_resource_upgrade
+        and not use_current_filename_index
+        and decision.source in {"uncategorized", "suggested_project_name"}
+        and _is_pathless_file_index_candidate(resource)
+    )
+    if unresolved_pathless_miss:
+        from . import folder_index_maintenance_service
 
-
-_OPEN_ROW_UNCLASSIFIED_SOURCES = {"uncategorized", "suggested_project_name"}
+        refresh_boundary = _pathless_file_index_refresh_boundary(
+            activity_dict,
+            resource,
+            result,
+        )
+        folder_index_maintenance_service.note_unresolved_file_miss(
+            refresh_boundary
+        )
+        result[_DEFER_REASON_FIELD] = _FOLDER_INDEX_DEFER_REASON
+    return result, changed
 
 
 def sync_persisted_open_activity_project(activity_id: int) -> dict:
@@ -234,12 +366,70 @@ def sync_persisted_open_activity_project(activity_id: int) -> dict:
             "SELECT source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
             (int(activity_id),),
         ).fetchone()
-        if existing is not None and int(existing["is_manual"] or 0):
-            return _assignment_dict(conn, activity_id)
-        source = str(existing["source"] or "") if existing is not None else ""
-        if source and source not in _OPEN_ROW_UNCLASSIFIED_SOURCES:
+        if not is_assignment_unresolved(existing):
             return _assignment_dict(conn, activity_id)
     return assign_project_for_activity(activity_id)
+
+
+def sync_persisted_open_activity_from_current_folder_index(activity_id: int) -> dict:
+    """Use the current index snapshot only for an open auto-unclassified row.
+
+    Historic inference deliberately honors ``folder_rule_index_state.valid_from``.
+    This narrow convergence path is different: the activity is still open when a
+    freshly rebuilt index publishes a file that may have been created after the
+    previous snapshot. It may therefore consult the current generation without
+    weakening historical backfill boundaries.
+    """
+
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
+        conn = uow.connection
+        activity = conn.execute(
+            "SELECT * FROM activity_log WHERE id = ?",
+            (int(activity_id),),
+        ).fetchone()
+        if activity is None:
+            return {}
+        if (
+            int(activity["is_hidden"] or 0)
+            or int(activity["is_deleted"] or 0)
+            or activity["end_time"] is not None
+            or str(activity["status"] or "") != STATUS_NORMAL
+        ):
+            return _assignment_dict(conn, activity_id)
+
+        existing = conn.execute(
+            "SELECT source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
+            (int(activity_id),),
+        ).fetchone()
+        if not is_assignment_unresolved(existing):
+            return _assignment_dict(conn, activity_id)
+
+        resource = _resource_for_activity(conn, activity_id)
+        path_hint = str(resource.get("path_hint") or "").strip()
+        display_name = str(resource.get("display_name") or "").strip()
+        if path_hint or not bool(resource.get("is_anchor")) or not display_name:
+            return _assignment_dict(conn, activity_id)
+
+        rule = folder_index_query_service.find_matching_folder_rule_for_file_name(
+            display_name,
+            None,
+            conn=conn,
+        )
+        if not rule:
+            return _assignment_dict(conn, activity_id)
+
+        changed = assignment_command_service.upsert_assignment(
+            conn,
+            activity_id=int(activity_id),
+            project_id=int(rule["project_id"]),
+            source="folder_rule",
+            confidence=85,
+            source_rule_type="folder",
+            source_rule_id=int(rule["id"]),
+        )
+        if changed:
+            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
+        return _assignment_dict(conn, activity_id)
 
 
 def _resource_for_activity(conn, activity_id: int) -> dict:
@@ -321,6 +511,7 @@ def _infer_project_resource_first(
     resource: dict,
     *,
     exclude_rule: tuple[str, int] | None = None,
+    use_current_filename_index: bool = False,
 ) -> ProjectAssignmentDecision:
     path_hint = str(resource.get("path_hint") or "").strip()
     is_anchor = bool(resource.get("is_anchor"))
@@ -353,9 +544,14 @@ def _infer_project_resource_first(
                 )
 
     if not path_hint and is_anchor and display_name:
+        activity_start_time = (
+            None
+            if use_current_filename_index
+            else str(activity.get("start_time") or "") or None
+        )
         rule = folder_index_query_service.find_matching_folder_rule_for_file_name(
             display_name,
-            str(activity.get("start_time") or "") or None,
+            activity_start_time,
             conn=conn,
         )
         if rule and exclude_rule != ("folder", int(rule["id"])):
@@ -532,5 +728,7 @@ __all__ = [
     "get_assignment_for_activity",
     "invalidate_keyword_rule_cache",
     "keyword_pattern_matches",
+    "reinfer_after_resource_upgrade_in_transaction",
+    "sync_persisted_open_activity_from_current_folder_index",
     "sync_persisted_open_activity_project",
 ]

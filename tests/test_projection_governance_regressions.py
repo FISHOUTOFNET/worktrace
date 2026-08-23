@@ -48,6 +48,7 @@ def test_committed_edit_survives_project_presentation_changes(temp_db):
         str(source["projection_revision"]),
         "durable-edit-before-rename",
         project_id=None,
+        duration_touched=False,
         adjusted_duration_seconds=None,
         note="persisted note",
     )

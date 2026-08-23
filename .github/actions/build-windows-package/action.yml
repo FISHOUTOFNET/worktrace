@@ -1,0 +1,115 @@
+name: Build Windows package
+description: Build and verify versioned 有迹 Windows executable and installer artifacts.
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.11.9"
+        cache: pip
+        cache-dependency-path: |
+          requirements.txt
+          requirements-dev.txt
+          constraints-release.txt
+
+    - name: Install pinned release dependencies
+      shell: pwsh
+      run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt -c constraints-release.txt
+
+    - name: Resolve application version
+      shell: pwsh
+      run: |
+        $version = (python -c 'from worktrace.version import __version__; print(__version__)').Trim()
+        if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+          throw "Invalid application version: $version"
+        }
+        "TRACE_VERSION=$version" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding UTF8
+        "trace_version=$version" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+        Write-Host "trace_version=$version"
+
+    - name: Record pinned release runtime
+      shell: pwsh
+      run: |
+        $pythonVersion = python -c 'import platform; print(platform.python_version())'
+        $pywebviewVersion = python -c 'from importlib.metadata import version; print(version("pywebview"))'
+        $pyinstallerVersion = python -c 'from importlib.metadata import version; print(version("pyinstaller"))'
+        $pillowVersion = python -c 'from importlib.metadata import version; print(version("pillow"))'
+        "python_version=$pythonVersion" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+        "pywebview_version=$pywebviewVersion" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+        "pyinstaller_version=$pyinstallerVersion" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+        "pillow_version=$pillowVersion" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+
+    - name: Prepare pinned Inno Setup compiler
+      shell: pwsh
+      run: |
+        $toolRoot = Join-Path $env:RUNNER_TEMP "inno-setup-6.7.3"
+        New-Item -ItemType Directory -Force -Path $toolRoot | Out-Null
+        $installer = Join-Path $toolRoot "innosetup-6.7.3.exe"
+        Invoke-WebRequest `
+          -Uri "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe" `
+          -OutFile $installer
+        $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash
+        $expectedHash = "9C73C3BAE7ED48D44112A0F48E66742C00090BDB5BEF71D9D3C056C66E97B732"
+        if ($actualHash -ne $expectedHash) {
+          throw "Pinned Inno Setup installer hash mismatch"
+        }
+        $installDir = Join-Path $toolRoot "installed"
+        $bootstrap = Start-Process `
+          -FilePath $installer `
+          -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/CURRENTUSER",
+            "/SP-",
+            "/DIR=`"$installDir`""
+          ) `
+          -WindowStyle Hidden `
+          -Wait `
+          -PassThru
+        if ($bootstrap.ExitCode -ne 0) {
+          throw "Pinned Inno Setup installer exited with code $($bootstrap.ExitCode)"
+        }
+        $iscc = Join-Path $installDir "ISCC.exe"
+        if (-not (Test-Path -LiteralPath $iscc)) {
+          throw "Pinned Inno Setup compiler was not installed"
+        }
+        "ISCC_PATH=$iscc" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding UTF8
+
+    - name: Build canonical Windows release package
+      shell: pwsh
+      run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_release.ps1 -ISCCPath "$env:ISCC_PATH"
+
+    - name: Verify release artifacts
+      shell: pwsh
+      run: |
+        $expectedNames = @(
+          "Trace-$env:TRACE_VERSION.exe",
+          "Trace-Setup-$env:TRACE_VERSION.exe"
+        )
+        $releaseFiles = @(
+          Get-ChildItem -LiteralPath "dist" -File -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.Name -match '^(?:Trace|WorkTrace)(?:-Setup)?(?:-\d+\.\d+\.\d+)?\.exe$'
+            }
+        )
+        $releaseNames = @($releaseFiles | ForEach-Object { $_.Name })
+        $missingNames = @($expectedNames | Where-Object { $_ -notin $releaseNames })
+        $unexpectedNames = @($releaseNames | Where-Object { $_ -notin $expectedNames })
+
+        if ($missingNames.Count -gt 0) {
+          throw "Missing canonical release artifacts: $($missingNames -join ', ')"
+        }
+        if ($unexpectedNames.Count -gt 0) {
+          throw "Unexpected release executable artifacts: $($unexpectedNames -join ', ')"
+        }
+
+        $stagingRoot = "build\release-staging"
+        if (Test-Path -LiteralPath $stagingRoot) {
+          $stagingResidue = @(Get-ChildItem -LiteralPath $stagingRoot -Force -ErrorAction SilentlyContinue)
+          if ($stagingResidue.Count -gt 0) {
+            throw "Release staging residue remained after the canonical build"
+          }
+        }

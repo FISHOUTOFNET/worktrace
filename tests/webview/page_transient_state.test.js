@@ -199,7 +199,7 @@ test("page switch resets only the page actually being left", () => {
     resetStatisticsTransientUi: () => calls.push("statistics"),
     resetSettingsTransientUi: () => calls.push("settings"),
   });
-  h.load("init.js");
+  h.load("init_fd_work_v5.js");
   h.element("app-toast").textContent = "keep toast";
   h.element("global-alert").textContent = "keep alert";
   h.App.switchPage("rules");
@@ -208,6 +208,48 @@ test("page switch resets only the page actually being left", () => {
   assert.deepEqual(calls, ["rules"]);
   assert.equal(h.element("app-toast").textContent, "keep toast");
   assert.equal(h.element("global-alert").textContent, "keep alert");
+});
+
+test("client generation reset delegates transient ownership to fixed modules", () => {
+  const h = createHarness();
+  const calls = [];
+  for (const name of ["overview", "timeline", "statistics", "rules", "settings", "fdWork"]) {
+    h.App[name] = { resetGeneration: () => calls.push(name) };
+  }
+  h.App.requestCoordinator = { bumpDataEpoch: () => calls.push("runtime") };
+  h.load("init_fd_work_v5.js");
+
+  h.App.resetClientGeneration("replacement");
+
+  assert.deepEqual(calls, [
+    "runtime", "overview", "timeline", "statistics", "rules", "settings", "fdWork",
+  ]);
+  assert.equal(h.App.lastClientGenerationResetReason, "replacement");
+});
+
+test("FD Work generation reset discards the previous editor binding state", () => {
+  const h = createHarness();
+  h.App.safeText = (value, fallback) => value === undefined || value === null
+    ? fallback : String(value);
+  h.load("fd_work_v5.js");
+  h.App.receiveFDWorkStatus({
+    supported: true,
+    enabled: true,
+    session_state: "ready",
+    operation: "none",
+    ready: true,
+    login_required: false,
+    error_code: null,
+  });
+  h.App.projectIdentity.prepareEditor({ name: "CASE A", fd_work_bound: true });
+  h.App.projectIdentity.updateControls(false);
+  assert.equal(h.element("rules-panel-fd-work-clear").hidden, false);
+
+  h.App.fdWork.resetGeneration();
+  h.App.projectIdentity.updateControls(false);
+
+  assert.equal(h.element("rules-panel-fd-work-clear").hidden, true);
+  assert.equal(h.element("rules-panel-fd-work-selected-label").value, "");
 });
 
 test("rules panel presentation, rule tabs, folder picker, and Escape share one lifecycle", async () => {
@@ -231,8 +273,9 @@ test("rules panel presentation, rule tabs, folder picker, and Escape share one l
     createProjectFolderRule: () => Promise.resolve({ ok: true, rule: { id: 1 } }),
     createProjectKeywordRule: () => Promise.resolve({ ok: true, rule: { id: 2 } }),
   };
+  h.load("fd_work_v5.js");
   h.load("ui_components.js");
-  h.load("rules_create_panel.js");
+  h.load("rules_create_panel_v5.js");
   App.initRulesPanelEvents();
 
   App.openRulesPanel("project", {});
@@ -281,8 +324,9 @@ test("stale project completion refreshes data but cannot overwrite a newer rules
     createProjectForRules: () => pending.promise,
     updateProjectForRules: () => pending.promise,
   };
+  h.load("fd_work_v5.js");
   h.load("ui_components.js");
-  h.load("rules_create_panel.js");
+  h.load("rules_create_panel_v5.js");
 
   App.openRulesPanel("project", {});
   h.element("rules-panel-project-name").value = "Old request";
@@ -310,8 +354,9 @@ test("project create and edit keep distinct busy and success outcomes", async ()
   };
   edit.App.loadProjectRules = () => Promise.resolve();
   edit.App.bridge = { updateProjectForRules: () => editPending.promise };
+  edit.load("fd_work_v5.js");
   edit.load("ui_components.js");
-  edit.load("rules_create_panel.js");
+  edit.load("rules_create_panel_v5.js");
   edit.App.showToast = (message) => editToasts.push(message);
   edit.App.openRulesPanel("project", {
     project: { id: 7, name: "Alpha", description: "", language: "中文" },
@@ -337,8 +382,9 @@ test("project create and edit keep distinct busy and success outcomes", async ()
     return Promise.resolve();
   };
   create.App.bridge = { createProjectForRules: () => createPending.promise };
+  create.load("fd_work_v5.js");
   create.load("ui_components.js");
-  create.load("rules_create_panel.js");
+  create.load("rules_create_panel_v5.js");
   create.App.openRulesPanel("project", {});
   create.element("rules-panel-project-name").value = "New project";
   create.App.savePanelProject();
@@ -351,7 +397,7 @@ test("project create and edit keep distinct busy and success outcomes", async ()
   assert.equal(create.element("rules-panel-target-project").value, "9");
   assert.equal(
     create.element("rules-panel-project-context").textContent,
-    "项目已新增：“New project”。请继续添加自动归类规则。"
+    "项目已新增"
   );
   assert.equal(create.element("rules-panel-project-context").classList.contains("is-success"), true);
 });
@@ -366,8 +412,9 @@ test("folder picker cancellation preserves the path and failure uses the panel e
     { ok: false, error: "internal detail must not render" },
   ];
   h.App.bridge = { chooseProjectRuleFolder: () => Promise.resolve(results.shift()) };
+  h.load("fd_work_v5.js");
   h.load("ui_components.js");
-  h.load("rules_create_panel.js");
+  h.load("rules_create_panel_v5.js");
   h.App.openRulesPanel("rule", { projectId: 7 });
   h.element("rules-panel-folder-path").value = "D:\\Keep";
 

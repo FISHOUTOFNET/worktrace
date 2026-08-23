@@ -9,10 +9,10 @@ Covers ``worktrace.api.statistics_api.get_statistics_export_summary`` and
 - empty range returns zero summary;
 - hidden / deleted activities are excluded;
 - in-progress activities are excluded (no live projection);
-- by_project / by_app / by_status group correctly;
+- by_project / by_file / by_app / by_status group correctly;
 - total_duration_seconds / activity_count are correct;
 - no raw DB rows / window_title / file_path_hint / full_path / clipboard /
-  note are returned;
+  note are returned; file display names are allowed by the file view;
 - no DB write occurs (schema unchanged, no INSERT/UPDATE/DELETE);
 - export_preview reports ``export_actions_enabled = False`` and the
   documented ``available_formats`` list.
@@ -92,7 +92,6 @@ def _seed_closed_activity(
 
 
 
-
 def test_service_summary_valid_range_returns_aggregated_data(temp_db):
     pid = project_service.create_project("Client")
     _seed_closed_activity(
@@ -112,6 +111,7 @@ def test_service_summary_valid_range_returns_aggregated_data(temp_db):
         end="10:15:00",
         day="2026-06-25",
         project_id=pid,
+        file_path_hint="C:\\Users\\secret\\Report.xlsx",
     )
     summary = statistics_service.get_statistics_export_summary("2026-06-25", "2026-06-25")
     assert summary["date_from"] == "2026-06-25"
@@ -120,6 +120,9 @@ def test_service_summary_valid_range_returns_aggregated_data(temp_db):
     assert summary["activity_count"] == 2
     assert summary["project_count"] == 1
     assert summary["app_count"] == 2
+    assert {row["display_name"] for row in summary["by_file"]} == {
+        "A1.docx", "Report.xlsx"
+    }
     _assert_no_sensitive_keys(summary)
 
 
@@ -261,6 +264,7 @@ def test_service_summary_empty_range_returns_zero(temp_db):
     assert summary["project_count"] == 0
     assert summary["app_count"] == 0
     assert summary["by_project"] == []
+    assert summary["by_file"] == []
     assert summary["by_app"] == []
     assert summary["by_status"] == []
     _assert_no_sensitive_keys(summary)
@@ -326,7 +330,7 @@ def test_service_summary_export_preview_read_only(temp_db):
 
 
 def test_service_summary_no_raw_db_rows(temp_db):
-    """The summary must not contain raw DB column names or row dicts."""
+    """The summary may expose a safe filename, but never its path or raw row."""
     _seed_closed_activity(
         app="Word", resource="Secret.docx", start="09:00:00", end="09:30:00",
         day="2026-06-25", note="top secret", file_path_hint="C:\\secret\\Secret.docx",
@@ -340,9 +344,10 @@ def test_service_summary_no_raw_db_rows(temp_db):
     # Note content must never be surfaced. The display-safe payload may
     # contain the key "note" only in error, so check the actual secret text.
     assert "top secret" not in payload_str.lower()
-    # file_path_hint value must never be surfaced.
+    # file_path_hint value and stable raw identity must never be surfaced.
     assert "c:\\\\secret" not in payload_str.lower()
-    assert "secret.docx" not in payload_str.lower()
+    assert [row["display_name"] for row in summary["by_file"]] == ["Secret.docx"]
+    assert all("secret" not in row["key"].lower() for row in summary["by_file"])
 
 
 def test_service_summary_multi_day_range(temp_db):
@@ -359,7 +364,6 @@ def test_service_summary_multi_day_range(temp_db):
     assert summary["activity_count"] == 2
     assert summary["total_duration_seconds"] == 2700
     _assert_no_sensitive_keys(summary)
-
 
 
 
@@ -414,7 +418,6 @@ def test_service_summary_max_allowed_range_succeeds(temp_db):
 
 
 
-
 def test_service_summary_does_not_write_db(temp_db):
     """The summary must not INSERT / UPDATE / DELETE any row. We verify by
     recording the row counts before and after the call."""
@@ -448,7 +451,6 @@ def test_service_summary_does_not_update_updated_at(temp_db):
             "SELECT updated_at FROM activity_log WHERE id = ?", (aid,)
         ).fetchone()["updated_at"]
     assert after == before
-
 
 
 

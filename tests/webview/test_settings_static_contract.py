@@ -36,7 +36,9 @@ SETTINGS_BRIDGE_METHODS = {
     "previewEncryptedBackupManifest",
     "recoverDatabaseMaintenance",
     "setClipboardCaptureEnabled",
+    "setFDWorkEnabled",
     "setLaunchAtLogin",
+    "showFDWorkLogin",
 }
 
 
@@ -57,12 +59,12 @@ def _app_function_is_exposed(source: str, name: str) -> bool:
 
 
 def test_settings_page_resources_and_controls_are_complete() -> None:
-    index = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    index = (WEBVIEW_UI_DIR / "index_fd_work_v5.html").read_text(encoding="utf-8")
     section = html_section_by_id(index, "page-settings")
     assert (WEBVIEW_UI_DIR / "js" / "settings.js").is_file()
-    assert 'src="js/settings.js"' in index
+    assert re.search(r'src="js/settings\.js\?v=[0-9a-f]+"', index)
     assert "设置与隐私" in section
-    assert "管理本地数据、采集和备份" in section
+    assert "管理本地数据、采集和备份" not in section
     for category in ("常规", "隐私", "数据与备份", "高级"):
         assert category in section
     assert 'data-settings-section="collection"' not in section
@@ -76,6 +78,9 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
         "settings-clipboard-toggle-status",
         "settings-launch-at-login-toggle",
         "settings-launch-at-login-toggle-status",
+        "settings-fd-work-toggle",
+        "settings-fd-work-toggle-status",
+        "settings-fd-work-reconnect",
         "settings-backup-passphrase",
         "settings-backup-passphrase-confirm",
         "settings-backup-export-btn",
@@ -116,7 +121,7 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
 
 
 def test_settings_toggle_layout_and_copy_contract() -> None:
-    index = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    index = (WEBVIEW_UI_DIR / "index_fd_work_v5.html").read_text(encoding="utf-8")
     styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     source = _settings_source()
 
@@ -126,6 +131,7 @@ def test_settings_toggle_layout_and_copy_contract() -> None:
             "settings-launch-at-login-toggle",
         ),
         ("settings-clipboard-toggle-status", "settings-clipboard-toggle"),
+        ("settings-fd-work-toggle-status", "settings-fd-work-toggle"),
     ):
         row = re.search(
             r'<label[^>]*for="' + re.escape(checkbox_id) + r'"[^>]*>(.*?)</label>',
@@ -218,8 +224,6 @@ def test_settings_operation_state_has_one_cross_operation_guard() -> None:
     ):
         assert "anySettingsOperationInProgress()" in func_body(source, operation)
 
-    # Recovery must participate in the same unified mutex: it sets the flag
-    # at start and releases it through a single path on success/failure.
     recovery = func_body(source, "recoverDatabaseMaintenance")
     assert "App.recoveryInProgress = true" in recovery
     assert "setSettingsControlsDisabled(anySettingsOperationInProgress())" in recovery
@@ -228,7 +232,9 @@ def test_settings_operation_state_has_one_cross_operation_guard() -> None:
 def test_settings_loading_and_clipboard_controls_have_separate_semantics() -> None:
     source = _settings_source()
     load_body = func_body(source, "loadSettingsPrivacyStatus")
-    assert "App.settingsLoading" in load_body
+    assert "var showLoading" in load_body
+    assert "if (showLoading) setSettingsLoading(true)" in load_body
+    assert "App.settingsLoadPromise" in load_body
     assert "App.settingsRequestToken" in load_body
     assert "App.bridge.getSettingsPrivacyStatus()" in load_body
     assert "renderSettingsStatus" in load_body
@@ -355,14 +361,14 @@ def test_destructive_operations_require_explicit_confirmation_literals() -> None
 
 
 def test_credentials_use_compact_rows_and_momentary_reveal_controls() -> None:
-    index = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    index = (WEBVIEW_UI_DIR / "index_fd_work_v5.html").read_text(encoding="utf-8")
     section = index[
         index.index('id="settings-backup-card"') :
         index.index('id="settings-recovery-card"')
     ]
     styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     source = _settings_source()
-    init = read_js("init.js")
+    init = read_js("init_fd_work_v5.js")
 
     assert section.count('class="credential-row"') == 3
     assert section.count('class="password-reveal-button"') == 3
@@ -419,24 +425,17 @@ def test_first_run_notice_is_fail_closed_and_mode_safe() -> None:
     assert 'mode !== "view"' in render
     assert ".hidden" in render
     assert "textContent" in render
-    # The retry button must be hidden in normal gate/view modes.
     assert "first-run-notice-retry-btn" in render
 
     blocking = func_body(source, "showFirstRunNoticeBlockingError")
     assert 'textContent = ""' in blocking
     assert "disabled = true" in blocking
     assert "hidden = true" in blocking
-    # On load failure the retry button must be visible and enabled so the
-    # user can recover without restarting or reinstalling.
     assert "first-run-notice-retry-btn" in blocking
 
     load = func_body(source, "loadFirstRunNotice")
     assert "App.bridge.getFirstRunNotice()" in load
     assert "showFirstRunNoticeBlockingError" in load
-    # The privacy gate is now driven by an explicit state machine. The
-    # ``acceptance_required`` state must set ``firstRunNoticeRequired`` via
-    # ``setPrivacyGateState`` so that fail-closed semantics remain while the
-    # notice is loaded but unaccepted.
     assert 'setPrivacyGateState("acceptance_required")' in load
 
     gate = func_body(source, "setPrivacyGateState")
@@ -450,14 +449,12 @@ def test_first_run_notice_is_fail_closed_and_mode_safe() -> None:
     accept = func_body(source, "acceptFirstRunNotice")
     assert "App.bridge.acceptFirstRunNotice()" in accept
     assert "App.firstRunNoticeAcceptInProgress" in accept
-    # The accept flow must continue through the single idempotent startup
-    # entry owned by init.js, not a second refreshAll path.
     assert "App.continueStartupAfterPrivacyGate" in accept
     assert "loadSettingsPrivacyStatus()" in accept
 
 
 def test_settings_buttons_are_bound_to_named_capabilities() -> None:
-    body = func_body(read_js("init.js"), "initButtons")
+    body = func_body(read_js("init_fd_work_v5.js"), "initButtons")
     bindings = (
         ("settings-clipboard-toggle", "App.handleCaptureToggleChange"),
         ("settings-launch-at-login-toggle", "App.handleLaunchAtLoginToggleChange"),

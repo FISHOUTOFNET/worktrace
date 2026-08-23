@@ -9,19 +9,30 @@ notes are subordinate to this document and to
 
 ```text
 worktrace.webview_main
-  -> DesktopShellController / WindowsTrayHost
   -> AppRuntime
   -> ApplicationServices
-  -> WebViewBridge
+  -> authorized background: DeferredUIGate / WindowsTrayHost
+  -> first open or foreground: DesktopShellController / WebViewBridge
   -> explicit bridge-facing APIs and services
 ```
 
 `webview_main` resolves paths, configures logging, creates `AppRuntime`, builds
-`ApplicationServices`, exposes the bridge and guarantees runtime shutdown.
+`ApplicationServices` exactly once, exposes the bridge when a UI exists and
+guarantees runtime shutdown. An authorized, recovery-safe `--background` start
+starts the runtime before any WebView check/import/window creation, then lets the
+main thread wait on `DeferredUIGate`. Tray Open and named activation coalesce into
+one initial UI bootstrap; update/session/tray Exit also wakes a windowless process.
+The first UI reuses the same runtime and services object identities.
 `ApplicationServices` is a lightweight explicit composition object, not a DI
 framework. Production code must not add a global container, module-level runtime
 locator, `get_runtime()`/`set_runtime()`, string service lookup or dynamic
 registry.
+
+`PostPrivacyStartupCoordinator` is the single post-consent startup entry for the
+Collector and a fixed tuple of narrow `PostPrivacyParticipant` capabilities.
+The composition root supplies that tuple explicitly; there is no discovery or
+registry. Before authoritative consent, enabling an optional integration
+persists preference only and creates or navigates no helper window.
 
 Bridge code performs transport validation, stable error translation and explicit
 service calls only. It does not own business invariants, transactions, runtime
@@ -31,6 +42,7 @@ state or database facts.
 
 | Responsibility | Sole owner |
 | --- | --- |
+| Pre-window open/exit coalescing and initial UI claim | `DeferredUIGate` |
 | Window/tray visible-hidden-exiting state | `DesktopShellController` |
 | Notification-area icon lifetime | `WindowsTrayHost` |
 | Current-user login registration | `WindowsStartupRegistration` / HKCU Run |
@@ -43,12 +55,22 @@ state or database facts.
 | Atomic maintenance activity seal | `ActivityMaintenanceCommandService` |
 | Maintenance ordering/recovery | `RuntimeMaintenanceCoordinator` |
 | Backup use cases | `SecureBackupService` module |
-| Project lifecycle invariants | `project_service` |
+| Project identity lifecycle invariants | `project_service` |
+| Permanent project deletion orchestration | `project_deletion_command_service` |
 | Rule write invariants | canonical rule command/service layer |
 | Verified page read snapshot | `PageReadContext` |
 | Row runtime overlay | `ActivityRowOverlay` |
 | Exact live-time DTO | `activity_live_clock` |
 | Application composition | `ApplicationServices` |
+| External project identity use-case boundary | `ProjectIdentityIntegrationCapability` |
+| Post-commit external-state invalidation | `ApplicationDataLifecycle` fixed participant tuple |
+| FD Work plugin/privacy/token/binding policy | `FDWorkIntegrationService` |
+| Pre-UI FD Work late binding | `DeferredFDWorkInteractionCoordinator` |
+| FD Work interaction owner and operation lifetime | `FDWorkInteractionCoordinator` |
+| FD Work helper lifetime/page phase/window mutations | `FDWorkWindowController` |
+| FD Work URL/selectors/picker/fill DOM contract | `FDWorkPageAdapter` / adapter v5 |
+| FD Work helper callback surface | `FDWorkHelperBridge` |
+| Main-window FD Work callback serialization | `FDWorkMainWindowSink` |
 | Frontend exact clock validation/ticking | shared clock functions in `core.js` |
 | Accepted runtime-envelope state and refresh coordination | single store in `init.js` |
 
@@ -63,12 +85,15 @@ tracked by name in `WorkerHandle` mappings. Production code must not reintroduce
 `_index_thread`, `_history_thread`, `_inference_thread` or similar parallel
 members.
 
-The desktop shell is outside `AppRuntime`. A close request may become a hide
-transition only while the tray icon is available. Tray Open and named-Event
-activation call the idempotent shell show command. Tray Exit sets EXITING,
-removes the icon and destroys the WebView window; the existing composition-root
-`finally` remains the only caller of `AppRuntime.shutdown()`. The tray thread
-never calls Runtime, database or Collector APIs.
+The desktop shell is outside `AppRuntime`. Before the first background UI,
+`DeferredUIGate` owns only open/exit request state; tray and activation callbacks
+never construct UI themselves, so `webview.start()` remains on the main thread.
+After binding, a close request may become a hide transition only while the tray
+icon is available, and subsequent Open/activation calls use the idempotent shell
+show command. Tray Exit either wakes the headless wait or sets EXITING, removes
+the icon and destroys the WebView window. The composition-root `finally` remains
+the only caller of `AppRuntime.shutdown()`. The tray thread never calls Runtime,
+database or Collector APIs.
 
 A worker is READY only after the worker itself has completed required
 initialization, schema/database access and recovery/validation and reports ready
@@ -159,6 +184,15 @@ Project/rule invariants are enforced inside canonical service transactions and
 by current-schema constraints where concurrency requires it. APIs do not scan
 whole tables to recreate uniqueness or atomicity.
 
+Permanent project deletion is an application workflow, not a `project_service`
+God method. `project_deletion_command_service` owns one root `DomainUnitOfWork`
+and coordinates narrow in-transaction capabilities for project validation,
+active history-job guarding, assignment release, rule deletion and final project
+identity deletion. `project_service` does not query history-job or rule tables to
+perform that orchestration. The workflow remains one atomic `BEGIN IMMEDIATE`
+transaction, so decoupling must never split deletion into independently
+committed steps.
+
 Database replacement is independent from ordinary report/data generations.
 Caches and page-read handshakes include the replacement epoch so facts from an
 old database generation cannot overlay a new database.
@@ -216,12 +250,74 @@ and remains owned by installation metadata.
 Collector does not depend on backup service to learn maintenance state. Backup
 service depends on the maintenance coordinator, never the reverse.
 
+Optional plugin state is outside the main database and backup manifest. FD Work
+project bindings use a lazily-created, independently versioned SQLite sidecar at
+`plugins/fd_work/state.db`, injected by the composition root. Replacement and
+clear-local-data operations invalidate or remove these bindings fail-closed;
+ordinary backup export never includes them.
+
+Core project CRUD remains owned by `project_service`. Project Rules sees only the
+use-case-level `ProjectIdentityIntegrationCapability` and opaque external
+identity proof/binding results; it does not know selection nonce, navigation,
+adapter or picker concepts. The composition root injects the concrete integration
+with core CRUD callbacks, so dependencies are one-way from the integration to the
+application port. Shipping `fd_work_*` DTO names exist only at WebView transport
+compatibility boundaries. Settings and Backup trigger a fixed
+`ApplicationDataLifecycle` participant tuple after successful main-data commits;
+they do not import or instantiate an integration.
+
+FD Work case selection has one interaction owner. With the plugin disabled,
+Project Rules keeps the ordinary editable local project-name field and does not
+create or show the helper. With the plugin enabled, new projects use the FD Work
+native Ant Design Select through an explicit helper-window picker; WorkTrace
+renders only the read-only confirmed label and picker controls. It does not run
+cross-window autocomplete from focus, click or input events. A process-memory,
+one-use selection token is required before a new bound project can be saved.
+
+Session state (`disabled`, `deferred_by_privacy`, `idle`, `probing`,
+`login_required`, `ready`, `error`, `shutdown`) is separate from interaction
+ownership (`none`, `user_auth`, `user_picker`, `automation_fill`). Only one
+non-`none` owner exists. Picker and authentication are user-owned. Timeline
+fill/save remains `automation_fill`-owned through target editor preparation,
+exact field readback, the explicit Save click and verified save completion.
+Success requires positive post-click evidence: a new success notice, a
+reinitialized entry form or a closed editor with the unique create action
+available. Save-button loading that merely settles to idle proves only that a
+request stopped, not that it succeeded. A new error/validation signal or an
+otherwise unprovable post-click result fails closed; an ambiguous result is
+reported as `save_outcome_unknown`, the helper remains visible for user
+verification and no automatic retry is permitted. Helper close, navigation,
+disable and shutdown invalidate the current nonce/generation; a delayed close
+callback carrying an older navigation generation is ignored and cannot
+terminalize a newer operation. The helper exposes only `confirm_case_picker` and
+`cancel_case_picker`; it has no application service access and never creates
+bindings.
+
+Every helper `show`, `hide`, `restore`, `focus` and `destroy` mutation goes through
+the GUI dispatcher with window, navigation and operation guards before and after
+the mutation. No pywebview mutation occurs while the controller lock is held.
+Passive probes are hidden and side-effect free. Adapter v5's stable-shell check
+observes visibility, viewport, overlays and stable geometry only; it never focuses,
+clicks, types, blurs or sends Escape. Durable sidecar binding validity is
+independent of adapter version, so v4-created bindings remain valid under v5.
+
 ## Frontend and page boundaries
 
 Frontend scripts are local classic scripts. `core.js` owns the shared exact clock
 validator and ticker helpers. `init.js` owns accepted runtime envelope state and
 page refresh coordination. Page modules render backend DTOs and row-owned clocks
 only. They must not infer database business facts or search aliases.
+
+`window.WorkTraceApp` remains the public classic-script namespace, not a shared
+mutable-state owner. Timeline, Statistics, Rules, Settings, Overview and FD Work
+own their transient generation state and expose fixed `resetGeneration` methods.
+The central generation reset bumps the runtime generation, resets the runtime
+store, and invokes those static lifecycle hooks without reading page-private
+fields. FD Work owns picker request, selection-proof and binding-editor state;
+Project Rules calls only the narrow `projectIdentity` editor interface and binds
+narrow host callbacks for Rules-owned refresh work. FD Work must not read
+`rulesPanel*`, Rules busy/editing globals, `loadProjectRules` or
+`refreshRulesPanelWriteState` directly.
 
 Overview, Timeline, Details, Statistics and Export use the same canonical report
 facts. Natural live-second growth is DOM-local and does not trigger heavy page
