@@ -74,8 +74,8 @@ def migrate() -> None:
     text = add_import(read(name))
     text = replace_once(
         text,
-        'for (const file of ["timeline_request_state.js", "timeline.js"]) {',
-        'for (const file of ["timeline_request_state.js", ...TIMELINE_MODULES]) {',
+        'for (const file of ["fd_work_v5.js", "timeline_request_state.js", "timeline.js"]) {',
+        'for (const file of ["fd_work_v5.js", "timeline_request_state.js", ...TIMELINE_MODULES]) {',
         name=name,
     )
     write(name, text)
