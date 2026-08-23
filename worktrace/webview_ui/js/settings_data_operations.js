@@ -11,6 +11,7 @@
         var activeOperations = {};
         var blockingOperation = "";
         var operationSerial = 0;
+        var fdWorkReconnectErrorMessage = "";
 
         function operationNames() { return Object.keys(activeOperations); }
 
@@ -149,24 +150,41 @@
             });
         }
 
+        function showFDWorkReconnectError(message) {
+            fdWorkReconnectErrorMessage = String(message || "打开 FD Work 失败");
+            deps.presentation.showSettingsError(fdWorkReconnectErrorMessage);
+        }
+
         function reconnectFDWork() {
             if (!App.fdWork || typeof App.fdWork.ensureSession !== "function") {
-                deps.presentation.showSettingsError("打开 FD Work 失败");
+                showFDWorkReconnectError("打开 FD Work 失败");
                 return Promise.resolve(false);
             }
             return App.fdWork.ensureSession().then(function (result) {
                 if (!result || result.ok !== true) {
-                    deps.presentation.showSettingsError(
+                    showFDWorkReconnectError(
                         result && result.message || "打开 FD Work 失败"
                     );
                     return false;
                 }
+                fdWorkReconnectErrorMessage = "";
                 deps.presentation.clearSettingsError();
                 return true;
             }).catch(function () {
-                deps.presentation.showSettingsError("打开 FD Work 失败");
+                showFDWorkReconnectError("打开 FD Work 失败");
                 return false;
             });
+        }
+
+        function onFDWorkStatusChanged(status) {
+            if (!fdWorkReconnectErrorMessage || !status) return;
+            var settled = status.enabled !== true
+                || (status.session_state === "ready" && status.ready === true);
+            if (!settled) return;
+            if (typeof deps.presentation.clearSettingsErrorIf === "function") {
+                deps.presentation.clearSettingsErrorIf(fdWorkReconnectErrorMessage);
+            }
+            fdWorkReconnectErrorMessage = "";
         }
 
         function bind(id, eventName, handler) {
@@ -198,6 +216,7 @@
             hasBlockingOperation: function () { return !!blockingOperation; },
             isBusy: isBusy,
             isUnavailable: unavailable,
+            onFDWorkStatusChanged: onFDWorkStatusChanged,
             operationIs: operationIs,
             operationName: operationName,
             operationNames: operationNames,

@@ -90,8 +90,8 @@ function harness() {
   return { App, element };
 }
 
-function configureReadySession(App, element) {
-  const session = {
+function readySession(overrides = {}) {
+  return {
     row_kind: "project_session",
     projection_instance_key: "base:a",
     projection_revision: "rev-a",
@@ -108,17 +108,27 @@ function configureReadySession(App, element) {
     can_edit_project: true,
     can_edit_note: true,
     can_edit_duration: true,
+    ...overrides,
   };
+}
+
+function selectSession(App, element, session) {
   App.timelineEditorState.populate(session);
   App.currentSessions = [session];
   App.mutationState = "idle";
   App.fdWorkOpenPromise = null;
   const project = element("edit-project-select");
-  project.value = "17";
-  project.options = [{ textContent: "CASE-001" }];
+  project.value = String(session.project_id || 17);
+  project.options = [{ textContent: session.project_name || "CASE-001" }];
   project.selectedIndex = 0;
-  element("edit-note-text").value = "Narrative";
+  element("edit-note-text").value = session.session_note || "Narrative";
   element("edit-duration-input").value = "1.0";
+  App.updateFDWorkEntryButton();
+}
+
+function configureReadySession(App, element) {
+  const session = readySession();
+  selectSession(App, element, session);
   App.receiveFDWorkStatus({
     supported: true,
     enabled: true,
@@ -131,6 +141,7 @@ function configureReadySession(App, element) {
     operation_generation: 1,
     navigation_generation: 7,
   });
+  return session;
 }
 
 function terminalStatus(errorCode, generation) {
@@ -168,6 +179,78 @@ test("uncertain save outcome blocks blind retry and tells user to verify FD Work
 
   assert.match(element("fd-work-status").textContent, /结果未确认/);
   assert.match(element("fd-work-status").textContent, /不要重复填入/);
+  assert.equal(element("fd-work-entry-btn").disabled, true);
+});
+
+test("uncertain save outcome is scoped to the exact Timeline selection revision", () => {
+  const { App, element } = harness();
+  const sessionA = configureReadySession(App, element);
+  assert.equal(App.receiveFDWorkStatus(terminalStatus("save_outcome_unknown", 2)), true);
+  assert.equal(App.getFDWorkAvailability(sessionA).state, "error");
+
+  const sessionB = readySession({
+    projection_instance_key: "base:b",
+    projection_revision: "rev-b",
+    project_id: 18,
+    project_name: "CASE-002",
+  });
+  selectSession(App, element, sessionB);
+  assert.equal(App.getFDWorkAvailability(sessionB).state, "ready");
+  assert.equal(element("fd-work-entry-btn").disabled, false);
+
+  selectSession(App, element, sessionA);
+  assert.equal(App.getFDWorkAvailability(sessionA).state, "error");
+  assert.equal(element("fd-work-entry-btn").disabled, true);
+
+  const rebasedA = readySession({ projection_revision: "rev-a-2" });
+  selectSession(App, element, rebasedA);
+  assert.equal(App.getFDWorkAvailability(rebasedA).state, "ready");
+  assert.equal(element("fd-work-entry-btn").disabled, false);
+});
+
+test("recoverable session error keeps Timeline entry actionable", () => {
+  const { App, element } = harness();
+  const session = configureReadySession(App, element);
+
+  assert.equal(App.receiveFDWorkStatus({
+    supported: true,
+    enabled: true,
+    session_state: "error",
+    operation: "none",
+    interaction_owner: "none",
+    ready: false,
+    login_required: false,
+    error_code: "session_start_timeout",
+    operation_generation: 2,
+    navigation_generation: 8,
+  }), true);
+
+  const availability = App.getFDWorkAvailability(session);
+  assert.equal(availability.state, "ready");
+  assert.match(availability.reason, /重新连接/);
+  assert.equal(element("fd-work-entry-btn").disabled, false);
+});
+
+test("renderer unavailable remains a fatal Timeline session error", () => {
+  const { App, element } = harness();
+  const session = configureReadySession(App, element);
+
+  assert.equal(App.receiveFDWorkStatus({
+    supported: true,
+    enabled: true,
+    session_state: "error",
+    operation: "none",
+    interaction_owner: "none",
+    ready: false,
+    login_required: false,
+    error_code: "renderer_unavailable",
+    operation_generation: 2,
+    navigation_generation: 8,
+  }), true);
+
+  const availability = App.getFDWorkAvailability(session);
+  assert.equal(availability.state, "error");
+  assert.match(availability.reason, /WebView2/);
   assert.equal(element("fd-work-entry-btn").disabled, true);
 });
 

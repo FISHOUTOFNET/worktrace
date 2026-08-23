@@ -3,20 +3,12 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    function clearSettledFDWorkAuthOverride(status) {
-        if (!status || status.operation !== "none") return;
-        if (["ready", "idle", "error", "disabled", "shutdown"].indexOf(status.session_state) < 0) {
-            return;
-        }
-        var override = App.fdWorkStatusOverride;
-        var reason = String(override && override.reason || "");
-        if (/登录|连接 FD Work/.test(reason)) App.fdWorkStatusOverride = null;
-    }
-
     function syncFDWorkConsumers(status) {
-        clearSettledFDWorkAuthOverride(status || App.fdWorkStatus);
         if (App.settings && typeof App.settings.onFDWorkStatusChanged === "function") {
             App.settings.onFDWorkStatusChanged(status || App.fdWorkStatus || null);
+        }
+        if (App.timelineFDWork && typeof App.timelineFDWork.onStatusChanged === "function") {
+            App.timelineFDWork.onStatusChanged(status || App.fdWorkStatus || null);
         }
         if (typeof App.updateFDWorkEntryButton === "function") {
             App.updateFDWorkEntryButton();

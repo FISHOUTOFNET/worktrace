@@ -138,6 +138,58 @@
         return "尚未连接";
     };
 
+    App.fdWorkSessionPresentation = function (status) {
+        status = status || App.fdWorkStatus || {};
+        var supported = status.supported === true;
+        var enabled = status.enabled === true;
+        var sessionState = String(status.session_state || "");
+        var operation = String(status.operation || "none");
+        var errorCode = String(status.error_code || "");
+        var statusText = App.fdWorkStatusText(status);
+        var view = {
+            state: "blocked",
+            action: "none",
+            actionLabel: "",
+            canStartSession: false,
+            statusText: statusText
+        };
+
+        if (!supported) {
+            view.state = "unavailable";
+            view.statusText = "当前不可用";
+        } else if (!enabled || sessionState === "disabled") {
+            view.state = "disabled";
+        } else if (sessionState === "deferred_by_privacy") {
+            view.state = "blocked";
+        } else if (sessionState === "shutdown") {
+            view.state = "unavailable";
+        } else if (operation !== "none" || sessionState === "probing") {
+            view.state = "busy";
+        } else if (sessionState === "ready" && status.ready === true) {
+            view.state = "ready";
+        } else if (sessionState === "login_required" || status.login_required === true) {
+            view.state = "auth_required";
+            view.action = "login";
+            view.actionLabel = "登录 FD Work";
+            view.canStartSession = true;
+        } else if (sessionState === "idle") {
+            view.state = "connectable";
+            view.action = "connect";
+            view.actionLabel = "连接 FD Work";
+            view.canStartSession = true;
+        } else if (sessionState === "error") {
+            if (errorCode === "renderer_unavailable") {
+                view.state = "unavailable";
+            } else {
+                view.state = "retryable";
+                view.action = "reconnect";
+                view.actionLabel = "重新连接";
+                view.canStartSession = true;
+            }
+        }
+        return Object.freeze(view);
+    };
+
     function ensureSession() {
         if (!App.bridge || typeof App.bridge.showFDWorkLogin !== "function") {
             return Promise.resolve({

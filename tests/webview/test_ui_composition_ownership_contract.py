@@ -62,6 +62,18 @@ def test_timeline_owns_structural_pending_and_live_suppression():
     assert "App.timeline.onRuntimeTransition" in composition
 
 
+def test_fd_work_transient_state_stays_with_timeline_owner():
+    composition = source("ui_composition.js")
+    timeline_fd_work = source("timeline_fd_work.js")
+
+    assert "App.fdWorkStatusOverride" not in composition
+    assert "clearSettledFDWorkAuthOverride" not in composition
+    assert "/登录|连接 FD Work/" not in composition
+    assert "App.timelineFDWork.onStatusChanged" in composition
+    assert "fdWorkStatusOverrides" in timeline_fd_work
+    assert "onFDWorkStatusChanged" in timeline_fd_work
+
+
 def test_timeline_refresh_coordinator_forwards_refresh_options():
     init = source("init_fd_work_v5.js")
     timeline = source("timeline.js")
