@@ -62,6 +62,7 @@
             "timeline-total"
         );
     }
+    App.renderTimelineTotal = renderTimelineTotal;
 
     function timelineSessionOrder(left, right) {
         var byStart = String(right.start_time || "")
