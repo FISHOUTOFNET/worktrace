@@ -22,8 +22,8 @@ def _func_body(source: str, name: str) -> str:
 
 
 def test_timeline_time_points_use_minute_precision_with_separate_width_semantics():
-    timeline = _source("timeline.js")
-    body = _func_body(timeline, "formatTimelineStartTime")
+    timeline_presentation = _source("timeline_presentation.js")
+    body = _func_body(timeline_presentation, "formatTimelineStartTime")
     css = _resource("ui_components.css")
 
     assert "slice(11, 19)" in body
