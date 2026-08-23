@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
 
 function deferred() {
   let resolve;
@@ -66,7 +67,7 @@ function harness() {
     openFDWorkCasePicker: bridgeCall("open_fd_work_case_picker"),
   };
 
-  for (const file of ["fd_work_v5.js", "timeline.js", "ui_composition.js"]) {
+  for (const file of ["fd_work_v5.js", ...TIMELINE_MODULES, "ui_composition.js"]) {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", file), "utf8"),
       context,

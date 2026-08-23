@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
 
 function source(name) {
   return fs.readFileSync(
@@ -80,7 +81,7 @@ function harness() {
   };
 
   vm.runInContext(source("fd_work_v5.js"), context, { filename: "fd_work_v5.js" });
-  vm.runInContext(source("timeline.js"), context, { filename: "timeline.js" });
+  loadTimelineModules(context, __dirname);
 
   return {
     App,

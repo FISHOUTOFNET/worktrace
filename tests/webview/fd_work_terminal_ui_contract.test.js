@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
 
 function harness() {
   const elements = new Map();
@@ -78,7 +79,7 @@ function harness() {
   App.setLiveClockTarget = () => {};
   App.acceptLiveRuntimePayload = () => true;
 
-  for (const file of ["fd_work_v5.js", "timeline.js", "ui_composition.js"]) {
+  for (const file of ["fd_work_v5.js", ...TIMELINE_MODULES, "ui_composition.js"]) {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", file), "utf8"),
       context,

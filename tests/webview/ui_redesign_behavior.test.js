@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
 
 // End-to-end behavior tests for the UI redesign PR (spec section 11).
 // Drives production WebView JS modules in a vm context with stubbed
@@ -742,7 +743,7 @@ function timelineHarness() {
     getEditing: () => timelineProjects.slice(),
     getFilter: () => timelineProjects.slice(),
   });
-  for (const file of ["timeline_request_state.js", "timeline.js"]) loadJs(context, file);
+  for (const file of ["timeline_request_state.js", ...TIMELINE_MODULES]) loadJs(context, file);
   return { App, element, context };
 }
 

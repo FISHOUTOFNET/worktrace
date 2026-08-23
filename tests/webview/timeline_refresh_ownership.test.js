@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
 
 function harness() {
   let editing = false;
@@ -38,12 +39,7 @@ function harness() {
     clearTimeout,
   };
   vm.createContext(context);
-  vm.runInContext(
-    ["timeline_presentation.js", "timeline_transient_ui.js", "timeline_editor_state.js", "timeline_fd_work.js", "timeline.js"].map((name) => fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", name), "utf8")).join("
-"),
-    context,
-    { filename: "timeline.js" }
-  );
+  loadTimelineModules(context, __dirname);
   App.loadTimelineReport = () => {
     refreshes += 1;
     return refreshFailure ? Promise.reject(refreshFailure) : Promise.resolve();

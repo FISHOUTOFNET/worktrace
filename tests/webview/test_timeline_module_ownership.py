@@ -26,6 +26,7 @@ def test_timeline_owner_modules_are_narrow_and_explicit():
     editor = read("timeline_editor_state.js")
     fd_work = read("timeline_fd_work.js")
     assert "App.timelinePresentation = Object.freeze" in presentation
+    assert "App.renderTimelineTotal = renderTimelineTotal" in presentation
     assert "App.resetTimelineTransientUi = resetTimelineTransientUi" in transient
     assert "App.timelineEditorState = Object.freeze" in editor
     assert "App.resetTimelineFDWorkState" in fd_work

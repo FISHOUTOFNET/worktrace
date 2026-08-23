@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
 
 function flush() {
   return new Promise((resolve) => setImmediate(resolve));
@@ -443,7 +444,7 @@ test("page resetters clear only transient page UI and preserve authoritative sta
   timeline.element("timeline-details-pane").classList.add("drawer-open");
   timeline.element("timeline-drawer-backdrop").hidden = false;
   timeline.element("edit-status").textContent = "saved";
-  timeline.load("timeline.js");
+  for (const file of TIMELINE_MODULES) timeline.load(file);
   timeline.App.resetTimelineTransientUi();
   assert.equal(timeline.element("timeline-session-actions").hidden, true);
   assert.equal(timeline.element("timeline-details-pane").classList.contains("drawer-open"), false);

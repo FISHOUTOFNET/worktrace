@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
 
 function deferred() {
   let resolve;
@@ -64,7 +65,7 @@ function harness() {
     openFDWorkEntry: bridgeCall("open_fd_work_entry"),
     showFDWorkLogin: bridgeCall("show_fd_work_login"),
   };
-  for (const file of ["fd_work_v5.js", "timeline_request_state.js", "timeline.js"]) {
+  for (const file of ["fd_work_v5.js", "timeline_request_state.js", ...TIMELINE_MODULES]) {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", file), "utf8"),
       context,

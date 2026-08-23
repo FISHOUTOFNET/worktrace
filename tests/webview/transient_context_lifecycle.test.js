@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
 
 function deferred() {
   let resolve;
@@ -238,7 +239,7 @@ function prepareTimeline() {
       load: () => Promise.resolve({ editingProjects: [], filterProjects: [] }),
     },
   });
-  h.load("timeline.js");
+  for (const file of TIMELINE_MODULES) h.load(file);
   h.element("timeline-session-actions").hidden = true;
   h.element("timeline-advanced-toggle").setAttribute("aria-expanded", "false");
   return h;
