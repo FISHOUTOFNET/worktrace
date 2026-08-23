@@ -19,7 +19,7 @@ from .error_codes import public_fd_work_error
 
 class FDWorkIntegrationService\
 (_CoreIntegrationService):
-    """Expose cancellation without leaking coordinator nonces to the main UI."""
+    """Expose request-safe picker lifecycle without leaking coordinator nonces."""
 
     # Keep these use-case methods visible on the public class itself. Architecture
     # contracts intentionally inspect this boundary rather than implementation
@@ -35,6 +35,40 @@ class FDWorkIntegrationService\
 
     def clear_project_identity(self, project_id: int) -> dict[str, Any]:
         return super().clear_project_identity(project_id)
+
+    def open_case_picker(self, request_id: str) -> dict[str, Any]:
+        if type(request_id) is not str or not request_id or len(request_id) > 128:
+            return self._failure("invalid_input", str(request_id or ""))
+        with self._lock:
+            if not self._enabled_locked():
+                return self._failure_locked("fd_work_disabled", request_id)
+            if not self._privacy_authorized:
+                return self._failure_locked("deferred_by_privacy", request_id)
+            if self._active_picker_request_id is not None:
+                return self._failure_locked("fd_work_busy", request_id)
+            controller = self._require_enabled_controller_locked()
+            if controller is None:
+                return self._failure_locked("fd_work_disabled", request_id)
+            # Reserve before foregrounding the helper. The coordinator can publish
+            # a very fast terminal result before open_case_picker returns; that
+            # result must already have an authoritative request owner.
+            self._active_picker_request_id = request_id
+        try:
+            result = dict(controller.open_case_picker(request_id))
+        except Exception:
+            result = {"ok": False, "error": "window_unavailable"}
+        if result.get("ok") is not True:
+            with self._lock:
+                if self._active_picker_request_id == request_id:
+                    self._active_picker_request_id = None
+            return self._failure(
+                public_fd_work_error(result.get("error") or "window_unavailable"),
+                request_id,
+            )
+        # Do not assign the active id here: a synchronous terminal callback may
+        # already have consumed the reservation and issued the selection proof.
+        result["request_id"] = request_id
+        return self._with_capability_status(result)
 
     def cancel_case_picker(self, request_id: str) -> dict[str, Any]:
         if type(request_id) is not str or not request_id or len(request_id) > 128:
