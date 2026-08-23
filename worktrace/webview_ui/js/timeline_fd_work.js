@@ -243,12 +243,6 @@
         options = options || {};
         syncFDWorkFillTransactionFromStatus(activeFDWorkFillTransaction);
         var currentScope = currentFDWorkScope();
-        if (activeFDWorkFillTransaction
-            && activeFDWorkFillTransaction.state === "terminal"
-            && currentScope
-            && !sameFDWorkScope(activeFDWorkFillTransaction.scope, currentScope)) {
-            activeFDWorkFillTransaction = null;
-        }
         var scope = options.scope || (
             activeFDWorkFillTransaction && activeFDWorkFillTransaction.state === "pending"
                 ? activeFDWorkFillTransaction.scope
