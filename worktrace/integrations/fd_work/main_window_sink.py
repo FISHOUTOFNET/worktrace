@@ -13,8 +13,6 @@ from typing import Any, Mapping
 def _window_loaded(window: Any) -> bool:
     events = getattr(window, "events", None)
     if events is None:
-        # Non-pywebview test doubles and legacy adapters use the explicit ready
-        # gate only. Shipping pywebview windows always expose lifecycle events.
         return True
     loaded_event = getattr(events, "loaded", None)
     is_loaded = getattr(loaded_event, "is_set", None)
@@ -64,8 +62,6 @@ class FDWorkMainWindowSink:
         with self._lock:
             self._ready = False
             self._window = None
-            # Keep terminal picker payloads. A rebound main WebView can ACK them
-            # after it becomes ready; stale queued work is rejected by identity.
             self._queued_picker_requests.clear()
 
     def status_changed(self, status: Mapping[str, Any]) -> None:
@@ -75,9 +71,6 @@ class FDWorkMainWindowSink:
             + serialized
             + ")"
         )
-        # Coordinator terminal order is picker-result then status. If the first
-        # picker push hit a transient evaluate_js failure, this status provides a
-        # deterministic second opportunity without polling the backend.
         self._flush_pending_picker_results()
 
     def picker_result(self, result: Mapping[str, Any]) -> None:
@@ -93,9 +86,6 @@ class FDWorkMainWindowSink:
             self._deliver(script)
             return
         window, ready = self._current_window()
-        # A picker can only be initiated from the loaded main UI. Preserve the
-        # historical fail-soft behavior for impossible/pre-ready notifications,
-        # and make delivery durable only once that UI is actually available.
         if window is None or not ready or not _window_loaded(window):
             return
         with self._lock:
@@ -112,17 +102,10 @@ class FDWorkMainWindowSink:
 
     def _deliver(self, script: str) -> None:
         window, ready = self._current_window()
-        # pywebview's EdgeChromium evaluate_js waits for the WinForms UI thread.
-        # FD Work can emit navigation status while that thread is still creating
-        # windows, so never enter evaluate_js until the main WebView itself loaded.
         if window is None or not ready or not _window_loaded(window):
             return
         delivery_queue = self._delivery_queue
         if delivery_queue is not None:
-            # Keep one FIFO worker between FD Work lifecycle callbacks and
-            # evaluate_js. This lets the GUI callback return before JS delivery
-            # starts while preserving arrival order and avoiding one thread per
-            # status update.
             delivery_queue.put_nowait((window, script, None))
             return
         self._evaluate(window, script)
@@ -177,8 +160,6 @@ class FDWorkMainWindowSink:
                     with self._lock:
                         current_window = self._window
                         ready = self._ready
-                    # Revalidate at execution time. A queued notification must
-                    # never be delivered to a closed or rebound main window.
                     if (
                         current_window is not window
                         or not ready
@@ -202,10 +183,6 @@ class FDWorkMainWindowSink:
     @staticmethod
     def _evaluate(window: Any, script: str) -> bool:
         try:
-            # receiveFDWorkCasePickerResult returns true only when the active
-            # request accepted the terminal payload. Treat explicit false as a
-            # missing ACK. None remains success-compatible with simple test/legacy
-            # window doubles that do not execute JavaScript return expressions.
             return window.evaluate_js(script) is not False
         except Exception:
             return False

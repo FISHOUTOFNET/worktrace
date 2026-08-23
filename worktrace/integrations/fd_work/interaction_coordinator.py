@@ -6,6 +6,7 @@ from typing import Any
 
 from . import _interaction_coordinator_core as _core_module
 from ._interaction_coordinator_core import FDWorkInteractionCoordinator as _CoreCoordinator
+from ._page_adapter_core import FDWorkPageAdapter as _CorePageAdapter
 
 # Preserve the public module's historical monkeypatch seam. Both names point to
 # the same stdlib module object, so patching interaction_coordinator.time.time
@@ -52,10 +53,26 @@ class FDWorkInteractionCoordinator(_CoreCoordinator):
         window: Any,
         contract: dict[str, Any],
     ) -> dict[str, Any]:
+        if isinstance(self._page_adapter, _CorePageAdapter):
+            normal_contract = dict(contract)
+            normal_contract["deadline_ms"] = min(
+                750,
+                max(10, int(normal_contract.get("deadline_ms") or 750)),
+            )
+            try:
+                normal = dict(
+                    _CorePageAdapter.leave_case_picker(
+                        self._page_adapter,
+                        window,
+                        normal_contract,
+                    )
+                )
+            except Exception:
+                normal = {"ok": False, "error": "javascript_exception"}
+            if normal.get("ok") is True:
+                return normal
         reset = getattr(self._page_adapter, "reset_case_picker", None)
         if not callable(reset):
-            # Keep third-party/test adapters compatible; shipping FDWorkPageAdapter
-            # owns this boundary.
             return {"ok": True}
         last: dict[str, Any] = {"ok": False, "error": "javascript_exception"}
         for _attempt in range(2):
@@ -109,10 +126,6 @@ class FDWorkInteractionCoordinator(_CoreCoordinator):
             self._operation_navigation_generation = navigation_generation
             contract = self._operation_contract_locked(self._picker_timeout_seconds)
         try:
-            # The helper window is intentionally reused. Always clean WorkTrace's
-            # previous picker/fill artifacts before asking whether the existing
-            # FD Work editor is interactive; otherwise a stale disabled input can
-            # poison every later "更换案件" attempt until timeout.
             reset = self._reset_picker_preflight(window, contract)
             if reset.get("ok") is not True:
                 self._cancel_current_picker(
