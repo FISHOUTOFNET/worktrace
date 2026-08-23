@@ -28,8 +28,7 @@
       "build",
       "dist",
       "docs/history",
-      "docs/research",
-      ".github/workflows/_validation.yml"
+      "docs/research"
     ]
   },
   "thresholds": {

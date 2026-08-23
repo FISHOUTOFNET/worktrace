@@ -10,7 +10,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "fd_work" / "anonymous_work_shell.html"
 RUNNER = ROOT / "scripts" / "run_fd_work_edge_fixture.mjs"
-WORKFLOW = ROOT / ".github" / "workflows" / "_validation.yml"
+WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 
 def test_anonymous_fixture_preserves_minimum_real_ant_contract() -> None:

@@ -132,8 +132,8 @@ replacement error taxonomy and durable-restore-before-release ordering.
 
 ## Validation
 
-Only the permanent Standard CI workflow (`.github/workflows/ci.yml` and
-`_validation.yml`) is used. Business-test diagnostics are artifact-only: the
+Only the permanent Standard CI workflow (`.github/workflows/ci.yml`) is used.
+Business-test diagnostics are artifact-only: the
 frozen workflow uploads a structured `diagnostics.json` and JUnit XML on
 failure; job logs never contain failure lists, root-cause groups, tracebacks or
 raw test-log tails. The workflow is not modified for business-test failures.

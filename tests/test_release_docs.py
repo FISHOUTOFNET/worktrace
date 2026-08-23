@@ -24,7 +24,6 @@ MIGRATION_PATH = REPO_ROOT / "docs" / "ui-webview-migration.md"
 AI_CONTEXT_PATH = REPO_ROOT / "docs" / "ai-context-guide.md"
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 CI_PATH = WORKFLOW_DIR / "ci.yml"
-REUSABLE_VALIDATION_PATH = WORKFLOW_DIR / "_validation.yml"
 INSTALLER_VALIDATION_PATH = WORKFLOW_DIR / "installer-validation.yml"
 PACKAGE_ACTION_PATH = (
     REPO_ROOT / ".github" / "actions" / "build-windows-package" / "action.yml"
@@ -99,7 +98,6 @@ def test_release_validation_doc_and_workflows_exist():
     assert VALIDATION_PATH.is_file()
     for path in (
         CI_PATH,
-        REUSABLE_VALIDATION_PATH,
         INSTALLER_VALIDATION_PATH,
         PACKAGE_ACTION_PATH,
         INSTALLER_RUNTIME_SMOKE_PATH,
@@ -133,16 +131,14 @@ def test_release_validation_contains_required_baseline_items(phrase):
 
 def test_ci_layers_contain_required_release_smoke_steps():
     standard = _read_text(CI_PATH)
-    reusable = _read_text(REUSABLE_VALIDATION_PATH)
     package_action = _read_text(PACKAGE_ACTION_PATH)
     installer = _read_text(INSTALLER_VALIDATION_PATH)
     installer_runtime = _read_text(INSTALLER_RUNTIME_SMOKE_PATH)
 
     assert "pull_request:" in standard
     assert "push:" in standard
-    assert "./.github/workflows/_validation.yml" in standard
-    assert "run_node_tests: true" in standard
-    assert "run_build_smoke: ${{ github.event_name == 'pull_request' }}" in standard
+    assert "uses: ./.github/workflows/" not in standard
+    assert "if: github.event_name == 'pull_request'" in standard
 
     for phrase in (
         'python-version: "3.11.9"',
@@ -152,10 +148,10 @@ def test_ci_layers_contain_required_release_smoke_steps():
         "node --test tests/webview/*.test.js",
         "uses: ./.github/actions/build-windows-package",
         "actions/upload-artifact@v6",
-        "validation-diagnostics-${{ inputs.revision }}",
+        "validation-diagnostics-${{ github.event.pull_request.head.sha || github.sha }}",
         "retention-days: 3",
     ):
-        assert phrase in reusable, f"reusable validation missing phrase: {phrase}"
+        assert phrase in standard, f"standard validation missing phrase: {phrase}"
 
     for phrase in (
         'python-version: "3.11.9"',
@@ -184,7 +180,7 @@ def test_ci_layers_contain_required_release_smoke_steps():
     assert r"dist\Trace-Setup-$version.exe" in installer_runtime
 
     combined = "\n".join(
-        (standard, reusable, package_action, installer, installer_runtime)
+        (standard, package_action, installer, installer_runtime)
     )
     assert "3.12" not in combined
     assert "run_python312" not in combined

@@ -18,7 +18,7 @@ Pytest owns collection and marker validation. `pytest.ini` enables strict marker
 
 Standard CI must not install, upgrade, or uninstall the packaged application. Those lifecycle checks are intentionally isolated so ordinary product changes do not pay release-level runtime cost on every commit.
 
-The Python diagnostic artifact contract in `_validation.yml` remains the canonical failure-diagnostics path and must not be weakened when changing orchestration.
+The Python diagnostic artifact contract in `ci.yml` remains the canonical failure-diagnostics path and must not be weakened when changing orchestration.
 
 ## Installer validation
 
