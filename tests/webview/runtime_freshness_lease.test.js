@@ -4,73 +4,157 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-function runtime({ live = true, acceptedAt = Date.now(), revision = "live-1" } = {}) {
+const REPORT_DATE = "2026-08-24";
+
+function runtimeState(page, live, revision) {
   return {
-    acceptedAtEpochMs: acceptedAt,
-    structureRevision: "structure-1",
-    liveRevision: revision,
-    generations: {
-      report_structure: 1,
-      classification_catalog: 1,
-      settings: 1,
-    },
-    collector: { live_eligible: live },
-    liveClock: {
-      is_live: live,
-      display_span_id: live ? "span-1" : "",
-      stable_live_key_hash: live ? "key-1" : "",
+    ok: true,
+    runtime: {
+      schema_version: 2,
+      surface: page,
+      scope_report_date: REPORT_DATE,
+      live_report_date: REPORT_DATE,
+      snapshot: { id: revision, revision },
+      revisions: { structure: "structure-1", page: "page-1" },
+      collector: {
+        status: live ? "running" : "stopped",
+        paused: false,
+        display: live ? "记录中" : "未运行",
+        live_eligible: live,
+      },
+      clock: {
+        sampled_at_epoch_ms: 100000,
+        started_at_epoch_ms: 90000,
+        elapsed_seconds_at_sample: 10,
+        aggregate_base_seconds: 100,
+        duration_semantic: "aggregate_live",
+        is_live: live,
+        live_state: live ? "live" : "static",
+        display_span_id: live ? "span-1" : "",
+        stable_live_key_hash: live ? "key-1" : "",
+      },
+      current_activity: { active: live },
+      current_project: null,
+      runtime_phase: live ? "active" : "stopped",
+      workers: {},
+      generations: {
+        report_structure: 1,
+        classification_catalog: 1,
+        settings: 1,
+        privacy_catalog: 1,
+      },
+      database_replacement_epoch: 0,
+      error_codes: [],
+      runtime_consistent: true,
+      needs_full_refresh: false,
     },
   };
 }
 
-function harness() {
-  let acceptedRuntime = null;
-  let pageDirty = false;
+function harness(initialPage = "overview") {
+  let now = 100000;
   let renderCalls = 0;
-  let baseTickerCalls = 0;
   let statisticsTicks = 0;
+  let timelineTicks = 0;
+  const target = { clock: null };
 
-  const App = {
-    currentPage: "overview",
-    liveClockContractRefreshRequested: false,
-    liveRuntimeStore: {
-      get() { return acceptedRuntime; },
+  const capabilities = {
+    overview: {
+      hasLoadedData: () => true,
+      refreshEvidence: () => ({ page: "overview" }),
+      reportDate: () => REPORT_DATE,
+      refreshPolicy: {},
     },
-    acceptRefreshStateRuntime(state) {
-      if (state && state.runtime) acceptedRuntime = state.runtime;
-      return true;
+    timeline: {
+      hasLoadedData: () => true,
+      refreshEvidence: () => ({ page: "timeline" }),
+      reportDate: () => REPORT_DATE,
+      refreshPolicy: {},
+      applyLocalTick() {
+        timelineTicks += 1;
+        return false;
+      },
     },
-    acceptPagePayloadRuntime(payload) {
-      if (payload && payload.runtime) acceptedRuntime = payload.runtime;
-      return true;
-    },
-    applyLocalTicker() {
-      baseTickerCalls += 1;
-    },
-    renderLiveDurationTarget() {
-      renderCalls += 1;
-    },
-    getActiveLiveClock() {
-      return acceptedRuntime && acceptedRuntime.liveClock || null;
-    },
-    pageNeedsRefresh() {
-      return pageDirty;
-    },
-    statistics: Object.freeze({
+    statistics: {
+      hasLoadedData: () => true,
+      refreshEvidence: () => ({ page: "statistics" }),
+      reportDate: () => REPORT_DATE,
+      refreshPolicy: {},
       applyLocalTick() {
         statisticsTicks += 1;
-        return { ticked: true };
+        return false;
       },
-      onRuntimeTransition() {},
-    }),
+    },
+  };
+
+  const pageRoot = {
+    querySelectorAll() {
+      return target.clock ? [target] : [];
+    },
+  };
+
+  const App = {
+    currentPage: initialPage,
+    heartbeatTimer: null,
+    HEARTBEAT_INTERVAL_MS: 1000,
+    liveClockContractRefreshRequested: false,
+    pageLifecycle: {
+      names: Object.freeze(["overview", "timeline", "statistics"]),
+      capability(name) { return capabilities[name] || null; },
+      bindEvents() {},
+      onPageLeft() {},
+      resetGeneration() {},
+    },
+    requestCoordinator: {
+      beginLatest() { return {}; },
+      isCurrent() { return true; },
+      bumpDataEpoch() {},
+    },
+    privacyNotice: {
+      bindEvents() {},
+      loadGate() { return Promise.resolve(false); },
+    },
+    localTodayStr() { return REPORT_DATE; },
+    runtimeReportDateForPage() { return REPORT_DATE; },
+    validateLiveClock(value) {
+      return value && typeof value === "object" ? value : null;
+    },
+    recordLiveClockContractViolation() { App.liveClockContractViolation = {}; },
+    readLiveClockTarget(node) { return node.clock; },
+    liveTargetCompatibleWithRuntime() { return true; },
+    clearLiveClockTarget(node) { node.clock = null; },
+    renderLiveDurationTarget() { renderCalls += 1; },
+    clearError() {},
+    showError() {},
     showStatus() {},
+    showGlobalAlert() {},
+    clearGlobalAlert() {},
+    handleResult(value) { return value; },
+  };
+
+  const document = {
+    readyState: "loading",
+    addEventListener() {},
+    getElementById(id) {
+      return id === `page-${App.currentPage}` ? pageRoot : null;
+    },
+    querySelectorAll() { return []; },
+    querySelector() { return null; },
   };
 
   const context = {
-    window: { WorkTraceApp: App },
-    document: {},
+    window: {
+      WorkTraceApp: App,
+      pywebview: { api: {} },
+      addEventListener() {},
+      removeEventListener() {},
+      setTimeout,
+      clearTimeout,
+    },
+    document,
     console,
-    Date,
+    Promise,
+    Date: { now: () => now },
     Math,
     Number,
     String,
@@ -78,121 +162,122 @@ function harness() {
     Object,
     JSON,
     parseInt,
+    setInterval() { return {}; },
+    clearInterval() {},
+    setTimeout,
+    clearTimeout,
   };
+
   vm.createContext(context);
   vm.runInContext(
     fs.readFileSync(
-      path.join(__dirname, "../../worktrace/webview_ui/js/ui_composition.js"),
+      path.join(__dirname, "../../worktrace/webview_ui/js/init_fd_work_v5.js"),
       "utf8"
     ),
     context,
-    { filename: "ui_composition.js" }
+    { filename: "init_fd_work_v5.js" }
   );
 
   return {
     App: context.window.WorkTraceApp,
-    setRuntime(value) { acceptedRuntime = value; },
-    setPageDirty(value) { pageDirty = value === true; },
-    counts() { return { renderCalls, baseTickerCalls, statisticsTicks }; },
+    target,
+    acceptRefresh(live, revision) {
+      return App.acceptRefreshStateRuntime(runtimeState(App.currentPage, live, revision));
+    },
+    acceptPage(live, revision, reportDate = REPORT_DATE) {
+      const payload = runtimeState(App.currentPage, live, revision);
+      payload.runtime.scope_report_date = reportDate;
+      return App.acceptPagePayloadRuntime(payload, App.currentPage, reportDate);
+    },
+    advance(milliseconds) { now += milliseconds; },
+    counts() { return { renderCalls, statisticsTicks, timelineTicks }; },
   };
 }
 
-test("stale runtime lease freezes generic live projections until authoritative rebase", () => {
-  const { App, setRuntime, setPageDirty, counts } = harness();
-  const stale = runtime({ acceptedAt: Date.now() - 11000, revision: "live-old" });
-  setRuntime(stale);
+test("stale live runtime freezes generic clocks until an authoritative page model rebases them", () => {
+  const { App, target, acceptRefresh, acceptPage, advance, counts } = harness("overview");
 
+  assert.equal(acceptRefresh(true, "live-1"), true);
+  target.clock = App.liveRuntimeStore.get().liveClock;
   App.applyLocalTicker();
-  App.renderLiveDurationTarget({}, stale.liveClock, Date.now());
-
-  assert.equal(counts().baseTickerCalls, 1, "heartbeat owner must still run");
-  assert.equal(counts().renderCalls, 0, "stale runtime must not extrapolate");
-  assert.equal(App.getActiveLiveClock(), null);
-  assert.equal(App.isLiveRuntimeFresh(stale, Date.now()), false);
-
-  App.acceptRefreshStateRuntime({
-    runtime: runtime({ acceptedAt: Date.now(), revision: "live-recovered-1" }),
-  });
-  assert.equal(App.liveClockContractRefreshRequested, true);
-  App.renderLiveDurationTarget({}, {}, Date.now());
-  assert.equal(counts().renderCalls, 0, "first recovered heartbeat still needs page rebase");
-
-  setPageDirty(true);
-  App.acceptRefreshStateRuntime({
-    runtime: runtime({ acceptedAt: Date.now(), revision: "live-recovered-2" }),
-  });
-  App.renderLiveDurationTarget({}, {}, Date.now());
-  assert.equal(counts().renderCalls, 0, "failed or pending page refresh stays frozen");
-
-  setPageDirty(false);
-  App.acceptRefreshStateRuntime({
-    runtime: runtime({ acceptedAt: Date.now(), revision: "live-recovered-3" }),
-  });
-  App.renderLiveDurationTarget({}, {}, Date.now());
-  assert.equal(counts().renderCalls, 1, "clean authoritative page rebase resumes ticking");
-});
-
-test("authoritative page payload clears a pending runtime rebase immediately", () => {
-  const { App, setRuntime, counts } = harness();
-  setRuntime(runtime({ acceptedAt: Date.now() - 11000, revision: "live-old" }));
-  App.applyLocalTicker();
-
-  App.acceptRefreshStateRuntime({
-    runtime: runtime({ acceptedAt: Date.now(), revision: "live-recovered" }),
-  });
-  App.renderLiveDurationTarget({}, {}, Date.now());
-  assert.equal(counts().renderCalls, 0);
-
-  App.acceptPagePayloadRuntime({
-    runtime: runtime({ acceptedAt: Date.now(), revision: "page-authoritative" }),
-  });
-  App.renderLiveDurationTarget({}, {}, Date.now());
   assert.equal(counts().renderCalls, 1);
+  assert.ok(App.getActiveLiveClock());
+
+  advance(10001);
+  App.applyLocalTicker();
+  assert.equal(counts().renderCalls, 1, "expired runtime must freeze the last displayed value");
+  assert.equal(App.getActiveLiveClock(), null);
+
+  assert.equal(acceptRefresh(true, "live-2"), true);
+  assert.equal(App.liveClockContractRefreshRequested, true);
+  App.applyLocalTicker();
+  assert.equal(counts().renderCalls, 1, "refresh-state alone must not release old DOM clocks");
+
+  assert.equal(acceptPage(true, "page-live"), true);
+  target.clock = App.liveRuntimeStore.get().liveClock;
+  App.applyLocalTicker();
+  assert.equal(counts().renderCalls, 2, "authoritative page model resumes local projection");
+  assert.ok(App.getActiveLiveClock());
 });
 
-test("statistics local ticker obeys authoritative liveness and requires rebase on resume", () => {
-  const { App, setRuntime, setPageDirty, counts } = harness();
-  App.currentPage = "statistics";
-  setRuntime(runtime({ live: true, acceptedAt: Date.now(), revision: "live-1" }));
+test("failed page rebase remains fail-closed after bridge recovery", () => {
+  const { App, target, acceptRefresh, acceptPage, advance, counts } = harness("overview");
 
-  assert.deepEqual(App.statistics.applyLocalTick(), { ticked: true });
+  acceptRefresh(true, "live-1");
+  target.clock = App.liveRuntimeStore.get().liveClock;
+  advance(10001);
+  App.applyLocalTicker();
+  acceptRefresh(true, "live-2");
+
+  assert.equal(acceptPage(true, "wrong-date", "2026-08-23"), false);
+  App.applyLocalTicker();
+  assert.equal(counts().renderCalls, 0);
+  assert.equal(App.getActiveLiveClock(), null);
+
+  acceptRefresh(true, "live-3");
+  assert.equal(App.liveClockContractRefreshRequested, true);
+  App.applyLocalTicker();
+  assert.equal(counts().renderCalls, 0, "later heartbeat cannot bypass pending page rebase");
+});
+
+test("statistics freezes on stale or non-live runtime and requires page rebase before resuming", () => {
+  const { App, acceptRefresh, acceptPage, advance, counts } = harness("statistics");
+
+  acceptRefresh(true, "live-1");
+  App.applyLocalTicker();
   assert.equal(counts().statisticsTicks, 1);
 
-  App.acceptRefreshStateRuntime({
-    runtime: runtime({ live: false, acceptedAt: Date.now(), revision: "stopped" }),
-  });
-  assert.equal(App.statistics.applyLocalTick(), null);
-  assert.equal(counts().statisticsTicks, 1, "backend live_eligible=false must freeze old statistics target");
+  advance(10001);
+  App.applyLocalTicker();
+  assert.equal(counts().statisticsTicks, 1, "stale statistics snapshot must stop extrapolating");
 
-  App.acceptRefreshStateRuntime({
-    runtime: runtime({ live: true, acceptedAt: Date.now(), revision: "resumed-1" }),
-  });
-  assert.equal(App.liveClockContractRefreshRequested, true);
-  assert.equal(App.statistics.applyLocalTick(), null);
-  assert.equal(counts().statisticsTicks, 1, "resume cannot reuse pre-stop statistics target");
+  acceptRefresh(true, "live-2");
+  App.applyLocalTicker();
+  assert.equal(counts().statisticsTicks, 1, "fresh refresh-state still requires statistics page rebase");
 
-  setPageDirty(true);
-  App.acceptRefreshStateRuntime({
-    runtime: runtime({ live: true, acceptedAt: Date.now(), revision: "resumed-2" }),
-  });
-  assert.equal(App.statistics.applyLocalTick(), null);
-
-  setPageDirty(false);
-  App.acceptRefreshStateRuntime({
-    runtime: runtime({ live: true, acceptedAt: Date.now(), revision: "resumed-3" }),
-  });
-  assert.deepEqual(App.statistics.applyLocalTick(), { ticked: true });
+  acceptPage(true, "page-live");
+  App.applyLocalTicker();
   assert.equal(counts().statisticsTicks, 2);
+
+  acceptRefresh(false, "stopped");
+  App.applyLocalTicker();
+  assert.equal(counts().statisticsTicks, 2, "live_eligible=false must freeze statistics immediately");
+
+  acceptRefresh(true, "resumed");
+  App.applyLocalTicker();
+  assert.equal(counts().statisticsTicks, 2, "resume cannot reuse the pre-stop statistics target");
+
+  acceptPage(true, "resumed-page");
+  App.applyLocalTicker();
+  assert.equal(counts().statisticsTicks, 3);
 });
 
-test("legacy narrow runtime without freshness metadata remains compatible", () => {
-  const { App, setRuntime, counts } = harness();
-  setRuntime({ structureRevision: "s", liveRevision: "l", generations: {} });
+test("timeline structural local tick still runs while live projection is stale", () => {
+  const { App, acceptRefresh, advance, counts } = harness("timeline");
 
+  acceptRefresh(true, "live-1");
+  advance(10001);
   App.applyLocalTicker();
-  App.renderLiveDurationTarget({}, {}, Date.now());
 
-  assert.equal(counts().baseTickerCalls, 1);
-  assert.equal(counts().renderCalls, 1);
-  assert.equal(App.isLiveRuntimeProjectionAllowed(Date.now()), true);
+  assert.equal(counts().timelineTicks, 1, "freshness safety must not block timeline structural draining");
 });

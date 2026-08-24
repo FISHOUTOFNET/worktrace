@@ -76,6 +76,10 @@
     });
 
     var runtimeState = null;
+    var RUNTIME_FRESHNESS_LEASE_MS = 10000;
+    var runtimeLeaseExpired = false;
+    var runtimeRebasePending = false;
+    var LIVE_PROJECTION_PAGES = Object.freeze(["overview", "timeline", "statistics"]);
     var AUTOMATIC_PAGE_REFRESH_DELAY_MS = 1500;
     var AUTOMATIC_PAGE_REFRESH_RETRY_MS = 5000;
     var automaticPageRefreshTimer = null;
@@ -97,6 +101,58 @@
 
     function objectValue(value) {
         return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    }
+
+    function pageUsesLiveProjection(page) {
+        return LIVE_PROJECTION_PAGES.indexOf(String(page || "")) >= 0;
+    }
+
+    function runtimeLiveEligible(runtime) {
+        if (!runtime || typeof runtime !== "object") return false;
+        var collector = runtime.collector;
+        if (collector && typeof collector.live_eligible === "boolean") {
+            return collector.live_eligible;
+        }
+        var clock = runtime.liveClock;
+        return !!(clock && clock.is_live === true);
+    }
+
+    function runtimeFresh(runtime, nowMs) {
+        if (!runtimeLiveEligible(runtime)) return true;
+        var acceptedAt = nonNegativeInt(runtime && runtime.acceptedAtEpochMs, 0);
+        if (!acceptedAt) return true;
+        var now = nonNegativeInt(nowMs, Date.now());
+        if (Math.max(0, now - acceptedAt) <= RUNTIME_FRESHNESS_LEASE_MS) return true;
+        runtimeLeaseExpired = true;
+        runtimeRebasePending = true;
+        return false;
+    }
+
+    function runtimeProjectionAllowed(runtime, nowMs) {
+        if (!runtimeLiveEligible(runtime)) return false;
+        if (!runtimeFresh(runtime, nowMs)) return false;
+        return runtimeRebasePending !== true;
+    }
+
+    function reconcileRuntimeFreshness(previous, accepted, source, page) {
+        if (!accepted) return;
+        if (!runtimeLiveEligible(accepted)) {
+            runtimeLeaseExpired = false;
+            runtimeRebasePending = false;
+            return;
+        }
+        if (source === "page_model") {
+            runtimeLeaseExpired = false;
+            runtimeRebasePending = false;
+            return;
+        }
+        if (source !== "refresh_state" || !pageUsesLiveProjection(page)) return;
+        var previousLive = runtimeLiveEligible(previous);
+        if (runtimeLeaseExpired || runtimeRebasePending || (!!previous && !previousLive)) {
+            runtimeLeaseExpired = false;
+            runtimeRebasePending = true;
+            App.liveClockContractRefreshRequested = true;
+        }
     }
 
     function generationValue(generations, key) {
@@ -399,6 +455,8 @@
         App.liveClockContractRefreshRequested = false;
         App.liveClockContractViolation = null;
         App.liveClockViolationKeys = {};
+        runtimeLeaseExpired = false;
+        runtimeRebasePending = false;
         clearScheduledAutomaticPageRefresh();
         Object.keys(pageRefreshDirty).forEach(function (page) {
             markPageDirty(page);
@@ -465,6 +523,12 @@
         if (previousKey && previousKey !== runtimeVisualContinuityKey(accepted)) {
             App._monotonicRenderState = {};
         }
+        reconcileRuntimeFreshness(
+            previous,
+            accepted,
+            String(options.source || ""),
+            String(page || App.currentPage || "overview")
+        );
         if (accepted.needsFullRefresh) App.liveClockContractRefreshRequested = true;
         if (options.source === "refresh_state") App.lastRefreshState = payload;
         return true;
@@ -492,6 +556,11 @@
     App.getActiveLiveClock = function () {
         var runtime = liveRuntimeStore.get();
         if (!runtime || runtime.page !== (App.currentPage || "overview")) return null;
+        if (runtime.liveClock && runtime.liveClock.is_live === true
+            && pageUsesLiveProjection(App.currentPage || "overview")
+            && !runtimeProjectionAllowed(runtime, Date.now())) {
+            return null;
+        }
         return runtime.liveClock || null;
     };
 
@@ -506,32 +575,37 @@
     App.applyLocalTicker = function () {
         var runtime = liveRuntimeStore.get();
         var tickerPage = App.currentPage || "overview";
+        var projectionAllowed = !pageUsesLiveProjection(tickerPage)
+            || runtimeProjectionAllowed(runtime, Date.now());
         var pageRoot = document.getElementById("page-" + tickerPage);
         var liveTargets = pageRoot
             ? pageRoot.querySelectorAll('[data-live-clock-target="1"]')
             : [];
-        for (var i = 0; i < liveTargets.length; i++) {
-            var target = liveTargets[i];
-            var clock = App.readLiveClockTarget(target);
-            if (!clock) {
-                App.recordLiveClockContractViolation("", tickerPage, "target_clock_invalid", 2);
-                App.clearLiveClockTarget(target);
-                continue;
+        if (projectionAllowed) {
+            for (var i = 0; i < liveTargets.length; i++) {
+                var target = liveTargets[i];
+                var clock = App.readLiveClockTarget(target);
+                if (!clock) {
+                    App.recordLiveClockContractViolation("", tickerPage, "target_clock_invalid", 2);
+                    App.clearLiveClockTarget(target);
+                    continue;
+                }
+                if (!App.liveTargetCompatibleWithRuntime(target, runtime)) {
+                    App.recordLiveClockContractViolation(
+                        clock.display_span_id,
+                        tickerPage,
+                        "live_target_runtime_mismatch",
+                        2
+                    );
+                    App.clearLiveClockTarget(target);
+                    continue;
+                }
+                App.renderLiveDurationTarget(target, clock, Date.now());
             }
-            if (!App.liveTargetCompatibleWithRuntime(target, runtime)) {
-                App.recordLiveClockContractViolation(
-                    clock.display_span_id,
-                    tickerPage,
-                    "live_target_runtime_mismatch",
-                    2
-                );
-                App.clearLiveClockTarget(target);
-                continue;
-            }
-            App.renderLiveDurationTarget(target, clock, Date.now());
         }
         var capability = pageCapability(tickerPage);
         if (capability && typeof capability.applyLocalTick === "function") {
+            if (tickerPage === "statistics" && !projectionAllowed) return;
             var pageTick = capability.applyLocalTick();
             if (pageTick && typeof pageTick.then === "function") {
                 pageTick.then(function (result) {
