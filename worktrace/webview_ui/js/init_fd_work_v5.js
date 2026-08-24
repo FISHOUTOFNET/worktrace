@@ -125,20 +125,25 @@
         return false;
     }
 
+    function sourceClockFresh(clock, nowMs) {
+        var acceptedClock = App.validateLiveClock(clock);
+        if (!acceptedClock || acceptedClock.is_live !== true) return true;
+        var sampledAt = nonNegativeInt(acceptedClock.sampled_at_epoch_ms, 0);
+        var now = nonNegativeInt(nowMs, Date.now());
+        if (!sampledAt) return false;
+        var sourceAge = now - sampledAt;
+        return sourceAge >= -RUNTIME_SOURCE_FUTURE_SKEW_MS
+            && sourceAge <= RUNTIME_FRESHNESS_LEASE_MS;
+    }
+
     function runtimeFresh(runtime, nowMs) {
         if (!runtimeLiveEligible(runtime)) return true;
         var acceptedAt = nonNegativeInt(runtime && runtime.acceptedAtEpochMs, 0);
         var clock = runtime && runtime.liveClock;
-        var sampledAt = nonNegativeInt(clock && clock.sampled_at_epoch_ms, 0);
         var now = nonNegativeInt(nowMs, Date.now());
-        if (!acceptedAt || !sampledAt) return expireRuntimeLease();
+        if (!acceptedAt || !sourceClockFresh(clock, now)) return expireRuntimeLease();
         var receiptAge = now - acceptedAt;
-        var sourceAge = now - sampledAt;
         if (receiptAge < 0 || receiptAge > RUNTIME_FRESHNESS_LEASE_MS) {
-            return expireRuntimeLease();
-        }
-        if (sourceAge < -RUNTIME_SOURCE_FUTURE_SKEW_MS
-            || sourceAge > RUNTIME_FRESHNESS_LEASE_MS) {
             return expireRuntimeLease();
         }
         return true;
@@ -466,11 +471,13 @@
     function liveClockProjectionAllowed(clock, nowMs) {
         var acceptedClock = App.validateLiveClock(clock);
         if (!acceptedClock || acceptedClock.is_live !== true) return true;
+        var now = nonNegativeInt(nowMs, Date.now());
+        if (!sourceClockFresh(acceptedClock, now)) return false;
         var page = App.currentPage || "overview";
         if (!pageUsesLiveProjection(page)) return false;
         var runtime = liveRuntimeStore.get();
         if (!runtime || runtime.page !== page) return false;
-        if (!runtimeProjectionAllowed(runtime, nowMs)) return false;
+        if (!runtimeProjectionAllowed(runtime, now)) return false;
         var runtimeClock = App.validateLiveClock(runtime.liveClock);
         if (!runtimeClock || runtimeClock.is_live !== true) return false;
         return acceptedClock.display_span_id === runtimeClock.display_span_id
@@ -478,17 +485,15 @@
     }
     App.liveClockProjectionAllowed = liveClockProjectionAllowed;
 
-    var computeClockDurationRaw = App.computeClockDurationNow;
-    if (typeof computeClockDurationRaw === "function") {
-        App.computeClockDurationNow = function (clock, nowMs) {
-            var acceptedClock = App.validateLiveClock(clock);
-            if (acceptedClock && acceptedClock.is_live === true
-                && !liveClockProjectionAllowed(acceptedClock, nowMs)) {
-                return null;
-            }
-            return computeClockDurationRaw(clock, nowMs);
-        };
-    }
+    App.projectLiveClockDurationNow = function (clock, nowMs) {
+        var acceptedClock = App.validateLiveClock(clock);
+        if (!acceptedClock || acceptedClock.duration_semantic === "static_closed") return null;
+        if (acceptedClock.is_live === true
+            && !liveClockProjectionAllowed(acceptedClock, nowMs)) {
+            return null;
+        }
+        return App.computeClockDurationNow(acceptedClock, nowMs);
+    };
 
     function resetClientGeneration(reason) {
         if (App.requestCoordinator) App.requestCoordinator.bumpDataEpoch();
