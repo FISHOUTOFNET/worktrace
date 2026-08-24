@@ -5,7 +5,7 @@ from contextlib import contextmanager
 
 import pytest
 
-from worktrace.services import folder_index_service, recovery_service
+from worktrace.services import folder_index_runtime_service, recovery_service
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.collector_runtime, pytest.mark.db]
@@ -52,25 +52,34 @@ def test_folder_worker_does_not_run_startup_reconciliation_while_write_gate_bloc
         stop.set()
         return True
 
-    monkeypatch.setattr(folder_index_service.DATABASE_WRITE_GATE, "writes_blocked", blocked)
-    monkeypatch.setattr(folder_index_service, "_wait_for_worker", lambda: None)
     monkeypatch.setattr(
-        folder_index_service,
+        folder_index_runtime_service.DATABASE_WRITE_GATE,
+        "writes_blocked",
+        blocked,
+    )
+    monkeypatch.setattr(folder_index_runtime_service._core, "_wait_for_worker", lambda: None)
+    monkeypatch.setattr(
+        folder_index_runtime_service,
         "ensure_index_states_for_folder_rules",
         lambda: preflight_calls.append("ensure"),
     )
     monkeypatch.setattr(
-        folder_index_service,
+        folder_index_runtime_service._core,
         "recover_interrupted_indexes",
         lambda: preflight_calls.append("recover"),
     )
     monkeypatch.setattr(
-        folder_index_service,
+        folder_index_runtime_service,
+        "reconcile_index_eligibility",
+        lambda: preflight_calls.append("reconcile"),
+    )
+    monkeypatch.setattr(
+        folder_index_runtime_service,
         "validate_ready_indexes",
         lambda _stop: preflight_calls.append("validate"),
     )
 
-    folder_index_service.run_folder_index_worker(stop, health=health)
+    folder_index_runtime_service.run_folder_index_worker(stop, health=health)
 
     assert preflight_calls == []
     assert health.pauses == [True]
@@ -92,25 +101,42 @@ def test_folder_worker_retries_startup_database_busy_inside_same_target(
             raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr(
-        folder_index_service.DATABASE_WRITE_GATE,
+        folder_index_runtime_service.DATABASE_WRITE_GATE,
         "writes_blocked",
         lambda: False,
     )
     monkeypatch.setattr(
-        folder_index_service.privacy_gate_service,
+        folder_index_runtime_service.privacy_gate_service,
         "is_sensitive_runtime_allowed",
         lambda: True,
     )
-    monkeypatch.setattr(folder_index_service, "_wait_for_worker", lambda: None)
-    monkeypatch.setattr(folder_index_service, "ensure_index_states_for_folder_rules", ensure)
-    monkeypatch.setattr(folder_index_service, "recover_interrupted_indexes", lambda: 0)
+    monkeypatch.setattr(folder_index_runtime_service._core, "_wait_for_worker", lambda: None)
+    monkeypatch.setattr(
+        folder_index_runtime_service,
+        "ensure_index_states_for_folder_rules",
+        ensure,
+    )
+    monkeypatch.setattr(
+        folder_index_runtime_service._core,
+        "recover_interrupted_indexes",
+        lambda: 0,
+    )
+    monkeypatch.setattr(
+        folder_index_runtime_service,
+        "reconcile_index_eligibility",
+        lambda: 0,
+    )
 
     def validate(_stop) -> None:
         stop.set()
 
-    monkeypatch.setattr(folder_index_service, "validate_ready_indexes", validate)
+    monkeypatch.setattr(
+        folder_index_runtime_service,
+        "validate_ready_indexes",
+        validate,
+    )
 
-    folder_index_service.run_folder_index_worker(stop, health=health)
+    folder_index_runtime_service.run_folder_index_worker(stop, health=health)
 
     assert ensure_attempts == 2
     assert health.failures == ["folder_index_startup_failed"]
