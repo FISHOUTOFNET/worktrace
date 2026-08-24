@@ -1,0 +1,49 @@
+name: Apply Statistics static contract fix
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact PR head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: true
+          clean: true
+          show-progress: false
+
+      - name: Align static contract with explicit preset identity
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          path = Path('tests/webview/test_statistics_static_contract.py')
+          source = path.read_text(encoding='utf-8')
+          old = '''    assert 'setStatisticsSelection(true, "", "")' in apply
+              assert "setStatisticsSelection(false, draft.dateFrom, draft.dateTo)" in apply'''
+          new = '''    assert 'setStatisticsSelection(true, "", "", "all")' in apply
+              assert "setStatisticsSelection(false, draft.dateFrom, draft.dateTo, null)" in apply'''
+          if old not in source:
+              raise SystemExit('legacy Statistics selection contract not found')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8', newline='\n')
+          '@ | python -
+          python -m pip install --disable-pip-version-check -q pytest
+          python -m pytest tests/webview/test_statistics_static_contract.py -q
+
+      - name: Remove one-shot workflow and commit
+        shell: pwsh
+        run: |
+          Remove-Item -LiteralPath '.github/workflows/apply-statistics-static-contract.yml'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'test(statistics): align preset identity contract'
+          git push origin HEAD:fix/pre-release-ui-interaction-lifecycle
