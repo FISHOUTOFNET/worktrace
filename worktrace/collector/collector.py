@@ -182,7 +182,8 @@ class CollectorControl:
         result = self._request(CollectorCommandKind.MAINTENANCE_RELEASE, timeout_seconds)
         if not bool(result.get("ok")) and not bool(result.get("command_state_unknown")):
             with self._lock:
-                self._hold_state = CollectorHoldState.HELD
+                if self._hold_state is CollectorHoldState.RELEASE_REQUESTED:
+                    self._hold_state = CollectorHoldState.HELD
         return result
 
     def take_maintenance_release_request(self) -> str | None:
@@ -652,7 +653,11 @@ def run_collector(
         if held:
             machine.reset_runtime_state("shutdown_during_maintenance_hold")
         elif fatal_stop:
-            machine.stop(at_time=now_str(), reason="fatal_collector_stop")
+            # Fatal cleanup must never create a new open row while trying to
+            # close an invocation that already failed persistence. Forget the
+            # process-local identity; AppRuntime crash recovery seals any durable
+            # open fact before a replacement Collector is allowed to start.
+            machine.reset_runtime_state("fatal_collector_stop")
         else:
             machine.transition_to("stopped", at_time=now_str())
     finally:

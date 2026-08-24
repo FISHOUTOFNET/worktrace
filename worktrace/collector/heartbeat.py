@@ -5,14 +5,16 @@ import time
 from ..db import active_database_epoch_key, now_str
 from ..services import database_maintenance_service
 from ..services.settings_service import set_settings
+from . import collector_health
 
 _HEARTBEAT_PERSIST_INTERVAL_SECONDS = 30.0
 _LAST_PERSISTED_BY_DATABASE: dict[tuple[str, int], tuple[str, float]] = {}
 
 
 def update_heartbeat(status: str = "running") -> None:
-    """Persist runtime liveness only outside a maintenance lifecycle."""
+    """Project runtime status immediately; persist it only outside maintenance."""
 
+    collector_health.record_runtime_status(status)
     if database_maintenance_service.is_maintenance_in_progress():
         return
     database_epoch = active_database_epoch_key()

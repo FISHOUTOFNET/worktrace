@@ -25,6 +25,7 @@ from ..services import (
     history_mutation_job_service,
     project_inference_service,
     recovery_service,
+    runtime_activity_state_service,
 )
 from ..services.settings_service import set_setting
 from ..worker_health import WorkerHealthRegistry, WorkerHealthReporter
@@ -44,6 +45,9 @@ if TYPE_CHECKING:
 _WORKER_RESTART_INITIAL_SECONDS = 1.0
 _WORKER_RESTART_MAX_SECONDS = 30.0
 _WORKER_STABLE_RUN_SECONDS = 30.0
+_COLLECTOR_LIVE_FRESHNESS_SECONDS = 8.0
+_COLLECTOR_STALL_SECONDS = 180.0
+_COLLECTOR_STALL_LOG_INTERVAL_SECONDS = 60.0
 
 
 class RuntimePhase(str, Enum):
@@ -134,9 +138,6 @@ class _OwnedWorkerReporter:
         paused = bool(paused)
         self._health.maintenance_paused(paused)
         if paused:
-            # A worker that reaches its intentional maintenance gate has
-            # established its invocation loop even though business work is
-            # deliberately paused.
             self._handle.serving_event.set()
             self._on_health_change()
 
@@ -166,10 +167,6 @@ def _choose_adapter() -> RuntimePlatformAdapter:
 
 
 def _thread_is_alive(thread: threading.Thread | None) -> bool:
-    # WorkerHandle.is_alive and this helper hide raw thread introspection so the
-    # worker registry stays declarative; threading.enumerate() is the canonical
-    # snapshot of alive Thread objects and is functionally equivalent to
-    # Thread.is_alive() for lifecycle checks in the runtime owner.
     return thread is not None and thread in threading.enumerate()
 
 
@@ -192,6 +189,11 @@ class AppRuntime:
         self._collector_thread: threading.Thread | None = None
         self._collector_stop_event: threading.Event | None = None
         self._collector_generation = 0
+        self._collector_ready_generation = 0
+        self._collector_terminal_generation = 0
+        self._collector_terminal_reason = ""
+        self._collector_recovery_required_reason = ""
+        self._last_collector_stall_log_monotonic = 0.0
         self._worker_handles: dict[str, WorkerHandle] = {}
         self.collector_supervisor = CollectorSupervisor(self)
         self._worker_specs = self._build_worker_specs()
@@ -288,11 +290,6 @@ class AppRuntime:
             self._reconcile_worker_health_phase,
         )
         health.started()
-
-        # READY proves AppRuntime owns a live invocation wrapper. SERVING is
-        # separate: the current target invocation must report a successful
-        # iteration (or intentional maintenance pause) before Runtime can
-        # converge to RUNNING.
         startup.ready()
         restart_delay = _WORKER_RESTART_INITIAL_SECONDS
         try:
@@ -319,10 +316,6 @@ class AppRuntime:
                 if lifecycle_error is None:
                     break
 
-                # The wrapper remains alive during backoff, but the business
-                # target is not serving. Clear that capability before health
-                # reconciliation so another worker cannot wash DEGRADED back to
-                # RUNNING while this target is absent.
                 handle.serving_event.clear()
                 health.failed(lifecycle_error)
                 self._mark_worker_runtime_degraded()
@@ -384,15 +377,10 @@ class AppRuntime:
             if any(not _thread_is_alive(handle.thread) for handle in handles):
                 self.phase = RuntimePhase.DEGRADED
                 return
-
-            # During the parallel startup handshake another worker may report
-            # serving before every wrapper has emitted READY. That is still
-            # STARTING, not a runtime failure.
             if any(not handle.ready_event.is_set() for handle in handles):
                 if self.phase is not RuntimePhase.STARTING:
                     self.phase = RuntimePhase.DEGRADED
                 return
-
             if self._worker_health.degraded_workers():
                 self.phase = RuntimePhase.DEGRADED
                 return
@@ -419,8 +407,9 @@ class AppRuntime:
 
             self.phase = RuntimePhase.RUNNING
 
-    @staticmethod
     def _run_owned_collector(
+        self,
+        generation: int,
         adapter: RuntimePlatformAdapter,
         stop_event: threading.Event,
         control: RuntimeCollectorControl,
@@ -429,13 +418,149 @@ class AppRuntime:
     ) -> None:
         try:
             run_collector(adapter, stop_event, control, ready_event, failed_event)
+        except BaseException:
+            try:
+                collector_health.record_unhandled_runtime_failure(db.now_str())
+            except Exception as health_exc:
+                logging.error(
+                    "collector unhandled failure health persistence failed exception=%s",
+                    type(health_exc).__name__,
+                )
+            try:
+                collector_health.record_collector_stopped(db.now_str())
+            except Exception as stop_exc:
+                logging.error(
+                    "collector stopped-state persistence failed exception=%s",
+                    type(stop_exc).__name__,
+                )
+            raise
         finally:
             reason = (
                 "collector_fatal_exit"
                 if failed_event.is_set() or not stop_event.is_set()
                 else "collector_shutdown"
             )
+            try:
+                runtime_activity_state_service.clear_runtime_activity_state(
+                    "collector_invocation_terminated"
+                )
+            except Exception as clear_exc:
+                logging.error(
+                    "collector runtime state clear failed exception=%s",
+                    type(clear_exc).__name__,
+                )
+            collector_health.terminalize_runtime_invocation(generation, reason)
+            with self._lifecycle_lock:
+                if generation == self._collector_generation:
+                    self._collector_terminal_generation = generation
+                    self._collector_terminal_reason = reason
+                    self._collector_ready_generation = 0
             control.terminalize_unfinished(reason)
+
+    def collection_liveness_snapshot(self) -> dict[str, object]:
+        """Return the sole process-authoritative Collector live eligibility."""
+
+        with self._lifecycle_lock:
+            generation = int(self._collector_generation)
+            ready_generation = int(self._collector_ready_generation)
+            terminal_generation = int(self._collector_terminal_generation)
+            terminal_reason = str(self._collector_terminal_reason or "")
+            recovery_reason = str(self._collector_recovery_required_reason or "")
+            thread = self._collector_thread
+            stop_event = self._collector_stop_event
+            control = self.collector_control
+            owned = bool(self.owns_application_instance and not self._shutdown)
+        thread_alive = _thread_is_alive(thread)
+        hold_state = getattr(control, "hold_state", None)
+        hold_value = str(getattr(hold_state, "value", hold_state) or "")
+        progress = collector_health.runtime_progress_snapshot()
+        progress_generation = int(progress.get("generation") or 0)
+        runtime_status = str(progress.get("runtime_status") or "")
+        last_success = str(progress.get("last_successful_observation_at") or "")
+        last_monotonic = float(progress.get("last_success_monotonic") or 0.0)
+        age = max(0.0, time.monotonic() - last_monotonic) if last_monotonic > 0 else None
+
+        state = "stopped"
+        live_eligible = False
+        reason = terminal_reason
+        if recovery_reason:
+            state = "recovery_required"
+            reason = recovery_reason
+        elif not owned or not thread_alive:
+            state = "stopped"
+        elif stop_event is None or stop_event.is_set() or terminal_generation == generation:
+            state = "stopped"
+        elif hold_value and hold_value != "operational":
+            state = "held"
+            reason = hold_value
+        elif ready_generation != generation or progress_generation != generation:
+            state = "starting"
+        elif runtime_status == "paused":
+            state = "paused"
+        elif runtime_status == "stopped":
+            state = "stopped"
+        elif age is None:
+            state = "starting"
+        elif age > _COLLECTOR_STALL_SECONDS:
+            state = "stale"
+            reason = "collector_progress_stale"
+        elif age > _COLLECTOR_LIVE_FRESHNESS_SECONDS:
+            state = "degraded"
+            reason = "collector_progress_delayed"
+        elif runtime_status == "running":
+            state = "active"
+            live_eligible = True
+        else:
+            state = "starting"
+
+        return {
+            "generation": generation,
+            "state": state,
+            "live_eligible": live_eligible,
+            "thread_alive": thread_alive,
+            "last_successful_observation_at": last_success,
+            "last_progress_age_seconds": age,
+            "reason": reason,
+        }
+
+    def mark_collector_recovery_required(self, reason: str) -> None:
+        value = str(reason or "collector_recovery_required").strip().lower()
+        value = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in value)
+        value = value.strip("_")[:64] or "collector_recovery_required"
+        with self._lifecycle_lock:
+            self._collector_recovery_required_reason = value
+            if self.phase not in {RuntimePhase.STOPPING, RuntimePhase.STOPPED}:
+                self.phase = RuntimePhase.RECOVERABLE_FAILURE
+        collector_health.record_health_code("collector_recovery_required")
+
+    def diagnose_stalled_collector(self) -> None:
+        """Log safe source locations for an alive-but-stalled Collector."""
+
+        now = time.monotonic()
+        with self._lifecycle_lock:
+            thread = self._collector_thread
+            if (
+                not _thread_is_alive(thread)
+                or now - self._last_collector_stall_log_monotonic
+                < _COLLECTOR_STALL_LOG_INTERVAL_SECONDS
+            ):
+                return
+            self._last_collector_stall_log_monotonic = now
+            ident = thread.ident if thread is not None else None
+        frame = sys._current_frames().get(ident) if ident is not None else None
+        locations: list[str] = []
+        while frame is not None:
+            normalized = str(frame.f_code.co_filename or "").replace("\\", "/")
+            parts = [part for part in normalized.split("/") if part]
+            safe_path = "/".join(parts[-3:]) or "unknown"
+            locations.append(
+                f"{safe_path}:{frame.f_lineno}:{frame.f_code.co_name}"
+            )
+            frame = frame.f_back
+        logging.error(
+            "collector stalled thread_alive=true stack=%s",
+            ">".join(locations[-6:]) or "none",
+        )
 
     def worker_health_snapshot(self) -> dict[str, object]:
         return {
@@ -705,6 +830,15 @@ class AppRuntime:
                     degraded=True,
                     error_code="database_maintenance_recovery_required",
                 )
+            if self._collector_recovery_required_reason:
+                self.phase = RuntimePhase.RECOVERABLE_FAILURE
+                return _RuntimeStartResult(
+                    ok=False,
+                    collector_ready=False,
+                    workers={},
+                    degraded=True,
+                    error_code="collector_recovery_required",
+                )
             if not self._initialized or not self.owns_application_instance:
                 return _RuntimeStartResult(
                     ok=False,
@@ -799,6 +933,9 @@ class AppRuntime:
                     "ok": False,
                     "error": "database_maintenance_recovery_required",
                 }
+            if self._collector_recovery_required_reason:
+                self.phase = RuntimePhase.RECOVERABLE_FAILURE
+                return {"ok": False, "error": "collector_recovery_required"}
             if self._shutdown or self.stop_event.is_set():
                 return {"ok": False, "error": "runtime_stopping"}
             if not self.owns_application_instance:
@@ -809,9 +946,39 @@ class AppRuntime:
                 database_maintenance_service.register_runtime_control(self)
                 return {"ok": True, "started": False, "already_running": True}
             if self._collector_thread is not None:
-                collector_health.record_health_code("thread_dead_replaced")
+                try:
+                    collector_health.record_health_code("thread_dead_replaced")
+                except Exception as health_exc:
+                    logging.error(
+                        "collector dead-thread health persistence failed exception=%s",
+                        type(health_exc).__name__,
+                    )
+                progress = collector_health.runtime_progress_snapshot()
+                safe_end_time = (
+                    str(progress.get("last_successful_observation_at") or "")
+                    if int(progress.get("generation") or 0)
+                    == int(self._collector_generation)
+                    else ""
+                )
+                recovery = recovery_service.recover_after_collector_crash(
+                    safe_end_time or None
+                )
+                if not bool(recovery.get("ok")):
+                    self.phase = RuntimePhase.RECOVERABLE_FAILURE
+                    if not bool(recovery.get("retryable")):
+                        self.mark_collector_recovery_required(
+                            "crash_reconciliation_failed"
+                        )
+                    return {
+                        "ok": False,
+                        "error": str(
+                            recovery.get("error") or "collector_recovery_failed"
+                        ),
+                        "retryable": bool(recovery.get("retryable")),
+                    }
                 self._collector_thread = None
                 self._collector_stop_event = None
+                self.collector_control = RuntimeCollectorControl()
 
             ready_event = threading.Event()
             failed_event = threading.Event()
@@ -819,12 +986,17 @@ class AppRuntime:
             attempt_control = RuntimeCollectorControl()
             self._collector_generation += 1
             attempt_generation = self._collector_generation
+            self._collector_ready_generation = 0
+            self._collector_terminal_generation = 0
+            self._collector_terminal_reason = ""
+            collector_health.begin_runtime_invocation(attempt_generation)
             self._collector_stop_event = attempt_stop_event
             self.collector_control = attempt_control
             try:
                 thread = threading.Thread(
                     target=self._run_owned_collector,
                     args=(
+                        attempt_generation,
                         self._adapter,
                         attempt_stop_event,
                         attempt_control,
@@ -838,6 +1010,10 @@ class AppRuntime:
                 thread.start()
             except Exception:
                 logging.exception("collector thread start failed")
+                collector_health.terminalize_runtime_invocation(
+                    attempt_generation,
+                    "collector_thread_start_failed",
+                )
                 attempt_control.terminalize_unfinished("collector_thread_start_failed")
                 self._collector_thread = None
                 self._collector_stop_event = None
@@ -859,10 +1035,12 @@ class AppRuntime:
                 if (
                     attempt_generation != self._collector_generation
                     or self._collector_thread is not thread
+                    or not _thread_is_alive(thread)
                 ):
                     attempt_stop_event.set()
                     attempt_control.terminalize_unfinished("collector_attempt_superseded")
                     return {"ok": False, "error": "collector_attempt_superseded"}
+                self._collector_ready_generation = attempt_generation
                 database_maintenance_service.register_runtime_control(self)
                 return {"ok": True, "started": True, "already_running": False}
 
@@ -1052,8 +1230,10 @@ class AppRuntime:
                     self._initialized
                     and not database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked()
                 ):
+                    shutdown_at = db.now_str()
                     activity_lifecycle_service.close_all_open_activities()
                     set_setting("collector_status", "stopped")
+                    set_setting("last_shutdown_at", shutdown_at)
                 release_single_instance()
                 self.owns_application_instance = False
                 self.phase = RuntimePhase.STOPPED

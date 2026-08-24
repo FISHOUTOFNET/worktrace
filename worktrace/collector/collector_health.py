@@ -4,6 +4,7 @@ import logging
 import re
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -23,6 +24,7 @@ HEALTH_STOPPED = "stopped"
 _FAILING_THRESHOLD = 3
 _SUCCESS_PERSIST_INTERVAL_SECONDS = 30
 _STATE_LOCK = threading.RLock()
+_PROGRESS_LOCK = threading.RLock()
 _SAFE_CODE_PATTERN = re.compile(r"[^a-z0-9_]+")
 
 
@@ -34,7 +36,17 @@ class _RuntimeHealthState:
     last_success_persisted_at: str
 
 
+@dataclass
+class _RuntimeProgressState:
+    generation: int = 0
+    runtime_status: str = "stopped"
+    last_successful_observation_at: str = ""
+    last_success_monotonic: float = 0.0
+    terminal_reason: str = ""
+
+
 _STATE_BY_DATABASE: dict[tuple[str, int], _RuntimeHealthState] = {}
+_RUNTIME_PROGRESS = _RuntimeProgressState()
 
 
 def _runtime_state() -> _RuntimeHealthState:
@@ -60,6 +72,55 @@ def _runtime_state() -> _RuntimeHealthState:
         return state
 
 
+def begin_runtime_invocation(generation: int) -> None:
+    """Reset process-local progress for one AppRuntime-owned Collector invocation."""
+
+    with _PROGRESS_LOCK:
+        _RUNTIME_PROGRESS.generation = max(0, int(generation))
+        _RUNTIME_PROGRESS.runtime_status = "starting"
+        _RUNTIME_PROGRESS.last_successful_observation_at = ""
+        _RUNTIME_PROGRESS.last_success_monotonic = 0.0
+        _RUNTIME_PROGRESS.terminal_reason = ""
+
+
+def record_runtime_status(status: str) -> None:
+    """Project a cheap process-local status without touching SQLite."""
+
+    value = str(status or "").strip().lower() or "unknown"
+    with _PROGRESS_LOCK:
+        _RUNTIME_PROGRESS.runtime_status = value
+
+
+def terminalize_runtime_invocation(generation: int, reason: str) -> None:
+    with _PROGRESS_LOCK:
+        if int(generation) != int(_RUNTIME_PROGRESS.generation):
+            return
+        _RUNTIME_PROGRESS.runtime_status = "stopped"
+        _RUNTIME_PROGRESS.terminal_reason = _safe_health_code(reason)
+
+
+def runtime_progress_snapshot() -> dict[str, object]:
+    """Return the process-local signal consumed by AppRuntime liveness."""
+
+    with _PROGRESS_LOCK:
+        return {
+            "generation": int(_RUNTIME_PROGRESS.generation),
+            "runtime_status": str(_RUNTIME_PROGRESS.runtime_status),
+            "last_successful_observation_at": str(
+                _RUNTIME_PROGRESS.last_successful_observation_at
+            ),
+            "last_success_monotonic": float(_RUNTIME_PROGRESS.last_success_monotonic),
+            "terminal_reason": str(_RUNTIME_PROGRESS.terminal_reason),
+        }
+
+
+def _note_successful_runtime_progress(at_time: str) -> None:
+    with _PROGRESS_LOCK:
+        _RUNTIME_PROGRESS.last_successful_observation_at = str(at_time or "")
+        _RUNTIME_PROGRESS.last_success_monotonic = time.monotonic()
+        _RUNTIME_PROGRESS.runtime_status = "running"
+
+
 def _elapsed_seconds(start: str, end: str) -> int | None:
     if not start or not end:
         return None
@@ -75,6 +136,7 @@ def _elapsed_seconds(start: str, end: str) -> int | None:
 
 
 def record_collector_started(at_time: str | None = None) -> None:
+    record_runtime_status("running")
     state = _runtime_state()
     with _STATE_LOCK:
         state.health_state = HEALTH_HEALTHY
@@ -91,6 +153,7 @@ def record_collector_started(at_time: str | None = None) -> None:
 
 def record_successful_observation(at_time: str | None = None) -> None:
     at = at_time or now_str()
+    _note_successful_runtime_progress(at)
     state = _runtime_state()
     with _STATE_LOCK:
         recovered = (
@@ -192,7 +255,19 @@ def record_fatal_failure(
     )
 
 
+def record_unhandled_runtime_failure(at_time: str | None = None) -> None:
+    """Capture an exception escaping run_collector without logging raw exception text."""
+
+    record_fatal_failure(
+        "runtime_boundary",
+        CollectorFailureCode.UNEXPECTED_FAILURE,
+        at_time,
+    )
+
+
 def record_collector_stopped(at_time: str | None = None) -> None:
+    at = at_time or now_str()
+    record_runtime_status("stopped")
     state = _runtime_state()
     with _STATE_LOCK:
         state.health_state = HEALTH_STOPPED
@@ -200,7 +275,7 @@ def record_collector_stopped(at_time: str | None = None) -> None:
         {
             "collector_status": "stopped",
             "collector_health_state": HEALTH_STOPPED,
-            "last_shutdown_at": at_time or now_str(),
+            "last_collector_stop_at": at,
         }
     )
     logging.info("collector health state=stopped")
@@ -277,12 +352,17 @@ __all__ = [
     "HEALTH_FAILING",
     "HEALTH_HEALTHY",
     "HEALTH_STOPPED",
+    "begin_runtime_invocation",
     "format_time",
     "record_collector_started",
     "record_collector_stopped",
     "record_fatal_failure",
     "record_health_code",
+    "record_runtime_status",
     "record_successful_observation",
     "record_transient_failure",
+    "record_unhandled_runtime_failure",
     "reset_collector_failures",
+    "runtime_progress_snapshot",
+    "terminalize_runtime_invocation",
 ]

@@ -33,6 +33,8 @@ class ApplicationRuntimeCapability(Protocol):
 
     def is_collection_running_for_maintenance(self) -> bool: ...
 
+    def collection_liveness_snapshot(self) -> dict[str, object]: ...
+
     def set_clipboard_capture_enabled(self, enabled: bool) -> bool: ...
 
     def worker_health_snapshot(self) -> dict[str, object]: ...
@@ -68,28 +70,92 @@ class ApplicationControlService:
         self.runtime = runtime
         self.maintenance = maintenance
 
+    def _collection_liveness(self) -> dict[str, object]:
+        reader = getattr(self.runtime, "collection_liveness_snapshot", None)
+        if not callable(reader):
+            return {}
+        try:
+            return dict(reader())
+        except Exception:
+            logging.exception("collection liveness read failed")
+            return {
+                "state": "recovery_required",
+                "live_eligible": False,
+                "reason": "liveness_read_failed",
+            }
+
     def get_collection_status(self) -> dict[str, Any]:
-        raw_status = settings_api.get_collector_status()
+        persisted_status = settings_api.get_collector_status()
         health_state = settings_api.get_collector_health_state()
         background_health_state, degraded_workers = self._background_health_state()
-        paused = settings_api.is_user_paused() or raw_status == "paused"
-        if paused:
-            display = "已暂停"
-        elif raw_status == "running":
-            if health_state == "failing":
-                display = "采集可能中断，请重试"
-            elif background_health_state == "degraded":
-                display = "记录中，部分后台任务异常"
-            elif health_state == "degraded":
-                display = "记录中，刚才采集短暂异常"
-            elif background_health_state == "starting":
-                display = "记录中，后台任务正在准备"
+        liveness = self._collection_liveness()
+        runtime_state = str(liveness.get("state") or "")
+        live_eligible = bool(liveness.get("live_eligible")) if liveness else False
+
+        if liveness:
+            if runtime_state == "active":
+                raw_status = "running"
+                paused = False
+                if background_health_state == "degraded":
+                    display = "记录中，部分后台任务异常"
+                elif health_state == "degraded":
+                    display = "记录中，刚才采集短暂异常"
+                elif background_health_state == "starting":
+                    display = "记录中，后台任务正在准备"
+                else:
+                    display = "记录中"
+            elif runtime_state == "starting":
+                raw_status = "running"
+                paused = False
+                display = "采集器正在启动"
+            elif runtime_state == "degraded":
+                raw_status = "running"
+                paused = False
+                display = "采集暂时无响应，实时计时已暂停"
+            elif runtime_state == "paused":
+                raw_status = "paused"
+                paused = True
+                display = "已暂停"
+            elif runtime_state == "held":
+                raw_status = "paused"
+                paused = True
+                display = "维护中，记录已暂停"
+            elif runtime_state == "stale":
+                raw_status = "error"
+                paused = False
+                display = "采集器无响应，实时计时已暂停"
+            elif runtime_state == "recovery_required":
+                raw_status = "error"
+                paused = False
+                display = "记录已中断，请重启应用恢复"
             else:
-                display = "记录中"
-        elif raw_status == "error":
-            display = "状态异常"
+                raw_status = "stopped"
+                paused = settings_api.is_user_paused()
+                display = "已暂停" if paused else "采集器未运行"
         else:
-            display = "采集器未运行"
+            # Compatibility path for narrow injected runtimes used by tests and
+            # legacy embedders. Shipping AppRuntime always supplies liveness.
+            raw_status = persisted_status
+            paused = settings_api.is_user_paused() or raw_status == "paused"
+            live_eligible = bool(raw_status == "running" and not paused)
+            if paused:
+                display = "已暂停"
+            elif raw_status == "running":
+                if health_state == "failing":
+                    display = "采集可能中断，请重试"
+                elif background_health_state == "degraded":
+                    display = "记录中，部分后台任务异常"
+                elif health_state == "degraded":
+                    display = "记录中，刚才采集短暂异常"
+                elif background_health_state == "starting":
+                    display = "记录中，后台任务正在准备"
+                else:
+                    display = "记录中"
+            elif raw_status == "error":
+                display = "状态异常"
+            else:
+                display = "采集器未运行"
+
         return {
             "ok": True,
             "status": raw_status,
@@ -107,6 +173,8 @@ class ApplicationControlService:
             "background_degraded_workers": degraded_workers,
             "paused": paused,
             "display": display,
+            "runtime_state": runtime_state or "legacy",
+            "live_eligible": live_eligible,
         }
 
     def _background_health_state(self) -> tuple[str, list[str]]:
@@ -154,17 +222,12 @@ class ApplicationControlService:
         return "healthy", []
 
     def is_collection_active(self) -> bool:
-        """Return whether the collector is actively observing right now.
-
-        This intentionally follows runtime capability rather than persisted
-        display status, which can lag a resume heartbeat by a few seconds.
-        The privacy gate is not re-read here: collector startup already passes
-        that gate, and a later gate loss is converted by the collector loop into
-        durable user pause. Avoiding that re-read keeps this one-second desktop
-        projection free of installation-metadata disk I/O.
-        """
+        """Return the AppRuntime-authoritative live eligibility projection."""
 
         try:
+            liveness = self._collection_liveness()
+            if liveness:
+                return bool(liveness.get("live_eligible"))
             if settings_api.is_user_paused():
                 return False
             if self.maintenance.operation_active() or self.maintenance.recovery_blocked():
@@ -271,6 +334,34 @@ class ApplicationControlService:
             }
 
     def toggle_collection(self) -> dict[str, Any]:
+        liveness = self._collection_liveness()
+        if liveness:
+            state = str(liveness.get("state") or "stopped")
+            if state == "active":
+                result = self.pause_collection_now()
+                if not result.get("ok"):
+                    return result
+                return self.get_collection_status()
+            if state in {"paused", "stopped"}:
+                result = self.start_collection_after_privacy_gate()
+                if not result.get("ok"):
+                    return result
+                settings_api.set_user_paused(False)
+                return self.get_collection_status()
+            if state == "starting":
+                return {"ok": False, "error": "采集器正在启动，请稍后重试"}
+            if state == "held":
+                return {
+                    "ok": False,
+                    "error": DATABASE_RECOVERY_ERROR,
+                    "message": "数据库维护进行中，暂不能切换记录状态",
+                }
+            return {
+                "ok": False,
+                "error": "collector_recovery_required",
+                "message": "采集器状态尚未恢复，请重启应用后重试",
+            }
+
         status = self.get_collection_status()
         raw_status = str(status.get("status") or "")
         if bool(status.get("paused")) or raw_status != "running":

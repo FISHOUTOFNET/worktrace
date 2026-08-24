@@ -34,6 +34,7 @@ class PageReadContext:
     report_generations: dict[DataGenerationNamespace, int]
     runtime_consistent: bool
     needs_full_refresh: bool
+    collection_live_eligible: bool = True
     snapshot_cache: dict[tuple[str, str], Any] = field(default_factory=dict)
     day_projection_cache: dict[str, Any] = field(default_factory=dict)
 
@@ -136,6 +137,7 @@ def _log_mismatch_once(
 def page_read_scope(
     *,
     allow_unpersisted_runtime: bool = False,
+    collection_live_eligible: bool = True,
 ) -> Iterator[PageReadContext]:
     """Bind one verified query-only SQLite snapshot and runtime sample.
 
@@ -143,6 +145,11 @@ def page_read_scope(
     such as realtime Statistics that can safely project a stable transient
     runtime sample without creating a durable activity row. The default keeps
     the stricter runtime/SQLite ownership contract used by all other pages.
+
+    ``collection_live_eligible`` is supplied by AppRuntime. When false, the
+    request deliberately binds a durable-only runtime sample even if SQLite
+    still contains a stale open row. This is the fail-closed gate shared by
+    Overview, Timeline, Details, Statistics and point-in-time export.
     """
 
     existing = current_page_read_context()
@@ -151,81 +158,113 @@ def page_read_scope(
         return
 
     database_key = get_db_key()
-    accepted: tuple[Any, RuntimeActivitySample, dict, int | None] | None = None
-    last_sample: RuntimeActivitySample | None = None
-    last_open_id: int | None = None
-    last_generations: dict[DataGenerationNamespace, int] = {}
-
-    for _attempt in range(_MAX_RUNTIME_RETRIES + 1):
-        sample_a = sample_runtime_activity_state(database_key=database_key)
+    if collection_live_eligible is False:
         conn = _open_query_snapshot()
         try:
             generations, open_id = _snapshot_facts(conn)
             replacement_epoch = int(
                 generations.get(DataGenerationNamespace.DATABASE_REPLACEMENT, 0)
             )
-            sample_b = sample_runtime_activity_state(database_key=database_key)
-            if _samples_match(
-                sample_a,
-                sample_b,
+            sample = sample_runtime_activity_state(database_key=database_key)
+            runtime_sample = RuntimeActivitySample(
+                snapshot=None,
+                revision=int(sample.revision),
                 database_key=database_key,
                 replacement_epoch=replacement_epoch,
-                open_activity_id=open_id,
-                allow_unpersisted_runtime=allow_unpersisted_runtime,
-            ):
-                accepted = (conn, sample_b, generations, open_id)
-                break
-            last_sample = sample_b
-            last_open_id = open_id
-            last_generations = generations
+            )
+            context = PageReadContext(
+                conn=conn,
+                database_key=database_key,
+                runtime_sample=runtime_sample,
+                verified_open_activity_id=open_id if open_id != -1 else None,
+                replacement_epoch=replacement_epoch,
+                report_generations=generations,
+                runtime_consistent=open_id != -1,
+                needs_full_refresh=open_id == -1,
+                collection_live_eligible=False,
+            )
         except Exception:
             conn.rollback()
             conn.close()
             raise
-        conn.rollback()
-        conn.close()
-
-    if accepted is None:
-        conn = _open_query_snapshot()
-        generations, open_id = _snapshot_facts(conn)
-        replacement_epoch = int(
-            generations.get(DataGenerationNamespace.DATABASE_REPLACEMENT, 0)
-        )
-        sample = last_sample or sample_runtime_activity_state(
-            database_key=database_key
-        )
-        _log_mismatch_once(sample, last_open_id, replacement_epoch)
-        runtime_sample = RuntimeActivitySample(
-            snapshot=None,
-            revision=int(sample.revision),
-            database_key=database_key,
-            replacement_epoch=replacement_epoch,
-        )
-        context = PageReadContext(
-            conn=conn,
-            database_key=database_key,
-            runtime_sample=runtime_sample,
-            verified_open_activity_id=open_id if open_id != -1 else None,
-            replacement_epoch=replacement_epoch,
-            report_generations=generations or last_generations,
-            runtime_consistent=False,
-            needs_full_refresh=True,
-        )
     else:
-        conn, runtime_sample, generations, open_id = accepted
-        replacement_epoch = int(
-            generations.get(DataGenerationNamespace.DATABASE_REPLACEMENT, 0)
-        )
-        context = PageReadContext(
-            conn=conn,
-            database_key=database_key,
-            runtime_sample=runtime_sample,
-            verified_open_activity_id=open_id,
-            replacement_epoch=replacement_epoch,
-            report_generations=generations,
-            runtime_consistent=True,
-            needs_full_refresh=False,
-        )
+        accepted: tuple[Any, RuntimeActivitySample, dict, int | None] | None = None
+        last_sample: RuntimeActivitySample | None = None
+        last_open_id: int | None = None
+        last_generations: dict[DataGenerationNamespace, int] = {}
+
+        for _attempt in range(_MAX_RUNTIME_RETRIES + 1):
+            sample_a = sample_runtime_activity_state(database_key=database_key)
+            conn = _open_query_snapshot()
+            try:
+                generations, open_id = _snapshot_facts(conn)
+                replacement_epoch = int(
+                    generations.get(DataGenerationNamespace.DATABASE_REPLACEMENT, 0)
+                )
+                sample_b = sample_runtime_activity_state(database_key=database_key)
+                if _samples_match(
+                    sample_a,
+                    sample_b,
+                    database_key=database_key,
+                    replacement_epoch=replacement_epoch,
+                    open_activity_id=open_id,
+                    allow_unpersisted_runtime=allow_unpersisted_runtime,
+                ):
+                    accepted = (conn, sample_b, generations, open_id)
+                    break
+                last_sample = sample_b
+                last_open_id = open_id
+                last_generations = generations
+            except Exception:
+                conn.rollback()
+                conn.close()
+                raise
+            conn.rollback()
+            conn.close()
+
+        if accepted is None:
+            conn = _open_query_snapshot()
+            generations, open_id = _snapshot_facts(conn)
+            replacement_epoch = int(
+                generations.get(DataGenerationNamespace.DATABASE_REPLACEMENT, 0)
+            )
+            sample = last_sample or sample_runtime_activity_state(
+                database_key=database_key
+            )
+            _log_mismatch_once(sample, last_open_id, replacement_epoch)
+            runtime_sample = RuntimeActivitySample(
+                snapshot=None,
+                revision=int(sample.revision),
+                database_key=database_key,
+                replacement_epoch=replacement_epoch,
+            )
+            context = PageReadContext(
+                conn=conn,
+                database_key=database_key,
+                runtime_sample=runtime_sample,
+                verified_open_activity_id=open_id if open_id != -1 else None,
+                replacement_epoch=replacement_epoch,
+                report_generations=generations or last_generations,
+                runtime_consistent=False,
+                needs_full_refresh=True,
+                collection_live_eligible=True,
+            )
+        else:
+            conn, runtime_sample, generations, open_id = accepted
+            replacement_epoch = int(
+                generations.get(DataGenerationNamespace.DATABASE_REPLACEMENT, 0)
+            )
+            context = PageReadContext(
+                conn=conn,
+                database_key=database_key,
+                runtime_sample=runtime_sample,
+                verified_open_activity_id=open_id,
+                replacement_epoch=replacement_epoch,
+                report_generations=generations,
+                runtime_consistent=True,
+                needs_full_refresh=False,
+                collection_live_eligible=True,
+            )
 
     token = _CURRENT_PAGE_READ_CONTEXT.set(context)
     try:

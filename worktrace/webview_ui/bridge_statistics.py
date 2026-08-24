@@ -41,6 +41,35 @@ _STATISTICS_EXPORT_ERROR_MESSAGES = {
 class StatisticsBridgeMixin:
     """Statistics / Export bridge methods."""
 
+    def _collection_live_eligible(self) -> bool:
+        runtime = self._runtime()
+        reader = getattr(runtime, "collection_liveness_snapshot", None)
+        if not callable(reader):
+            return True
+        try:
+            return bool(dict(reader()).get("live_eligible"))
+        except Exception:
+            return False
+
+    def _statistics_view_model(self, date_from, date_to, project_id):
+        live_method = getattr(
+            self._services.statistics,
+            "get_statistics_export_view_model_live",
+            None,
+        )
+        if callable(live_method):
+            return live_method(
+                date_from,
+                date_to,
+                project_id,
+                collection_live_eligible=self._collection_live_eligible(),
+            )
+        return self._services.statistics.get_statistics_export_view_model(
+            date_from,
+            date_to,
+            project_id,
+        )
+
     def get_statistics_export_summary(self, date_from, date_to, project_id=None) -> dict[str, Any]:
         """Reject non-string transport values, including bool, before the API."""
         try:
@@ -53,12 +82,11 @@ class StatisticsBridgeMixin:
                 return {"ok": False, "error": "请选择有效日期", "summary": None}
             if project_id is not None and not isinstance(project_id, (str, int)):
                 return {"ok": False, "error": "请选择有效项目", "summary": None}
-            if project_id in (None, ""):
-                envelope = self._services.statistics.get_statistics_export_view_model(date_from, date_to)
-            else:
-                envelope = self._services.statistics.get_statistics_export_view_model(
-                    date_from, date_to, project_id
-                )
+            envelope = self._statistics_view_model(
+                date_from,
+                date_to,
+                None if project_id in (None, "") else project_id,
+            )
             return {
                 "ok": True,
                 "summary": envelope["summary"],
@@ -139,18 +167,30 @@ class StatisticsBridgeMixin:
                     "cancelled": False,
                 }
 
-            try:
-                prepare = self._services.statistics.prepare_statistics_csv
-            except AttributeError:
-                return self._legacy_statistics_export(
-                    date_from, date_to, revision, project_id
-                )
-
-            prepared = prepare(
-                date_from,
-                date_to,
-                None if project_id in (None, "") else project_id,
+            prepare_live = getattr(
+                self._services.statistics,
+                "prepare_statistics_csv_live",
+                None,
             )
+            if callable(prepare_live):
+                prepared = prepare_live(
+                    date_from,
+                    date_to,
+                    None if project_id in (None, "") else project_id,
+                    collection_live_eligible=self._collection_live_eligible(),
+                )
+            else:
+                try:
+                    prepare = self._services.statistics.prepare_statistics_csv
+                except AttributeError:
+                    return self._legacy_statistics_export(
+                        date_from, date_to, revision, project_id
+                    )
+                prepared = prepare(
+                    date_from,
+                    date_to,
+                    None if project_id in (None, "") else project_id,
+                )
             output_path = self._choose_csv_save_path()
             if output_path is None:
                 return {"ok": False, "cancelled": True, "error": "已取消导出"}
