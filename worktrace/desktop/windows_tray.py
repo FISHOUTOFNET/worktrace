@@ -197,9 +197,11 @@ class WindowsTrayHost:
         restart_delay = self._RESTART_INITIAL_SECONDS
         ever_ready = False
         current_thread = threading.current_thread()
+        generation = 0
         try:
             while not self._stop_requested.is_set():
                 unexpected_exit = False
+                generation += 1
                 try:
                     import win32api
                     import win32con
@@ -215,7 +217,10 @@ class WindowsTrayHost:
                         win32con.WM_ENDSESSION: self._on_end_session,
                         self._taskbar_created: self._on_taskbar_created,
                     }
-                    class_name = f"WorkTraceTrayHost_{id(self)}"
+                    # Registered Win32 classes survive window destruction for the
+                    # process lifetime. A recovery attempt therefore needs a new
+                    # class name instead of re-registering the previous one.
+                    class_name = f"WorkTraceTrayHost_{id(self)}_{generation}"
                     wc = win32gui.WNDCLASS()
                     wc.hInstance = win32api.GetModuleHandle(None)
                     wc.lpszClassName = class_name
