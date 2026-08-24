@@ -236,25 +236,30 @@ test("cached presentation projection cannot bypass an expired runtime lease", ()
 
   assert.equal(acceptRefresh(true, "live-1"), true);
   const cachedClock = App.liveRuntimeStore.get().liveClock;
-  assert.equal(App.computeClockDurationNow(cachedClock, nowValue()), 110);
+  assert.equal(App.projectLiveClockDurationNow(cachedClock, nowValue()), 110);
 
   advance(10001);
   assert.equal(
     App.computeClockDurationNow(cachedClock, nowValue()),
+    120,
+    "pure clock math must remain independent from runtime freshness"
+  );
+  assert.equal(
+    App.projectLiveClockDurationNow(cachedClock, nowValue()),
     null,
     "cache rerender must not mint new seconds after freshness expiry"
   );
 
   assert.equal(acceptRefresh(true, "live-2"), true);
   assert.equal(
-    App.computeClockDurationNow(App.liveRuntimeStore.get().liveClock, nowValue()),
+    App.projectLiveClockDurationNow(App.liveRuntimeStore.get().liveClock, nowValue()),
     null,
     "heartbeat refresh alone must not re-authorize presentation projection"
   );
 
   assert.equal(acceptPage(true, "page-live"), true);
   assert.equal(
-    App.computeClockDurationNow(App.liveRuntimeStore.get().liveClock, nowValue()),
+    App.projectLiveClockDurationNow(App.liveRuntimeStore.get().liveClock, nowValue()),
     110,
     "fresh authoritative page model may re-authorize projection"
   );
