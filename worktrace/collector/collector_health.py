@@ -84,7 +84,7 @@ def begin_runtime_invocation(generation: int) -> None:
 
 
 def record_runtime_status(status: str) -> None:
-    """Project a cheap process-local status without touching SQLite."""
+    """Project a cheap process-local status without durable I/O."""
 
     value = str(status or "").strip().lower() or "unknown"
     with _PROGRESS_LOCK:
@@ -114,7 +114,7 @@ def runtime_progress_snapshot() -> dict[str, object]:
         }
 
 
-def _note_successful_runtime_progress(at_time: str) -> None:
+def _record_successful_runtime_progress(at_time: str) -> None:
     with _PROGRESS_LOCK:
         _RUNTIME_PROGRESS.last_successful_observation_at = str(at_time or "")
         _RUNTIME_PROGRESS.last_success_monotonic = time.monotonic()
@@ -153,7 +153,7 @@ def record_collector_started(at_time: str | None = None) -> None:
 
 def record_successful_observation(at_time: str | None = None) -> None:
     at = at_time or now_str()
-    _note_successful_runtime_progress(at)
+    _record_successful_runtime_progress(at)
     state = _runtime_state()
     with _STATE_LOCK:
         recovered = (

@@ -53,8 +53,15 @@ def _safe_recovery_point(
 
     candidates: list[datetime] = []
     preferred_dt = _parse_time(preferred_end_time)
-    if preferred_dt is not None and start_dt <= preferred_dt <= now_dt:
-        candidates.append(preferred_dt)
+    if preferred_dt is not None:
+        if preferred_dt > now_dt:
+            return (
+                fallback_now,
+                max(0, int((now_dt - start_dt).total_seconds())),
+                STATUS_ERROR,
+            )
+        if start_dt <= preferred_dt:
+            candidates.append(preferred_dt)
 
     try:
         persisted_seconds = max(0, int(row["duration_seconds"] or 0))

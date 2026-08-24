@@ -26,6 +26,7 @@ from ..services.project_ownership_service import (
     clear_ownership_state,
 )
 from ..services.runtime_activity_state_service import clear_runtime_activity_state
+from .collector_failure_policy import classify_collector_failure
 from .decision_trace import (
     CollectorDecisionTrace,
     DecisionTraceRecorder,
@@ -88,6 +89,7 @@ class ActivitySessionRecorder:
         default=NULL_DECISION_TRACE_RECORDER
     )
     _session_serial: int = field(default=0, init=False, repr=False)
+    _persistence_retry_blocked: bool = field(default=False, init=False, repr=False)
 
     def observe(
         self,
@@ -196,6 +198,7 @@ class ActivitySessionRecorder:
         self.persisted_activity_id = None
         self.persisted_checkpoint_seconds = 0
         self.checkpoint_on_next_observation = False
+        self._persistence_retry_blocked = False
         self.project_ownership_state = clear_ownership_state()
         self._session_serial += 1
         self.clear_snapshot()
@@ -270,6 +273,7 @@ class ActivitySessionRecorder:
         self.persisted_activity_id = None
         self.persisted_checkpoint_seconds = 0
         self.checkpoint_on_next_observation = False
+        self._persistence_retry_blocked = False
         self.project_ownership_state = clear_ownership_state()
         self._session_serial += 1
         self.clear_snapshot()
@@ -297,6 +301,7 @@ class ActivitySessionRecorder:
         self.persisted_activity_id = None
         self.persisted_checkpoint_seconds = 0
         self.checkpoint_on_next_observation = False
+        self._persistence_retry_blocked = False
         self._begin_project_ownership(payload)
         if payload.get("status") == STATUS_NORMAL and midnight_project_id is not None:
             self._persist_midnight_anchor(midnight_project_id, at_time)
@@ -318,6 +323,7 @@ class ActivitySessionRecorder:
             self.current_payload is None
             or self.current_start_time is None
             or self.persisted_activity_id is not None
+            or self._persistence_retry_blocked
         ):
             return
         status = self.current_payload.get("status") or STATUS_NORMAL
@@ -332,11 +338,17 @@ class ActivitySessionRecorder:
             return
         elapsed = seconds_between(self.current_start_time, at_time)
         source = SOURCE_AUTO if status == STATUS_NORMAL else SOURCE_SYSTEM
-        activity_id = persist_open_activity(
-            start_time=self.current_start_time,
-            source=source,
-            payload=self.current_payload,
-        )
+        try:
+            activity_id = persist_open_activity(
+                start_time=self.current_start_time,
+                source=source,
+                payload=self.current_payload,
+            )
+        except Exception as exc:
+            if not classify_collector_failure(exc).retryable:
+                self._persistence_retry_blocked = True
+            raise
+        self._persistence_retry_blocked = False
         persisted_before = self.persisted_activity_id
         self.persisted_activity_id = activity_id
         self.persisted_checkpoint_seconds = 0
@@ -356,14 +368,21 @@ class ActivitySessionRecorder:
             self.current_payload is None
             or self.current_start_time is None
             or self.persisted_activity_id is not None
+            or self._persistence_retry_blocked
         ):
             return
-        activity_id = persist_midnight_anchor(
-            start_time=self.current_start_time,
-            source=SOURCE_AUTO,
-            payload=self.current_payload,
-            project_id=project_id,
-        )
+        try:
+            activity_id = persist_midnight_anchor(
+                start_time=self.current_start_time,
+                source=SOURCE_AUTO,
+                payload=self.current_payload,
+                project_id=project_id,
+            )
+        except Exception as exc:
+            if not classify_collector_failure(exc).retryable:
+                self._persistence_retry_blocked = True
+            raise
+        self._persistence_retry_blocked = False
         self.persisted_activity_id = activity_id
         self.persisted_checkpoint_seconds = 0
         self.checkpoint_on_next_observation = True

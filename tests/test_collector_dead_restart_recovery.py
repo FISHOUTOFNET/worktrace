@@ -11,7 +11,6 @@ from worktrace.db import get_connection
 from worktrace.platforms.fake_adapter import FakeAdapter
 from worktrace.runtime import app_runtime
 from worktrace.runtime.app_runtime import AppRuntime
-from worktrace.services import settings_service
 
 pytestmark = [pytest.mark.db, pytest.mark.collector_runtime, pytest.mark.integration]
 
@@ -25,10 +24,9 @@ def test_dead_collector_reconciles_open_fact_before_replacement_thread_starts(
         adapter=FakeAdapter(),
     )
     runtime.owns_application_instance = True
-    settings_service.set_setting(
-        "collector_last_successful_observation_at",
-        "2026-06-18 09:10:00",
-    )
+    runtime._collector_generation = 7
+    collector_health.begin_runtime_invocation(7)
+    collector_health.record_successful_observation("2026-06-18 09:10:00")
     activity_id = activity_service.create_activity(
         "Word",
         "word.exe",
