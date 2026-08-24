@@ -137,8 +137,8 @@ class FDWorkWindowExecutor:
                 self._pending_condition.notify_all()
                 return
             if is_current:
-                # The command returned; only the callback/settlement phase missed
-                # the absolute deadline. This is recoverable and must not poison
+                # The command returned; only callback settlement missed the
+                # absolute deadline. This is recoverable and must not poison
                 # the single owner for subsequent commands.
                 request.finish(
                     FDWorkWindowCommandResult(
