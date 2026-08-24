@@ -358,6 +358,7 @@ def run_collector(
         machine = CollectorStateMachine()
         clock_tracker = ClockTracker()
         last_loop_time: str | None = None
+        last_safe_boundary_time: str | None = None
         heartbeat_counter = 0
         prune_counter = 0
         fatal_stop = False
@@ -410,6 +411,7 @@ def run_collector(
                         reset_command_id,
                         {"ok": True, "reset_pending": False},
                     )
+                    last_safe_boundary_time = now
                     last_loop_time = now
                     continue
 
@@ -425,6 +427,7 @@ def run_collector(
                         release_command_id,
                         {"ok": True, "release_pending": False},
                     )
+                    last_safe_boundary_time = now
                     last_loop_time = None
                     next_poll_deadline = time.monotonic() + POLL_CADENCE_SECONDS
                     continue
@@ -447,6 +450,7 @@ def run_collector(
                     hold_command_id,
                     {"ok": True, "hold_pending": False},
                 )
+                last_safe_boundary_time = now
                 last_loop_time = now
                 continue
 
@@ -461,6 +465,7 @@ def run_collector(
                     pause_command_id,
                     {"ok": True, "pause_pending": False},
                 )
+                last_safe_boundary_time = now
                 last_loop_time = now
                 next_poll_deadline = _sleep_until_next_poll(
                     stop_event,
@@ -475,25 +480,34 @@ def run_collector(
                 "idle_threshold_seconds",
                 DEFAULT_IDLE_THRESHOLD_SECONDS,
             )
+            clock_jump_threshold_seconds = get_int_setting(
+                "clock_jump_threshold_seconds",
+                300,
+            )
+            collector_stall_threshold_seconds = get_int_setting(
+                "collector_stall_threshold_seconds",
+                180,
+            )
             discontinuity = clock_tracker.observe(
                 now,
                 monotonic_now,
-                clock_jump_threshold_seconds=get_int_setting(
-                    "clock_jump_threshold_seconds",
-                    300,
-                ),
-                stall_threshold_seconds=get_int_setting(
-                    "collector_stall_threshold_seconds",
-                    180,
-                ),
+                clock_jump_threshold_seconds=clock_jump_threshold_seconds,
+                stall_threshold_seconds=collector_stall_threshold_seconds,
             )
             if discontinuity is not None:
                 _set_clipboard_capture_enabled(adapter, False)
                 clock_tracker.apply_discontinuity(machine, discontinuity)
                 collector_health.record_health_code(discontinuity.reason, now)
-                last_loop_time = now
+                last_safe_boundary_time = discontinuity.safe_end_time
+                last_loop_time = discontinuity.safe_end_time
                 next_poll_deadline = monotonic_now + POLL_CADENCE_SECONDS
                 continue
+
+            # This pre-sampling wall time is the latest boundary the Collector
+            # can prove safe before entering fallible/blocking observation work.
+            # A later success may advance it only after the post-sampling clock
+            # guard and state transition both complete.
+            last_safe_boundary_time = now
 
             prune_counter += 1
             if prune_counter >= 20:
@@ -514,6 +528,7 @@ def run_collector(
             if not privacy_gate_service.is_sensitive_runtime_allowed():
                 _set_clipboard_capture_enabled(adapter, False)
                 _pause_machine_then_expose(machine, now)
+                last_safe_boundary_time = now
                 next_poll_deadline = _sleep_until_next_poll(
                     stop_event,
                     control,
@@ -525,6 +540,7 @@ def run_collector(
             if get_bool_setting("user_paused", False):
                 _set_clipboard_capture_enabled(adapter, False)
                 _pause_machine_then_expose(machine, now)
+                last_safe_boundary_time = now
                 next_poll_deadline = _sleep_until_next_poll(
                     stop_event,
                     control,
@@ -535,7 +551,6 @@ def run_collector(
 
             phase = "active_window"
             active_window = adapter.get_active_window()
-            observation_time = now_str()
             phase = "clipboard"
             capture_enabled = clipboard_service.is_capture_enabled()
             _set_clipboard_capture_enabled(adapter, capture_enabled)
@@ -544,12 +559,43 @@ def run_collector(
             idle_seconds = adapter.get_idle_seconds()
             idle_threshold = max(1, idle_threshold_seconds)
 
+            decision = None
+            if idle_seconds < idle_threshold:
+                phase = "privacy"
+                decision = privacy_service.evaluate_exclusion(active_window)
+
+            # The complete observation must fit inside the same ClockTracker
+            # stall/jump budget before it gains authority to advance durable
+            # activity time. A late result is discarded before transition.
+            observation_time = now_str()
+            observation_monotonic = time.monotonic()
+            phase = "observation_commit_guard"
+            discontinuity = clock_tracker.observe(
+                observation_time,
+                observation_monotonic,
+                clock_jump_threshold_seconds=clock_jump_threshold_seconds,
+                stall_threshold_seconds=collector_stall_threshold_seconds,
+            )
+            if discontinuity is not None:
+                _set_clipboard_capture_enabled(adapter, False)
+                clock_tracker.apply_discontinuity(machine, discontinuity)
+                collector_health.record_health_code(
+                    discontinuity.reason,
+                    observation_time,
+                )
+                last_safe_boundary_time = discontinuity.safe_end_time
+                last_loop_time = discontinuity.safe_end_time
+                next_poll_deadline = observation_monotonic + POLL_CADENCE_SECONDS
+                continue
+            if stop_event.is_set():
+                break
+
             phase = "transition"
             if idle_seconds >= idle_threshold:
                 machine.transition_to("idle", at_time=observation_time)
+                last_safe_boundary_time = observation_time
             else:
-                phase = "privacy"
-                decision = privacy_service.evaluate_exclusion(active_window)
+                assert decision is not None
                 if decision.refresh_required:
                     folder_index_service.request_refresh_for_enabled_rules(
                         include_excluded=True
@@ -559,15 +605,16 @@ def run_collector(
                         "privacy_resolution_pending",
                         observation_time,
                     )
-                phase = "transition"
                 if decision.excluded:
                     machine.transition_to("excluded", at_time=observation_time)
+                    last_safe_boundary_time = observation_time
                 else:
                     machine.transition_to(
                         "recording",
                         active_window,
                         at_time=observation_time,
                     )
+                    last_safe_boundary_time = observation_time
                     for event in clipboard_events:
                         machine.record_clipboard_event(
                             event,
@@ -648,13 +695,14 @@ def run_collector(
             )
         except Exception:
             logging.exception("collector shutdown health persistence failed")
+    terminal_time = last_safe_boundary_time or last_loop_time or now_str()
     try:
         if held:
             machine.reset_runtime_state("shutdown_during_maintenance_hold")
         elif fatal_stop:
-            machine.stop(at_time=now_str(), reason="fatal_collector_stop")
+            machine.stop(at_time=terminal_time, reason="fatal_collector_stop")
         else:
-            machine.transition_to("stopped", at_time=now_str())
+            machine.transition_to("stopped", at_time=terminal_time)
     finally:
         try:
             collector_health.record_collector_stopped(now_str())
