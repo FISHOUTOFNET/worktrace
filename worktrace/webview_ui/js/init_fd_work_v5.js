@@ -77,6 +77,7 @@
 
     var runtimeState = null;
     var RUNTIME_FRESHNESS_LEASE_MS = 10000;
+    var RUNTIME_SOURCE_FUTURE_SKEW_MS = 2000;
     var runtimeLeaseExpired = false;
     var runtimeRebasePending = false;
     var LIVE_PROJECTION_PAGES = Object.freeze(["overview", "timeline", "statistics"]);
@@ -117,15 +118,30 @@
         return !!(clock && clock.is_live === true);
     }
 
+    function expireRuntimeLease() {
+        runtimeLeaseExpired = true;
+        runtimeRebasePending = true;
+        App.liveClockContractRefreshRequested = true;
+        return false;
+    }
+
     function runtimeFresh(runtime, nowMs) {
         if (!runtimeLiveEligible(runtime)) return true;
         var acceptedAt = nonNegativeInt(runtime && runtime.acceptedAtEpochMs, 0);
-        if (!acceptedAt) return true;
+        var clock = runtime && runtime.liveClock;
+        var sampledAt = nonNegativeInt(clock && clock.sampled_at_epoch_ms, 0);
         var now = nonNegativeInt(nowMs, Date.now());
-        if (Math.max(0, now - acceptedAt) <= RUNTIME_FRESHNESS_LEASE_MS) return true;
-        runtimeLeaseExpired = true;
-        runtimeRebasePending = true;
-        return false;
+        if (!acceptedAt || !sampledAt) return expireRuntimeLease();
+        var receiptAge = now - acceptedAt;
+        var sourceAge = now - sampledAt;
+        if (receiptAge < 0 || receiptAge > RUNTIME_FRESHNESS_LEASE_MS) {
+            return expireRuntimeLease();
+        }
+        if (sourceAge < -RUNTIME_SOURCE_FUTURE_SKEW_MS
+            || sourceAge > RUNTIME_FRESHNESS_LEASE_MS) {
+            return expireRuntimeLease();
+        }
+        return true;
     }
 
     function runtimeProjectionAllowed(runtime, nowMs) {
@@ -139,6 +155,9 @@
         if (!runtimeLiveEligible(accepted)) {
             runtimeLeaseExpired = false;
             runtimeRebasePending = false;
+            return;
+        }
+        if (!runtimeFresh(accepted, accepted.acceptedAtEpochMs)) {
             return;
         }
         if (source === "page_model") {
@@ -443,6 +462,33 @@
         enumerable: true,
         get: function () { return liveRuntimeStore.get(); }
     });
+
+    function liveClockProjectionAllowed(clock, nowMs) {
+        var acceptedClock = App.validateLiveClock(clock);
+        if (!acceptedClock || acceptedClock.is_live !== true) return true;
+        var page = App.currentPage || "overview";
+        if (!pageUsesLiveProjection(page)) return false;
+        var runtime = liveRuntimeStore.get();
+        if (!runtime || runtime.page !== page) return false;
+        if (!runtimeProjectionAllowed(runtime, nowMs)) return false;
+        var runtimeClock = App.validateLiveClock(runtime.liveClock);
+        if (!runtimeClock || runtimeClock.is_live !== true) return false;
+        return acceptedClock.display_span_id === runtimeClock.display_span_id
+            && acceptedClock.stable_live_key_hash === runtimeClock.stable_live_key_hash;
+    }
+    App.liveClockProjectionAllowed = liveClockProjectionAllowed;
+
+    var computeClockDurationRaw = App.computeClockDurationNow;
+    if (typeof computeClockDurationRaw === "function") {
+        App.computeClockDurationNow = function (clock, nowMs) {
+            var acceptedClock = App.validateLiveClock(clock);
+            if (acceptedClock && acceptedClock.is_live === true
+                && !liveClockProjectionAllowed(acceptedClock, nowMs)) {
+                return null;
+            }
+            return computeClockDurationRaw(clock, nowMs);
+        };
+    }
 
     function resetClientGeneration(reason) {
         if (App.requestCoordinator) App.requestCoordinator.bumpDataEpoch();
@@ -891,7 +937,9 @@
         if (App.shellVisible === false || App.heartbeatTimer !== null) return;
         App.heartbeatTimer = setInterval(function () {
             try { App.applyLocalTicker(); } catch (error) {}
-            try { runRevisionCheck(); } catch (error) {}
+            try {
+                Promise.resolve(runRevisionCheck()).catch(function () {});
+            } catch (error) {}
         }, App.HEARTBEAT_INTERVAL_MS);
     }
     App.startHeartbeat = startHeartbeat;
@@ -906,19 +954,28 @@
     App.shellVisible = true;
     function setShellVisibility(visible) {
         visible = visible === true;
-        if (App.shellVisible === visible) return Promise.resolve();
+        if (App.shellVisible === visible) {
+            if (visible && App.heartbeatTimer === null) startHeartbeat();
+            return Promise.resolve();
+        }
         App.shellVisible = visible;
         if (!visible) {
             stopHeartbeat();
             return Promise.resolve();
         }
-        return Promise.resolve(
-            typeof App.runRevisionCheck === "function"
+        var revisionPromise;
+        try {
+            revisionPromise = typeof App.runRevisionCheck === "function"
                 ? App.runRevisionCheck()
-                : null
-        ).then(function () {
-            if (App.shellVisible === true) startHeartbeat();
-        });
+                : null;
+        } catch (error) {
+            revisionPromise = Promise.reject(error);
+        }
+        return Promise.resolve(revisionPromise)
+            .catch(function () {})
+            .then(function () {
+                if (App.shellVisible === true) startHeartbeat();
+            });
     }
     App.setShellVisibility = setShellVisibility;
 
