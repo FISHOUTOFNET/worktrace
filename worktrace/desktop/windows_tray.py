@@ -44,6 +44,7 @@ class WindowsTrayHost:
         self._active_icon_handle = None
         self._inactive_icon_handle = None
         self._icon_handle = None
+        self._icon_registered = False
         self._collection_active = False
         self._taskbar_created = 0
         self._deleted = False
@@ -51,7 +52,7 @@ class WindowsTrayHost:
     def start(self) -> bool:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
-                return self._ready.is_set() and not self._failed.is_set()
+                return self.can_restore_window()
             self._thread = None
             if not self._icon_path.is_file():
                 logger.error("tray icon missing: %s", self._icon_path)
@@ -61,6 +62,7 @@ class WindowsTrayHost:
             self._failed.clear()
             self._stop_requested.clear()
             self._session_end_requested.clear()
+            self._icon_registered = False
             self._thread = threading.Thread(
                 target=self._run,
                 name="WorkTraceWindowsTray",
@@ -70,15 +72,26 @@ class WindowsTrayHost:
         if not self._ready.wait(5.0):
             logger.error("tray initialization timed out")
             self._failed.set()
-        return self.is_running()
+        return self.can_restore_window()
 
     def is_running(self) -> bool:
+        """Compatibility alias for the user-visible restore capability."""
+
+        return self.can_restore_window()
+
+    def can_restore_window(self) -> bool:
+        """Return True only while Explorer has a live restore entry point."""
+
         with self._lock:
             return bool(
                 self._thread is not None
                 and self._thread.is_alive()
                 and self._ready.is_set()
                 and not self._failed.is_set()
+                and not self._stop_requested.is_set()
+                and self._hwnd
+                and self._icon_handle
+                and self._icon_registered
             )
 
     def stop(self) -> None:
@@ -110,10 +123,11 @@ class WindowsTrayHost:
                 return
             self._collection_active = active
             hwnd = self._hwnd
+            registered = self._icon_registered
             icon = (
                 self._active_icon_handle if active else self._inactive_icon_handle
             )
-            if not hwnd or not icon:
+            if not hwnd or not icon or not registered:
                 return
             self._icon_handle = icon
         try:
@@ -127,7 +141,8 @@ class WindowsTrayHost:
         with self._lock:
             hwnd = self._hwnd
             icon = self._icon_handle
-        if not hwnd or not icon:
+            registered = self._icon_registered
+        if not hwnd or not icon or not registered:
             return
         import win32gui
 
@@ -162,17 +177,24 @@ class WindowsTrayHost:
     def _add_icon(self) -> None:
         import win32gui
 
-        self._deleted = False
+        with self._lock:
+            self._deleted = False
+            self._icon_registered = False
         win32gui.Shell_NotifyIcon(win32gui.NIM_ADD, self._notify_data())
+        with self._lock:
+            self._icon_registered = True
 
     def _delete_icon(self) -> None:
-        if self._deleted or not self._hwnd:
-            return
-        self._deleted = True
+        with self._lock:
+            self._icon_registered = False
+            if self._deleted or not self._hwnd:
+                return
+            self._deleted = True
+            hwnd = self._hwnd
         try:
             import win32gui
 
-            win32gui.Shell_NotifyIcon(win32gui.NIM_DELETE, (self._hwnd, 0))
+            win32gui.Shell_NotifyIcon(win32gui.NIM_DELETE, (hwnd, 0))
         except Exception:
             logger.warning("tray icon deletion failed", exc_info=True)
 
@@ -182,6 +204,7 @@ class WindowsTrayHost:
             self._active_icon_handle = None
             self._inactive_icon_handle = None
             self._icon_handle = None
+            self._icon_registered = False
         try:
             import win32gui
 
@@ -292,6 +315,7 @@ class WindowsTrayHost:
         finally:
             with self._lock:
                 self._hwnd = None
+                self._icon_registered = False
                 if self._thread is current_thread:
                     self._thread = None
 
@@ -378,6 +402,10 @@ class WindowsTrayHost:
         return 0
 
     def _on_taskbar_created(self, _hwnd, _msg, _wparam, _lparam):
+        with self._lock:
+            # Explorer has rebuilt the notification area, so the previous
+            # registration is no longer a valid restore entry point.
+            self._icon_registered = False
         try:
             self._add_icon()
         except Exception:
