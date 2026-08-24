@@ -472,12 +472,12 @@
         var acceptedClock = App.validateLiveClock(clock);
         if (!acceptedClock || acceptedClock.is_live !== true) return true;
         var now = nonNegativeInt(nowMs, Date.now());
-        if (!sourceClockFresh(acceptedClock, now)) return false;
         var page = App.currentPage || "overview";
         if (!pageUsesLiveProjection(page)) return false;
         var runtime = liveRuntimeStore.get();
         if (!runtime || runtime.page !== page) return false;
         if (!runtimeProjectionAllowed(runtime, now)) return false;
+        if (!sourceClockFresh(acceptedClock, now)) return expireRuntimeLease();
         var runtimeClock = App.validateLiveClock(runtime.liveClock);
         if (!runtimeClock || runtimeClock.is_live !== true) return false;
         return acceptedClock.display_span_id === runtimeClock.display_span_id
@@ -943,7 +943,8 @@
         App.heartbeatTimer = setInterval(function () {
             try { App.applyLocalTicker(); } catch (error) {}
             try {
-                Promise.resolve(runRevisionCheck()).catch(function () {});
+                var revisionCheck = runRevisionCheck();
+                Promise.resolve(revisionCheck).catch(function () {});
             } catch (error) {}
         }, App.HEARTBEAT_INTERVAL_MS);
     }
