@@ -2,10 +2,8 @@
 name: Apply statistics quick-range fix
 
 on:
-  push:
-    branches: [fix/pre-release-ui-interaction-lifecycle]
-    paths:
-      - .github/workflows/apply-statistics-fix.yml
+  pull_request:
+    types: [synchronize]
 
 permissions:
   contents: write
@@ -15,10 +13,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
-      - name: Check out branch
+      - name: Check out exact PR head
         uses: actions/checkout@v6
         with:
-          ref: fix/pre-release-ui-interaction-lifecycle
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: true
           clean: true
           show-progress: false
