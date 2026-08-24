@@ -21,13 +21,51 @@ jobs:
           clean: true
           show-progress: false
 
-      - name: Apply verified Statistics payload
+      - name: Apply verified Statistics payload and contract updates
         shell: pwsh
         run: |
           $payload = (Get-Content -LiteralPath '_tmp_stats_b64.txt' -Raw).Trim()
           $bytes = [Convert]::FromBase64String($payload)
           [IO.File]::WriteAllBytes('worktrace/webview_ui/js/statistics.js', $bytes)
+          $blob = (git hash-object worktrace/webview_ui/js/statistics.js).Trim()
+          if ($blob -ne '68b7986de2e86913fccb529449aa0fa55de9330b') {
+            throw "Unexpected Statistics blob: $blob"
+          }
+
+          @'
+          from pathlib import Path
+          path = Path('tests/webview/statistics_export_state.test.js')
+          source = path.read_text(encoding='utf-8')
+          old = '''  assert.equal(element("statistics-month-btn").getAttribute("aria-pressed"), "true");
+            assert.equal(element("statistics-all-btn").getAttribute("aria-pressed"), "false");'''
+          new = '''  assert.equal(element("statistics-month-btn").getAttribute("aria-pressed"), "false");
+            assert.equal(element("statistics-all-btn").getAttribute("aria-pressed"), "false");'''
+          if old not in source:
+              raise SystemExit('all-range custom assertion contract not found')
+          source = source.replace(old, new, 1)
+          old = '''test("applied manual dates derive shortcut highlighting without a custom mode", async () => {
+            const { App, element } = harness();
+            App.initStatisticsDefaults();
+            element("statistics-date-from").value = "2026-07-01";
+            element("statistics-date-to").value = "2026-07-17";
+            element("statistics-date-from").dispatch("change");
+            await App.applyStatisticsDraftSelection();
+            assert.equal(element("statistics-month-btn").getAttribute("aria-pressed"), "true");'''
+          new = '''test("applied manual dates remain custom even when matching a shortcut", async () => {
+            const { App, element } = harness();
+            App.initStatisticsDefaults();
+            element("statistics-date-from").value = "2026-07-01";
+            element("statistics-date-to").value = "2026-07-17";
+            element("statistics-date-from").dispatch("change");
+            await App.applyStatisticsDraftSelection();
+            assert.equal(element("statistics-month-btn").getAttribute("aria-pressed"), "false");'''
+          if old not in source:
+              raise SystemExit('manual matching shortcut contract not found')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8', newline='\n')
+          '@ | python -
+
           python scripts/sync_webview_asset_revisions.py --write
+          python scripts/sync_webview_asset_revisions.py --check
           node --check worktrace/webview_ui/js/statistics.js
           node --test tests/webview/statistics_quick_range_identity.test.js
           node --test tests/webview/statistics_export_state.test.js
