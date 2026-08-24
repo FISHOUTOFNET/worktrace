@@ -363,14 +363,14 @@ def run_collector(
         fatal_stop = False
         held = False
         logging.info("collector start")
-        collector_health.record_collector_started(now_str())
-        _normalize_poll_interval_setting()
-        _run_clipboard_maintenance_tick()
         next_poll_deadline = time.monotonic() + POLL_CADENCE_SECONDS
     except Exception as exc:
         disposition = classify_collector_failure(exc)
-        collector_health.record_fatal_failure("startup", disposition.code, now_str())
-        collector_health.record_collector_stopped(now_str())
+        try:
+            collector_health.record_fatal_failure("startup", disposition.code, now_str())
+            collector_health.record_collector_stopped(now_str())
+        except Exception:
+            logging.exception("collector startup failure health persistence failed")
         if startup_failed_event is not None:
             startup_failed_event.set()
         logging.error(
@@ -379,12 +379,23 @@ def run_collector(
         )
         return
 
+    # The startup handshake proves that the Collector execution loop exists.
+    # Fallible SQLite-backed health/settings maintenance is retried inside that
+    # loop so a five-second busy timeout cannot collide with AppRuntime's own
+    # five-second startup timeout and kill an otherwise recoverable Collector.
     if startup_ready_event is not None:
         startup_ready_event.set()
 
+    startup_runtime_pending = True
     while not stop_event.is_set():
-        phase = "loop"
+        phase = "startup_runtime" if startup_runtime_pending else "loop"
         try:
+            if startup_runtime_pending:
+                collector_health.record_collector_started(now_str())
+                _normalize_poll_interval_setting()
+                _run_clipboard_maintenance_tick()
+                startup_runtime_pending = False
+
             now = now_str()
 
             if held:
@@ -572,13 +583,25 @@ def run_collector(
         except Exception as exc:
             disposition = classify_collector_failure(exc)
             if not disposition.retryable:
-                collector_health.record_fatal_failure(
-                    phase,
-                    disposition.code,
-                    now_str(),
-                )
+                try:
+                    collector_health.record_fatal_failure(
+                        phase,
+                        disposition.code,
+                        now_str(),
+                    )
+                except Exception:
+                    logging.exception("collector fatal health persistence failed")
                 fatal_stop = True
                 break
+
+            if startup_runtime_pending:
+                logging.exception(
+                    "collector transient startup failure code=%s",
+                    disposition.code.value,
+                )
+                _wait_for_poll_delay(stop_event, control, POLL_CADENCE_SECONDS)
+                continue
+
             collector_health.record_transient_failure(
                 phase,
                 disposition.code,
@@ -597,11 +620,14 @@ def run_collector(
             except Exception as clip_exc:
                 clip_disposition = classify_collector_failure(clip_exc)
                 if not clip_disposition.retryable:
-                    collector_health.record_fatal_failure(
-                        "clipboard_fail_closed",
-                        clip_disposition.code,
-                        now_str(),
-                    )
+                    try:
+                        collector_health.record_fatal_failure(
+                            "clipboard_fail_closed",
+                            clip_disposition.code,
+                            now_str(),
+                        )
+                    except Exception:
+                        logging.exception("collector clipboard fatal health persistence failed")
                     fatal_stop = True
                     break
             next_poll_deadline = _sleep_until_next_poll(
@@ -614,11 +640,14 @@ def run_collector(
         _set_clipboard_capture_enabled(adapter, False)
     except Exception as exc:
         disposition = classify_collector_failure(exc)
-        collector_health.record_fatal_failure(
-            "clipboard_shutdown",
-            disposition.code,
-            now_str(),
-        )
+        try:
+            collector_health.record_fatal_failure(
+                "clipboard_shutdown",
+                disposition.code,
+                now_str(),
+            )
+        except Exception:
+            logging.exception("collector shutdown health persistence failed")
     try:
         if held:
             machine.reset_runtime_state("shutdown_during_maintenance_hold")
@@ -627,7 +656,10 @@ def run_collector(
         else:
             machine.transition_to("stopped", at_time=now_str())
     finally:
-        collector_health.record_collector_stopped(now_str())
+        try:
+            collector_health.record_collector_stopped(now_str())
+        except Exception:
+            logging.exception("collector stopped-state persistence failed")
     logging.info("collector stop")
 
 
