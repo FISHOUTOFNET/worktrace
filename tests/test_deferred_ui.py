@@ -45,11 +45,13 @@ def test_concurrent_open_requests_claim_one_initial_ui_bootstrap() -> None:
     shell = _Shell()
     assert gate.bind_shell(shell) is True
     assert gate.bind_shell(shell) is False
-    assert shell.show_calls == 0
+    # Binding the renderer created by the explicit OPEN request must preserve
+    # the pending activation intent instead of degrading to visibility only.
+    assert shell.show_calls == 1
 
     gate.request_open()
     gate.request_open()
-    assert shell.show_calls == 2
+    assert shell.show_calls == 3
     assert gate.wait_for_initial_request(timeout=0.01) is None
 
 
@@ -76,6 +78,7 @@ def test_exit_before_ui_creation_wakes_waiter_and_prevents_open() -> None:
     shell = _Shell()
     assert gate.bind_shell(shell) is True
     assert shell.exit_calls == 1
+    assert shell.show_calls == 0
 
     assert gate.request_exit() is False
     assert shell.exit_calls == 1

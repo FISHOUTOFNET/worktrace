@@ -243,11 +243,25 @@ class WindowsTrayHost:
             with self._lock:
                 self._hwnd = None
 
+    def _request_open_from_user(self, hwnd: int) -> object:
+        """Keep Explorer's explicit tray gesture in the foreground handoff path."""
+
+        try:
+            import win32gui
+
+            # TrackPopupMenu already requires this pattern. Do the same for every
+            # open command so the shell's immediate main-window activation runs
+            # while this process still owns the user-initiated foreground turn.
+            win32gui.SetForegroundWindow(hwnd)
+        except Exception:
+            logger.debug("tray foreground handoff preparation failed", exc_info=True)
+        return self._on_open()
+
     def _on_tray_message(self, hwnd, _msg, _wparam, lparam):
         import win32con
 
         if lparam == win32con.WM_LBUTTONDBLCLK:
-            self._on_open()
+            self._request_open_from_user(hwnd)
         elif lparam == win32con.WM_RBUTTONUP:
             self._show_menu(hwnd)
         return 0
@@ -277,10 +291,10 @@ class WindowsTrayHost:
         finally:
             win32gui.DestroyMenu(menu)
 
-    def _on_command(self, _hwnd, _msg, wparam, _lparam):
+    def _on_command(self, hwnd, _msg, wparam, _lparam):
         command = int(wparam) & 0xFFFF
         if command == self._CMD_OPEN:
-            self._on_open()
+            self._request_open_from_user(hwnd)
         elif command == self._CMD_EXIT:
             self._on_exit()
         return 0

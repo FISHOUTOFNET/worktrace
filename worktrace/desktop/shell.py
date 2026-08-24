@@ -182,19 +182,55 @@ class DesktopShellController:
             return True
 
     def show_window(self) -> bool:
-        """Accept an explicit request to reveal and activate the main window."""
+        """Reveal the main window and activate an already-visible window inline.
+
+        For a loaded visible Windows window, activation is attempted synchronously
+        so an explicit tray/helper/instance user gesture does not lose foreground
+        eligibility by first crossing the deferred window-action thread. A failed
+        inline activation is still queued for the ordinary bounded show/restore
+        retry, but False is returned so handoff callers do not hide their only
+        foreground window before activation has actually succeeded.
+        """
 
         with self._lock:
             if self.state is ShellState.EXITING:
                 return False
+            already_visible = self.state is ShellState.VISIBLE
             self.state = ShellState.VISIBLE
             self._activation_requested = True
             if not self._window_loaded:
                 self._show_when_loaded = True
                 return True
             self._show_when_loaded = False
-            self._schedule_show_locked()
+            immediate_activation = already_visible and sys.platform.startswith("win")
+            if not immediate_activation:
+                self._schedule_show_locked()
+                return True
+
+        with self._window_action_lock:
+            with self._lock:
+                if (
+                    self.state is not ShellState.VISIBLE
+                    or not self._window_loaded
+                ):
+                    return False
+            self._make_window_activatable()
+            activated = self._focus_native_window()
+
+        if activated:
+            with self._lock:
+                if self.state is ShellState.VISIBLE:
+                    self._activation_requested = False
+            self._set_webview_visibility(True)
             return True
+
+        with self._lock:
+            if (
+                self.state is ShellState.VISIBLE
+                and self._window_loaded
+            ):
+                self._schedule_show_locked()
+        return False
 
     def exit_application(self) -> bool:
         with self._lock:
@@ -469,16 +505,18 @@ class DesktopShellController:
             logger=logger,
         )
 
-    def _focus_native_window(self) -> None:
+    def _focus_native_window(self) -> bool:
         if not sys.platform.startswith("win"):
-            return
-        if not request_window_foreground(
+            return True
+        activated = request_window_foreground(
             self._window,
             fallback_title=PRODUCT_DISPLAY_NAME,
             restore=True,
             logger=logger,
-        ):
+        )
+        if not activated:
             logger.warning("desktop shell foreground activation was not accepted")
+        return activated
 
 
 __all__ = [
