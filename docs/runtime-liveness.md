@@ -31,11 +31,49 @@ codes. Database BUSY/LOCKED, maintenance gates and ordinary job failures must st
 inside the worker's own retry boundary whenever they can be classified there.
 No worker may create a parallel replacement thread for itself.
 
+Once a worker has SERVED, `AppRuntime` also owns a process-local monotonic progress
+lease declared by that worker's `WorkerSpec`. The independent progress watchdog
+may mark an alive worker degraded when it stops reporting progress beyond that
+lease, but it must never start a second owner while the original thread remains
+alive. Intentional maintenance pauses suspend the progress lease. A later health
+report from the same owner may restore RUNNING without replacing the thread.
+Process-local monotonic progress timestamps are diagnostic inputs only and are not
+part of the public worker-health payload.
+
 Folder-index startup reconciliation is an ordinary retryable worker iteration: it
 runs only after the database write gate and privacy gate allow the work. Startup
 recovery job discovery is likewise inside the recovery worker's own exception
 classification boundary, so SQLite contention is not promoted to an AppRuntime
 wrapper crash.
+
+## Collector observation authority
+
+Collector wall-clock samples are candidates, not automatically durable activity
+time. Before entering fallible or potentially blocking observation work, the
+Collector records its last safe wall-clock boundary. After the complete sample
+returns, it must pass the same `ClockTracker` monotonic stall/clock-discontinuity
+policy before any state transition may advance durable activity time.
+
+A late successful sample is discarded before transition. A late failure, fatal
+shutdown, or ordinary shutdown cannot close activity past the last safe boundary.
+The activity recorder and fact repository therefore remain unaware of Collector
+stall policy; they only receive observation times that the Collector has already
+authorized. A later discontinuity correction must not be relied upon to shrink a
+previously persisted duration.
+
+## WebView live projection authority
+
+Receiving a runtime envelope does not by itself grant another live-time lease.
+Live projection requires both a fresh client receipt and a fresh source clock
+sample, with materially future-dated source clocks failing closed. A stale
+refresh-state response may be observed for recovery coordination but cannot
+release a pending authoritative page rebase.
+
+All presentation paths share one live-projection capability. Cached Timeline,
+Overview or Statistics data may reuse durable values, but direct `Date.now()`
+clock projection is permitted only while the current runtime is fresh and the
+clock identity belongs to that runtime. Presentation code does not own freshness
+or rebase policy.
 
 ## Desktop restore capability
 
@@ -49,6 +87,13 @@ has not been requested.
 is true. It rechecks before the deferred native hide and immediately after the
 hide. If the tray entry disappears in that interval, the shell restores the main
 window instead of leaving the process inaccessible.
+
+A visible WebView shell must also keep its recovery heartbeat even when the first
+bridge-backed revision check after restore fails. Restore probing and heartbeat
+ownership are deliberately decoupled: revision failure remains fail-closed for
+runtime data, while the heartbeat stays alive so later bridge recovery can be
+detected. Promise rejection from a heartbeat revision probe is contained by the
+heartbeat loop and does not terminate the timer.
 
 Win32 Event wait wrappers distinguish `WAIT_OBJECT_0`, `WAIT_TIMEOUT`,
 `WAIT_FAILED` and unexpected return codes. Only `WAIT_TIMEOUT` is a normal false
