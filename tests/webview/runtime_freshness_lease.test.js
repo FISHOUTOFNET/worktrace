@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 const REPORT_DATE = "2026-08-24";
 
-function runtimeState(page, live, revision) {
+function runtimeState(page, live, revision, sampledAt = 100000) {
   return {
     ok: true,
     runtime: {
@@ -23,7 +23,7 @@ function runtimeState(page, live, revision) {
         live_eligible: live,
       },
       clock: {
-        sampled_at_epoch_ms: 100000,
+        sampled_at_epoch_ms: sampledAt,
         started_at_epoch_ms: 90000,
         elapsed_seconds_at_sample: 10,
         aggregate_base_seconds: 100,
@@ -119,6 +119,14 @@ function harness(initialPage = "overview") {
     validateLiveClock(value) {
       return value && typeof value === "object" ? value : null;
     },
+    computeClockDurationNow(clock, nowMs) {
+      if (!clock || clock.is_live !== true) return null;
+      const delta = Math.max(0, Math.floor((nowMs - clock.sampled_at_epoch_ms) / 1000));
+      const elapsed = clock.elapsed_seconds_at_sample + delta;
+      return clock.duration_semantic === "aggregate_live"
+        ? clock.aggregate_base_seconds + elapsed
+        : elapsed;
+    },
     recordLiveClockContractViolation() { App.liveClockContractViolation = {}; },
     readLiveClockTarget(node) { return node.clock; },
     liveTargetCompatibleWithRuntime() { return true; },
@@ -181,15 +189,18 @@ function harness(initialPage = "overview") {
   return {
     App: context.window.WorkTraceApp,
     target,
-    acceptRefresh(live, revision) {
-      return App.acceptRefreshStateRuntime(runtimeState(App.currentPage, live, revision));
+    acceptRefresh(live, revision, sampledAt = now) {
+      return App.acceptRefreshStateRuntime(
+        runtimeState(App.currentPage, live, revision, sampledAt)
+      );
     },
-    acceptPage(live, revision, reportDate = REPORT_DATE) {
-      const payload = runtimeState(App.currentPage, live, revision);
+    acceptPage(live, revision, reportDate = REPORT_DATE, sampledAt = now) {
+      const payload = runtimeState(App.currentPage, live, revision, sampledAt);
       payload.runtime.scope_report_date = reportDate;
       return App.acceptPagePayloadRuntime(payload, App.currentPage, reportDate);
     },
     advance(milliseconds) { now += milliseconds; },
+    nowValue() { return now; },
     counts() { return { renderCalls, statisticsTicks, timelineTicks }; },
   };
 }
@@ -218,6 +229,61 @@ test("stale live runtime freezes generic clocks until an authoritative page mode
   App.applyLocalTicker();
   assert.equal(counts().renderCalls, 2, "authoritative page model resumes local projection");
   assert.ok(App.getActiveLiveClock());
+});
+
+test("cached presentation projection cannot bypass an expired runtime lease", () => {
+  const { App, acceptRefresh, acceptPage, advance, nowValue } = harness("timeline");
+
+  assert.equal(acceptRefresh(true, "live-1"), true);
+  const cachedClock = App.liveRuntimeStore.get().liveClock;
+  assert.equal(App.computeClockDurationNow(cachedClock, nowValue()), 110);
+
+  advance(10001);
+  assert.equal(
+    App.computeClockDurationNow(cachedClock, nowValue()),
+    null,
+    "cache rerender must not mint new seconds after freshness expiry"
+  );
+
+  assert.equal(acceptRefresh(true, "live-2"), true);
+  assert.equal(
+    App.computeClockDurationNow(App.liveRuntimeStore.get().liveClock, nowValue()),
+    null,
+    "heartbeat refresh alone must not re-authorize presentation projection"
+  );
+
+  assert.equal(acceptPage(true, "page-live"), true);
+  assert.equal(
+    App.computeClockDurationNow(App.liveRuntimeStore.get().liveClock, nowValue()),
+    110,
+    "fresh authoritative page model may re-authorize projection"
+  );
+});
+
+test("a live response stale before arrival never receives a fresh projection lease", () => {
+  const { App, acceptRefresh, acceptPage, nowValue } = harness("overview");
+
+  assert.equal(acceptRefresh(true, "delayed", nowValue() - 30000), true);
+  assert.equal(App.getActiveLiveClock(), null);
+  assert.equal(App.liveClockContractRefreshRequested, true);
+
+  assert.equal(acceptPage(true, "delayed-page", REPORT_DATE, nowValue() - 30000), true);
+  assert.equal(
+    App.getActiveLiveClock(),
+    null,
+    "even a page-model response must remain fail-closed when its source sample is stale"
+  );
+
+  assert.equal(acceptPage(true, "fresh-page"), true);
+  assert.ok(App.getActiveLiveClock());
+});
+
+test("a materially future-dated live source clock fails closed", () => {
+  const { App, acceptRefresh, nowValue } = harness("overview");
+
+  assert.equal(acceptRefresh(true, "future", nowValue() + 2001), true);
+  assert.equal(App.getActiveLiveClock(), null);
+  assert.equal(App.liveClockContractRefreshRequested, true);
 });
 
 test("failed page rebase remains fail-closed after bridge recovery", () => {
