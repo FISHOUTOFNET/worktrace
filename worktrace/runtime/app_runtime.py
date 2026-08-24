@@ -41,6 +41,11 @@ if TYPE_CHECKING:
     _Paths = _Paths  # noqa: F811
 
 
+_WORKER_RESTART_INITIAL_SECONDS = 1.0
+_WORKER_RESTART_MAX_SECONDS = 30.0
+_WORKER_STABLE_RUN_SECONDS = 30.0
+
+
 class RuntimePhase(str, Enum):
     NEW = "new"
     INITIALIZED = "initialized"
@@ -102,24 +107,24 @@ class WorkerStartupReporter:
 
 
 class _OwnedWorkerReporter:
-    """Worker-facing health capability carrying the startup handshake."""
+    """Worker-facing iteration health capability, separate from startup readiness."""
 
     def __init__(
         self,
         health: WorkerHealthReporter,
-        startup: WorkerStartupReporter,
+        on_health_change: Callable[[], None],
     ) -> None:
         self._health = health
-        self._startup = startup
+        self._on_health_change = on_health_change
         self.name = health.name
 
     def succeeded(self) -> None:
-        self._startup.ready()
         self._health.succeeded()
+        self._on_health_change()
 
     def failed(self, code: str) -> None:
-        self._startup.failed(code)
         self._health.failed(code)
+        self._on_health_change()
 
     def maintenance_paused(self, paused: bool) -> None:
         self._health.maintenance_paused(paused)
@@ -266,32 +271,100 @@ class AppRuntime:
         spec = handle.spec
         health = self._worker_health.reporter(spec.name)
         startup = WorkerStartupReporter(handle)
-        worker_reporter = _OwnedWorkerReporter(health, startup)
+        worker_reporter = _OwnedWorkerReporter(
+            health,
+            self._reconcile_worker_health_phase,
+        )
         health.started()
+
+        # Startup readiness proves that AppRuntime owns a live invocation loop.
+        # Fallible database/filesystem iterations belong to WorkerHealth and may
+        # recover without being coupled to the five-second startup handshake.
+        startup.ready()
+        restart_delay = _WORKER_RESTART_INITIAL_SECONDS
         try:
-            spec.target(
-                *spec.args_factory(handle.stop_event),
-                health=worker_reporter,
-            )
-            if not startup.ready_reported and not startup.failed_reported:
-                startup.failed("worker_returned_before_ready")
-            if not handle.stop_event.is_set() and not self.stop_event.is_set():
-                handle.error_code = "worker_unexpected_exit"
-                handle.failed_event.set()
-                health.failed(handle.error_code)
-                logging.error("owned worker returned unexpectedly worker=%s", spec.name)
-        except Exception:
-            if not startup.ready_reported:
-                startup.failed("worker_startup_failed")
-            else:
-                handle.error_code = "worker_unhandled_exception"
-                handle.failed_event.set()
-            health.failed(handle.error_code or "worker_unhandled_exception")
-            logging.exception("owned worker failed worker=%s", spec.name)
+            while not handle.stop_event.is_set() and not self.stop_event.is_set():
+                invocation_started_at = time.monotonic()
+                lifecycle_error: str | None = None
+                try:
+                    spec.target(
+                        *spec.args_factory(handle.stop_event),
+                        health=worker_reporter,
+                    )
+                    if not handle.stop_event.is_set() and not self.stop_event.is_set():
+                        lifecycle_error = "worker_unexpected_exit"
+                        logging.error(
+                            "owned worker returned unexpectedly worker=%s",
+                            spec.name,
+                        )
+                except Exception:
+                    if not handle.stop_event.is_set() and not self.stop_event.is_set():
+                        lifecycle_error = "worker_unhandled_exception"
+                        logging.exception("owned worker failed worker=%s", spec.name)
+
+                if lifecycle_error is None:
+                    break
+
+                health.failed(lifecycle_error)
+                self._mark_worker_runtime_degraded()
+                if not self._owned_worker_restart_allowed(handle):
+                    break
+
+                ran_for = time.monotonic() - invocation_started_at
+                if ran_for >= _WORKER_STABLE_RUN_SECONDS:
+                    restart_delay = _WORKER_RESTART_INITIAL_SECONDS
+                logging.warning(
+                    "owned worker restart scheduled worker=%s delay_seconds=%.1f",
+                    spec.name,
+                    restart_delay,
+                )
+                if handle.stop_event.wait(restart_delay) or self.stop_event.is_set():
+                    break
+                restart_delay = min(
+                    restart_delay * 2.0,
+                    _WORKER_RESTART_MAX_SECONDS,
+                )
+                logging.info("owned worker restarting worker=%s", spec.name)
         finally:
             health.stopped()
             if self.phase in {RuntimePhase.RUNNING, RuntimePhase.STARTING}:
                 self.phase = RuntimePhase.DEGRADED
+
+    def _owned_worker_restart_allowed(self, handle: WorkerHandle) -> bool:
+        if handle.spec.critical:
+            return False
+        with self._lifecycle_lock:
+            return bool(
+                not self._shutdown
+                and not self.stop_event.is_set()
+                and not handle.stop_event.is_set()
+                and handle.thread is threading.current_thread()
+                and self._worker_handles.get(handle.spec.name) is handle
+            )
+
+    def _mark_worker_runtime_degraded(self) -> None:
+        with self._lifecycle_lock:
+            if self.phase in {RuntimePhase.RUNNING, RuntimePhase.STARTING}:
+                self.phase = RuntimePhase.DEGRADED
+
+    def _reconcile_worker_health_phase(self) -> None:
+        with self._lifecycle_lock:
+            if self.phase not in {RuntimePhase.RUNNING, RuntimePhase.DEGRADED}:
+                return
+            if self._shutdown or self.stop_event.is_set():
+                return
+            if not _thread_is_alive(self._collector_thread):
+                return
+            if self._worker_health.degraded_workers():
+                self.phase = RuntimePhase.DEGRADED
+                return
+            if any(
+                not handle.ready_event.is_set() or not _thread_is_alive(handle.thread)
+                for handle in self._worker_handles.values()
+            ):
+                self.phase = RuntimePhase.DEGRADED
+                return
+            self.phase = RuntimePhase.RUNNING
 
     @staticmethod
     def _run_owned_collector(
