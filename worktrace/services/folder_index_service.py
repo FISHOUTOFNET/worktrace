@@ -319,34 +319,34 @@ def run_folder_index_worker(
 
     logging.info("folder index worker loop enter")
     next_hot_refresh_at = 0.0
-    try:
-        ensure_index_states_for_folder_rules()
-        recover_interrupted_indexes()
-        # Path existence validation is sensitive filesystem observation. Defer
-        # validate_ready_indexes until the privacy gate allows sensitive
-        # runtime. Database-internal state recovery above is not sensitive.
-        if privacy_gate_service.is_sensitive_runtime_allowed():
-            validate_ready_indexes(stop_event)
-    except Exception:
-        logging.exception("folder index startup validation failed")
-        health.failed("folder_index_startup_failed")
-    else:
-        health.succeeded()
+    startup_reconciliation_pending = True
     while not stop_event.is_set():
+        if DATABASE_WRITE_GATE.writes_blocked():
+            health.maintenance_paused(True)
+            _wait_for_worker()
+            continue
+        health.maintenance_paused(False)
+
+        # Sensitive filesystem observation requires the privacy gate to be
+        # allowed. Database reconciliation is intentionally kept behind the
+        # same gate so startup work cannot race maintenance and then proceed to
+        # validation in a different lifecycle phase.
+        if not privacy_gate_service.is_sensitive_runtime_allowed():
+            health.maintenance_paused(True)
+            _wait_for_worker()
+            continue
+        health.maintenance_paused(False)
+
         try:
-            if DATABASE_WRITE_GATE.writes_blocked():
-                health.maintenance_paused(True)
+            if startup_reconciliation_pending:
+                ensure_index_states_for_folder_rules()
+                recover_interrupted_indexes()
+                validate_ready_indexes(stop_event)
+                startup_reconciliation_pending = False
+                health.succeeded()
                 _wait_for_worker()
                 continue
-            health.maintenance_paused(False)
-            # Sensitive filesystem observation requires the privacy gate to be
-            # allowed. When it is not, skip directory scanning entirely and
-            # report a paused state without surfacing a build error.
-            if not privacy_gate_service.is_sensitive_runtime_allowed():
-                health.maintenance_paused(True)
-                _wait_for_worker()
-                continue
-            health.maintenance_paused(False)
+
             ensure_index_states_for_folder_rules()
             _retry_pending_gc()
 
@@ -371,8 +371,12 @@ def run_folder_index_worker(
             health.succeeded()
             _wait_for_worker()
         except Exception:
-            logging.exception("folder index worker error")
-            health.failed("folder_index_iteration_failed")
+            if startup_reconciliation_pending:
+                logging.exception("folder index startup reconciliation failed")
+                health.failed("folder_index_startup_failed")
+            else:
+                logging.exception("folder index worker error")
+                health.failed("folder_index_iteration_failed")
             _wait_for_worker()
     logging.info("folder index worker loop exit")
 
