@@ -199,8 +199,9 @@ class ApplicationUpdateShutdownCoordinator:
         if not self._supported():
             return
         with self._lock:
-            if self._thread is not None:
+            if self._thread is not None and self._thread.is_alive():
                 return
+            self._thread = None
             if self._event is None:
                 raise UpdateShutdownError("update_shutdown_event_not_prepared")
             self._stop_event.clear()
@@ -367,7 +368,9 @@ class ApplicationUpdateShutdownCoordinator:
                 signaled = self._kernel.wait_for_signal(event, 0.25)
             except Exception:
                 logger.exception("update shutdown listener wait failed")
-                return
+                if self._stop_event.wait(0.25):
+                    return
+                continue
             if not signaled:
                 continue
             with self._lock:
