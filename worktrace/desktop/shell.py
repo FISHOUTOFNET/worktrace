@@ -35,6 +35,7 @@ class ShellState(str, Enum):
 class TrayHost(Protocol):
     def start(self) -> bool: ...
     def stop(self) -> None: ...
+    def can_restore_window(self) -> bool: ...
     def show_background_notice(self) -> None: ...
     def set_collection_active(self, active: bool) -> None: ...
 
@@ -91,6 +92,9 @@ class DesktopShellController:
             if deferred_window_action_executor is not None
             else _run_window_action_deferred
         )
+        # This flag records lifecycle ownership only. Runtime hide decisions use
+        # the tray's live can_restore_window() capability instead of treating a
+        # successful startup as a sticky promise that Explorer still has an icon.
         self._tray_available = False
         self._notice_shown = False
         self._exit_requested = False
@@ -108,7 +112,21 @@ class DesktopShellController:
     @property
     def tray_available(self) -> bool:
         with self._lock:
-            return self._tray_available
+            started = self._tray_available
+        return bool(started and self._tray_can_restore_window())
+
+    def _tray_can_restore_window(self) -> bool:
+        capability = getattr(self._tray, "can_restore_window", None)
+        if not callable(capability):
+            # Compatibility for narrow test/injected tray capabilities. Shipping
+            # WindowsTrayHost implements can_restore_window().
+            with self._lock:
+                return bool(self._tray_available)
+        try:
+            return capability() is True
+        except Exception:
+            logger.warning("desktop shell tray restore capability failed", exc_info=True)
+            return False
 
     def start(self) -> bool:
         try:
@@ -152,10 +170,11 @@ class DesktopShellController:
     def handle_window_closing(self) -> bool:
         """Return False to cancel pywebview close, True to allow it."""
 
+        restore_available = self._tray_can_restore_window()
         with self._lock:
             if self.state is ShellState.EXITING:
                 return True
-            if not self._tray_available:
+            if not self._tray_available or not restore_available:
                 self.state = ShellState.EXITING
                 self._activation_requested = False
                 return True
@@ -168,11 +187,13 @@ class DesktopShellController:
         return False
 
     def hide_window(self) -> bool:
+        restore_available = self._tray_can_restore_window()
         with self._lock:
             if (
                 self.state is ShellState.EXITING
                 or self.state is ShellState.HIDDEN
                 or not self._tray_available
+                or not restore_available
             ):
                 return False
             self.state = ShellState.HIDDEN
@@ -324,11 +345,11 @@ class DesktopShellController:
         with self._lock:
             changed = active != self._collection_active
             self._collection_active = active
-            tray_available = self._tray_available
+            tray_started = self._tray_available
             window_icons = self._window_icons
         if not force and not changed:
             return
-        if tray_available:
+        if tray_started and self._tray_can_restore_window():
             try:
                 self._tray.set_collection_active(active)
             except Exception:
@@ -384,12 +405,17 @@ class DesktopShellController:
 
     def _execute_pending_hide(self) -> None:
         with self._window_action_lock:
+            restore_available = self._tray_can_restore_window()
             with self._lock:
                 self._hide_scheduled = False
                 if (
                     self.state is not ShellState.HIDDEN
                     or not self._tray_available
+                    or not restore_available
                 ):
+                    if self.state is ShellState.HIDDEN and not restore_available:
+                        self.state = ShellState.VISIBLE
+                        self._activation_requested = True
                     return
                 show_notice = not self._notice_shown
             try:
@@ -400,11 +426,25 @@ class DesktopShellController:
                     if self.state is ShellState.HIDDEN:
                         self.state = ShellState.VISIBLE
                 return
+
+            # Closing and the deferred native hide are separate turns. Re-check
+            # after the actual hide so a tray crash/restart in that gap cannot
+            # strand the user with no restore entry point.
+            if not self._tray_can_restore_window():
+                with self._lock:
+                    if self.state is ShellState.HIDDEN:
+                        self.state = ShellState.VISIBLE
+                        self._activation_requested = True
+                try:
+                    self._window.show()
+                    self._window.restore()
+                except Exception:
+                    logger.exception("desktop shell failed to recover unsafe tray hide")
+                self._set_webview_visibility(True)
+                return
+
             with self._lock:
-                if (
-                    self.state is not ShellState.HIDDEN
-                    or not self._tray_available
-                ):
+                if self.state is not ShellState.HIDDEN:
                     return
             self._set_webview_visibility(False)
             self._enter_webview_hidden_mode()
