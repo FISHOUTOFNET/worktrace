@@ -1,3 +1,4 @@
+# one-shot repository-local repair; deletes itself after success
 name: Apply statistics quick-range fix
 
 on:
