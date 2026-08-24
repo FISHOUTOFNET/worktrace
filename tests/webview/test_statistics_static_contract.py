@@ -111,8 +111,8 @@ def test_draft_dates_stay_local_while_project_and_quick_ranges_query_immediately
     assert "setStatisticsSelection" not in draft
     assert "validateStatisticsDateRange" in apply
     assert "draft.allTime" in apply
-    assert 'setStatisticsSelection(true, "", "")' in apply
-    assert "setStatisticsSelection(false, draft.dateFrom, draft.dateTo)" in apply
+    assert 'setStatisticsSelection(true, "", "", "all")' in apply
+    assert "setStatisticsSelection(false, draft.dateFrom, draft.dateTo, null)" in apply
     assert "statisticsWeekRange(new Date())" in source()
     assert "start.getDay() + 6" in week
     assert 'type === "all"' in quick
