@@ -49,7 +49,7 @@ state or database facts.
 | Existing-instance activation Event | `ApplicationInstanceCoordinator` |
 | Process/thread lifecycle | `AppRuntime` |
 | Worker declarations and handles | `AppRuntime` worker registry |
-| Worker initialization readiness | worker-owned `WorkerStartupReporter` handshake |
+| Worker invocation readiness | `AppRuntime` startup handshake |
 | Collector command identity/state | `CollectorControl` / `RuntimeCollectorControl` |
 | Collection transitions | `CollectorStateMachine` |
 | Atomic maintenance activity seal | `ActivityMaintenanceCommandService` |
@@ -95,13 +95,17 @@ the icon and destroys the WebView window. The composition-root `finally` remains
 the only caller of `AppRuntime.shutdown()`. The tray thread never calls Runtime,
 database or Collector APIs.
 
-A worker is READY only after the worker itself has completed required
-initialization, schema/database access and recovery/validation and reports ready
-before entering its stable blocking loop. Thread liveness and AppRuntime
-preflight cannot create readiness. The runtime wrapper owns thread start,
-startup timeout, unexpected exit, unhandled exception, stopped state and handle
-cleanup. Worker functions own initialization signalling, iteration
-success/failure, maintenance-paused state and domain health codes only.
+A worker is READY once `AppRuntime` owns a live invocation loop that can be
+stopped and re-entered safely. READY is deliberately not evidence that the first
+fallible database/filesystem iteration succeeded: database busy, maintenance,
+generation changes and domain-task failures are iteration health facts reported
+through `WorkerHealth`. The runtime wrapper owns thread start, startup timeout,
+bounded restart after unexpected return/unhandled exception, stopped state and
+handle cleanup. Non-critical worker targets that fail after READY degrade the
+runtime and are re-entered by the same owned thread with bounded exponential
+backoff; shutdown cancels any pending restart. Worker functions continue to own
+their domain iteration success/failure, maintenance-paused state and stable
+health codes, and they never create parallel worker threads.
 
 Shutdown sets the runtime stop signal, wakes blocking workers, signals each
 handle, joins Collector and every registered worker and records any surviving
@@ -114,6 +118,12 @@ fields or a parallel `error` alias; the Bridge translates canonical error codes
 for users.
 
 ## Collector and maintenance
+
+Collector startup readiness has the same liveness boundary: the ready handshake
+is emitted after non-fallible process-local initialization and before ordinary
+SQLite-backed health/settings maintenance. Retryable database-busy failures in
+that maintenance remain runtime failures and are retried inside the Collector
+loop; they do not invalidate the already-live Collector invocation.
 
 User pause and runtime maintenance are separate commands. Collector control kinds
 are user pause, maintenance hold, database reset and maintenance release. The
