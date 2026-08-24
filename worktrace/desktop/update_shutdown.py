@@ -56,7 +56,9 @@ class MaintenanceProcessProbe(Protocol):
 class WindowsUpdateShutdownKernel:
     EVENT_MODIFY_STATE = 0x0002
     SYNCHRONIZE = 0x00100000
-    WAIT_OBJECT_0 = 0
+    WAIT_OBJECT_0 = 0x00000000
+    WAIT_TIMEOUT = 0x00000102
+    WAIT_FAILED = 0xFFFFFFFF
 
     @staticmethod
     def _kernel32():
@@ -93,11 +95,21 @@ class WindowsUpdateShutdownKernel:
             kernel32.CloseHandle(handle)
 
     def wait_for_signal(self, event, timeout_seconds: float) -> bool:
-        result = self._kernel32().WaitForSingleObject(
-            event,
-            max(1, int(timeout_seconds * 1000)),
+        result = int(
+            self._kernel32().WaitForSingleObject(
+                event,
+                max(1, int(timeout_seconds * 1000)),
+            )
         )
-        return int(result) == self.WAIT_OBJECT_0
+        if result == self.WAIT_OBJECT_0:
+            return True
+        if result == self.WAIT_TIMEOUT:
+            return False
+        if result == self.WAIT_FAILED:
+            raise UpdateShutdownError(
+                f"update_shutdown_wait_failed:{int(ctypes.get_last_error())}"
+            )
+        raise UpdateShutdownError(f"update_shutdown_wait_unexpected:{result}")
 
     def wake_waiter(self, event) -> None:
         self._kernel32().SetEvent(event)
