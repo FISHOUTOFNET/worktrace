@@ -2,6 +2,8 @@
 (function () {
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
+    var statisticsQuickRangePreset = "week";
+    var statisticsQuickRangeResolvedDate = "";
 
     function element(id) { return document.getElementById(id); }
 
@@ -244,9 +246,16 @@
         return null;
     }
 
+    function normalizeStatisticsQuickRangePreset(type) {
+        return ["today", "week", "month", "all"].indexOf(type) >= 0 ? type : null;
+    }
+
     function currentSelection() {
         if (!App.statisticsSelection) {
-            var range = statisticsWeekRange(new Date());
+            var today = new Date();
+            var range = statisticsWeekRange(today);
+            statisticsQuickRangePreset = "week";
+            statisticsQuickRangeResolvedDate = localDate(today);
             App.statisticsSelection = {
                 allTime: false,
                 dateFrom: range.dateFrom,
@@ -286,7 +295,13 @@
         return App.statisticsDraftSelection;
     }
 
-    function setStatisticsSelection(allTime, dateFrom, dateTo) {
+    function setStatisticsSelection(allTime, dateFrom, dateTo, quickRangePreset) {
+        statisticsQuickRangePreset = normalizeStatisticsQuickRangePreset(quickRangePreset);
+        if (allTime && !statisticsQuickRangePreset) statisticsQuickRangePreset = "all";
+        statisticsQuickRangeResolvedDate = statisticsQuickRangePreset
+            && statisticsQuickRangePreset !== "all"
+            ? localDate(new Date())
+            : "";
         App.statisticsSelection = {
             allTime: !!allTime,
             dateFrom: allTime ? "" : String(dateFrom || ""),
@@ -313,20 +328,37 @@
     }
 
     function syncStatisticsSelection() {
-        var selection = currentSelection();
-        var today = new Date();
+        currentSelection();
         ["today", "week", "month", "all"].forEach(function (type) {
-            var range = shortcutRange(type, today);
-            var pressed = type === "all"
-                ? selection.allTime
-                : !selection.allTime
-                    && selection.dateFrom === range.dateFrom
-                    && selection.dateTo === range.dateTo;
+            var pressed = statisticsQuickRangePreset === type;
             var button = element("statistics-" + type + "-btn");
             if (button) button.setAttribute("aria-pressed", pressed ? "true" : "false");
         });
     }
     App.syncStatisticsSelection = syncStatisticsSelection;
+
+    function refreshStatisticsQuickRangeForToday() {
+        var preset = statisticsQuickRangePreset;
+        if (!preset || preset === "all") return false;
+        var today = new Date();
+        var resolvedDate = localDate(today);
+        if (statisticsQuickRangeResolvedDate === resolvedDate) return false;
+        var range = shortcutRange(preset, today);
+        if (!range) return false;
+        App.statisticsSelection = {
+            allTime: false,
+            dateFrom: range.dateFrom,
+            dateTo: range.dateTo
+        };
+        App.statisticsSelectionInitialized = true;
+        statisticsQuickRangeResolvedDate = resolvedDate;
+        if (!App.statisticsDraftDirty) {
+            App.statisticsDraftSelection = cloneStatisticsSelection(App.statisticsSelection);
+        }
+        syncStatisticsSelection();
+        if (!App.statisticsDraftDirty) syncStatisticsDraftSelection();
+        return true;
+    }
 
     function syncStatisticsDateInputPresentation(input) {
         if (!input) return;
@@ -350,7 +382,9 @@
     App.syncStatisticsDraftSelection = syncStatisticsDraftSelection;
 
     function selectedFilters() {
-        var selection = currentSelection();
+        currentSelection();
+        refreshStatisticsQuickRangeForToday();
+        var selection = App.statisticsSelection;
         return {
             dateFrom: selection.allTime ? "" : selection.dateFrom,
             dateTo: selection.allTime ? "" : selection.dateTo,
@@ -663,7 +697,7 @@
         var today = new Date();
         var range = shortcutRange(type, today);
         if (!range) return Promise.resolve(null);
-        setStatisticsSelection(type === "all", range.dateFrom, range.dateTo);
+        setStatisticsSelection(type === "all", range.dateFrom, range.dateTo, type);
         return beginStatisticsQuery(0);
     }
     App.applyStatisticsQuickRange = applyStatisticsQuickRange;
@@ -687,7 +721,7 @@
     function applyStatisticsDraftSelection() {
         var draft = currentDraftSelection();
         if (draft.allTime) {
-            setStatisticsSelection(true, "", "");
+            setStatisticsSelection(true, "", "", "all");
             return beginStatisticsQuery(0);
         }
         var message = validateStatisticsDateRange(draft.dateFrom, draft.dateTo);
@@ -695,7 +729,7 @@
             setStatisticsDraftStatus(message, true);
             return Promise.resolve(null);
         }
-        setStatisticsSelection(false, draft.dateFrom, draft.dateTo);
+        setStatisticsSelection(false, draft.dateFrom, draft.dateTo, null);
         return beginStatisticsQuery(0);
     }
     App.applyStatisticsDraftSelection = applyStatisticsDraftSelection;
@@ -785,6 +819,7 @@
     function onStatisticsRefreshRequested(options) {
         options = options || {};
         if (App.statisticsLoaded !== true) initStatisticsDefaults();
+        refreshStatisticsQuickRangeForToday();
         return loadStatisticsExportSummary(
             options.preservePresentation === true ? { preservePresentation: true } : undefined
         );
@@ -844,6 +879,8 @@
         App.statisticsDraftSelection = null;
         App.statisticsDraftDirty = false;
         App.statisticsSelectionInitialized = false;
+        statisticsQuickRangePreset = "week";
+        statisticsQuickRangeResolvedDate = "";
         App.statisticsRequestToken = (App.statisticsRequestToken || 0) + 1;
         App.statisticsLiveTickerSuspended = false;
         App.statisticsLastLiveRenderKey = "";
@@ -857,7 +894,7 @@
         applyLocalTick: applyStatisticsLocalTicker,
         automaticRefreshAllowed: function (today) {
             var selection = App.statisticsSelection;
-            if (!selection || selection.allTime === true) return true;
+            if (!selection || selection.allTime === true || statisticsQuickRangePreset) return true;
             var from = String(selection.dateFrom || "");
             var to = String(selection.dateTo || "");
             return !!from && !!to && from <= today && to >= today;
