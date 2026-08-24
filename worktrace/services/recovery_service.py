@@ -144,17 +144,23 @@ def run_startup_recovery_worker(
             stop_event.wait(interval)
             continue
         health.maintenance_paused(False)
-        with get_connection() as conn:
-            jobs = startup_recovery_job_repository.list_runnable_jobs(
-                conn,
-                limit=1,
-            )
-        if not jobs:
-            health.succeeded()
-            stop_event.wait(interval)
-            continue
-        job = jobs[0]
+
+        job: dict[str, object] | None = None
         try:
+            # Runnable-job discovery belongs to this worker iteration. SQLite
+            # BUSY/LOCKED here is recoverable domain health, not an AppRuntime
+            # target crash requiring wrapper-level restart.
+            with get_connection() as conn:
+                jobs = startup_recovery_job_repository.list_runnable_jobs(
+                    conn,
+                    limit=1,
+                )
+            if not jobs:
+                health.succeeded()
+                stop_event.wait(interval)
+                continue
+
+            job = jobs[0]
             commands, boundaries, next_cursor, completed = _plan_continuation_batch(
                 job,
                 limit,
@@ -168,12 +174,14 @@ def run_startup_recovery_worker(
             )
         except Exception as exc:
             code = _classify_recovery_failure(exc)
+            job_id = int(job["id"]) if job is not None else None
             logging.exception(
                 "startup recovery continuation failed job_id=%s code=%s",
-                job.get("id"),
+                job_id,
                 code.value,
             )
-            _record_recovery_failure_safely(int(job["id"]), code)
+            if job_id is not None:
+                _record_recovery_failure_safely(job_id, code)
             health.failed(code.value)
             stop_event.wait(interval)
         else:
