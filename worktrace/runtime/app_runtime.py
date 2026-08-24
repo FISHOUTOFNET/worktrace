@@ -75,6 +75,7 @@ class WorkerHandle:
     stop_event: threading.Event
     ready_event: threading.Event = field(default_factory=threading.Event)
     failed_event: threading.Event = field(default_factory=threading.Event)
+    serving_event: threading.Event = field(default_factory=threading.Event)
     error_code: str | None = None
 
 
@@ -112,13 +113,16 @@ class _OwnedWorkerReporter:
     def __init__(
         self,
         health: WorkerHealthReporter,
+        handle: WorkerHandle,
         on_health_change: Callable[[], None],
     ) -> None:
         self._health = health
+        self._handle = handle
         self._on_health_change = on_health_change
         self.name = health.name
 
     def succeeded(self) -> None:
+        self._handle.serving_event.set()
         self._health.succeeded()
         self._on_health_change()
 
@@ -127,7 +131,14 @@ class _OwnedWorkerReporter:
         self._on_health_change()
 
     def maintenance_paused(self, paused: bool) -> None:
+        paused = bool(paused)
         self._health.maintenance_paused(paused)
+        if paused:
+            # A worker that reaches its intentional maintenance gate has
+            # established its invocation loop even though business work is
+            # deliberately paused.
+            self._handle.serving_event.set()
+            self._on_health_change()
 
 
 @dataclass(frozen=True)
@@ -273,17 +284,20 @@ class AppRuntime:
         startup = WorkerStartupReporter(handle)
         worker_reporter = _OwnedWorkerReporter(
             health,
+            handle,
             self._reconcile_worker_health_phase,
         )
         health.started()
 
-        # Startup readiness proves that AppRuntime owns a live invocation loop.
-        # Fallible database/filesystem iterations belong to WorkerHealth and may
-        # recover without being coupled to the five-second startup handshake.
+        # READY proves AppRuntime owns a live invocation wrapper. SERVING is
+        # separate: the current target invocation must report a successful
+        # iteration (or intentional maintenance pause) before Runtime can
+        # converge to RUNNING.
         startup.ready()
         restart_delay = _WORKER_RESTART_INITIAL_SECONDS
         try:
             while not handle.stop_event.is_set() and not self.stop_event.is_set():
+                handle.serving_event.clear()
                 invocation_started_at = time.monotonic()
                 lifecycle_error: str | None = None
                 try:
@@ -305,6 +319,11 @@ class AppRuntime:
                 if lifecycle_error is None:
                     break
 
+                # The wrapper remains alive during backoff, but the business
+                # target is not serving. Clear that capability before health
+                # reconciliation so another worker cannot wash DEGRADED back to
+                # RUNNING while this target is absent.
+                handle.serving_event.clear()
                 health.failed(lifecycle_error)
                 self._mark_worker_runtime_degraded()
                 if not self._owned_worker_restart_allowed(handle):
@@ -326,6 +345,7 @@ class AppRuntime:
                 )
                 logging.info("owned worker restarting worker=%s", spec.name)
         finally:
+            handle.serving_event.clear()
             health.stopped()
             if self.phase in {RuntimePhase.RUNNING, RuntimePhase.STARTING}:
                 self.phase = RuntimePhase.DEGRADED
@@ -349,21 +369,54 @@ class AppRuntime:
 
     def _reconcile_worker_health_phase(self) -> None:
         with self._lifecycle_lock:
-            if self.phase not in {RuntimePhase.RUNNING, RuntimePhase.DEGRADED}:
+            if self.phase not in {
+                RuntimePhase.STARTING,
+                RuntimePhase.RUNNING,
+                RuntimePhase.DEGRADED,
+            }:
                 return
             if self._shutdown or self.stop_event.is_set():
                 return
             if not _thread_is_alive(self._collector_thread):
                 return
+
+            handles = tuple(self._worker_handles.values())
+            if any(not _thread_is_alive(handle.thread) for handle in handles):
+                self.phase = RuntimePhase.DEGRADED
+                return
+
+            # During the parallel startup handshake another worker may report
+            # serving before every wrapper has emitted READY. That is still
+            # STARTING, not a runtime failure.
+            if any(not handle.ready_event.is_set() for handle in handles):
+                if self.phase is not RuntimePhase.STARTING:
+                    self.phase = RuntimePhase.DEGRADED
+                return
+
             if self._worker_health.degraded_workers():
                 self.phase = RuntimePhase.DEGRADED
                 return
-            if any(
-                not handle.ready_event.is_set() or not _thread_is_alive(handle.thread)
-                for handle in self._worker_handles.values()
-            ):
-                self.phase = RuntimePhase.DEGRADED
+
+            health_states = self._worker_health.snapshots()
+            unserved = [
+                handle
+                for handle in handles
+                if not handle.serving_event.is_set()
+            ]
+            if unserved:
+                failed_before_serving = any(
+                    (
+                        state := health_states.get(handle.spec.name)
+                    ) is not None
+                    and state.consecutive_failures > 0
+                    for handle in unserved
+                )
+                if failed_before_serving or self.phase is RuntimePhase.DEGRADED:
+                    self.phase = RuntimePhase.DEGRADED
+                else:
+                    self.phase = RuntimePhase.STARTING
                 return
+
             self.phase = RuntimePhase.RUNNING
 
     @staticmethod
@@ -714,12 +767,16 @@ class AppRuntime:
                 "worker_start_failed",
             )
 
-        degraded = not report.ready
-        self.phase = RuntimePhase.DEGRADED if degraded else RuntimePhase.RUNNING
+        if not report.ready:
+            self.phase = RuntimePhase.DEGRADED
+        else:
+            self._reconcile_worker_health_phase()
+        degraded = self.phase is RuntimePhase.DEGRADED
         logging.info(
-            "authorized runtime startup complete elapsed_ms=%s degraded=%s",
+            "authorized runtime startup complete elapsed_ms=%s degraded=%s phase=%s",
             int((time.monotonic() - startup_started_at) * 1000),
             degraded,
+            self.phase.value,
         )
         return _RuntimeStartResult(
             ok=True,
