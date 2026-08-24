@@ -16,6 +16,12 @@
             || clock.duration_semantic !== "aggregate_live") {
             return { seconds: durable, canTick: false };
         }
+        if (typeof App.projectLiveClockDurationNow !== "function") {
+            // The runtime coordinator is installed later in the shipping script
+            // order. Preserve source live metadata without projecting any new
+            // seconds until that authority exists.
+            return { seconds: durable, canTick: true };
+        }
         var projected = App.projectLiveClockDurationNow(clock, Date.now());
         return {
             seconds: projected === null ? durable : projected,
