@@ -130,10 +130,10 @@ class ApplicationControlService:
         phase = getattr(self.runtime, "phase", None)
         phase_value = str(getattr(phase, "value", phase) or "").lower()
 
-        # WorkerHealth deliberately tolerates one or two transient failures after
-        # a service has been established. AppRuntime phase carries the stronger
-        # lifecycle fact: a worker that failed before serving, or whose target is
-        # currently in restart backoff, makes the runtime DEGRADED immediately.
+        # WorkerHealth tolerates one or two transient failures after a service
+        # establishes its loop. AppRuntime supplies the stronger lifecycle signal:
+        # a worker that failed before serving, or whose target is in restart
+        # backoff, makes the runtime DEGRADED immediately.
         if phase_value == "degraded":
             for name, raw_state in workers.items():
                 if not isinstance(raw_state, dict):
