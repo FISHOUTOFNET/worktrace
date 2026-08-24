@@ -259,8 +259,9 @@ class ApplicationInstanceCoordinator:
         if not self._supported():
             return
         with self._lock:
-            if self._thread is not None:
+            if self._thread is not None and self._thread.is_alive():
                 return
+            self._thread = None
             if self._event is None:
                 raise SingleInstanceError("activation_event_not_prepared")
             self._stop_event.clear()
@@ -375,7 +376,9 @@ class ApplicationInstanceCoordinator:
                 signaled = self._kernel.wait_for_activation(event, 0.25)
             except Exception:
                 logging.exception("activation listener wait failed")
-                return
+                if self._stop_event.wait(0.25):
+                    return
+                continue
             if not signaled:
                 continue
             with self._lock:
