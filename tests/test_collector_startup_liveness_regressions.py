@@ -86,11 +86,11 @@ def test_collector_retries_database_busy_during_startup_runtime_work(temp_db, mo
     def transient_start(*_args) -> None:
         nonlocal attempts
         attempts += 1
-        if attempts == 1:
-            error = sqlite3.OperationalError("database is locked")
-            error.sqlite_errorcode = sqlite3.SQLITE_BUSY
-            raise error
-        stop_event.set()
+        if attempts == 2:
+            stop_event.set()
+        error = sqlite3.OperationalError("database is locked")
+        error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+        raise error
 
     monkeypatch.setattr(
         collector_module.collector_health,
