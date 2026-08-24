@@ -1,0 +1,48 @@
+name: Apply statistics quick-range fix
+
+on:
+  push:
+    branches: [fix/pre-release-ui-interaction-lifecycle]
+    paths:
+      - .github/workflows/apply-statistics-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v6
+        with:
+          ref: fix/pre-release-ui-interaction-lifecycle
+          persist-credentials: true
+          clean: true
+          show-progress: false
+
+      - name: Apply verified Statistics payload
+        shell: pwsh
+        run: |
+          $payload = (Get-Content -LiteralPath '_tmp_stats_b64.txt' -Raw).Trim()
+          $bytes = [Convert]::FromBase64String($payload)
+          [IO.File]::WriteAllBytes('worktrace/webview_ui/js/statistics.js', $bytes)
+          python scripts/sync_webview_asset_revisions.py --write
+          node --check worktrace/webview_ui/js/statistics.js
+          node --test tests/webview/statistics_quick_range_identity.test.js
+          node --test tests/webview/statistics_export_state.test.js
+
+      - name: Remove transfer scaffolding and commit
+        shell: pwsh
+        run: |
+          Remove-Item -LiteralPath '_tmp_stats_b64.txt' -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath '_tmp_probe.txt' -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath '_tmp_probe_b64.txt' -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath '_tmp_probe_b64_expected.txt' -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath '.github/workflows/apply-statistics-fix.yml' -ErrorAction SilentlyContinue
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(statistics): preserve quick-range identity'
+          git push origin HEAD:fix/pre-release-ui-interaction-lifecycle
