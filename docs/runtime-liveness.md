@@ -12,7 +12,8 @@ Three facts are intentionally separate:
   the declared `WorkerSpec` target. READY must not wait for fallible SQLite or
   filesystem work.
 - **SERVING** means the current target invocation has established its worker loop
-  by reporting successful iteration health. A target restart clears SERVING.
+  by either reporting successful iteration health or reaching an intentional
+  maintenance pause gate. A target restart clears SERVING.
 - **HEALTH** is the worker's ongoing iteration history. After SERVING, isolated
   recoverable failures may use the existing consecutive-failure threshold.
 
@@ -21,7 +22,8 @@ initial startup, READY-but-not-yet-SERVING workers keep the runtime STARTING. A
 failure before SERVING degrades immediately. An unexpected return or unhandled
 exception clears SERVING before bounded restart backoff, so another worker's
 success cannot wash the runtime back to RUNNING while the failed target is absent.
-RUNNING is restored only after the replacement invocation reports success.
+RUNNING is restored only after the replacement invocation establishes SERVING
+again.
 
 The wrapper owns thread start, stop, unexpected target exit and bounded restart.
 Worker functions own database/filesystem/domain iteration errors and stable health
