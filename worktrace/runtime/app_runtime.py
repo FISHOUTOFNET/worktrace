@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 _WORKER_RESTART_INITIAL_SECONDS = 1.0
 _WORKER_RESTART_MAX_SECONDS = 30.0
 _WORKER_STABLE_RUN_SECONDS = 30.0
+_WORKER_PROGRESS_WATCHDOG_SECONDS = 5.0
 _COLLECTOR_LIVE_FRESHNESS_SECONDS = 8.0
 _COLLECTOR_STALL_SECONDS = 180.0
 _COLLECTOR_STALL_LOG_INTERVAL_SECONDS = 60.0
@@ -70,6 +71,7 @@ class WorkerSpec:
     args_factory: Callable[[threading.Event], tuple[object, ...]]
     startup_timeout_seconds: float = 5.0
     critical: bool = False
+    progress_timeout_seconds: float = 0.0
 
 
 @dataclass
@@ -195,6 +197,7 @@ class AppRuntime:
         self._collector_recovery_required_reason = ""
         self._last_collector_stall_log_monotonic = 0.0
         self._worker_handles: dict[str, WorkerHandle] = {}
+        self._worker_progress_watchdog_thread: threading.Thread | None = None
         self.collector_supervisor = CollectorSupervisor(self)
         self._worker_specs = self._build_worker_specs()
         self._initialized = False
@@ -207,18 +210,21 @@ class AppRuntime:
                 thread_name="WorkTraceClipboardCapture",
                 target=self._adapter.run_clipboard_capture,
                 args_factory=lambda stop: (stop,),
+                progress_timeout_seconds=30.0,
             ),
             "folder_index": WorkerSpec(
                 name="folder_index",
                 thread_name="WorkTraceFolderIndex",
                 target=folder_index_service.run_folder_index_worker,
                 args_factory=lambda stop: (stop,),
+                progress_timeout_seconds=300.0,
             ),
             "history": WorkerSpec(
                 name="history",
                 thread_name="WorkTraceHistoryMutation",
                 target=history_mutation_job_service.run_history_worker,
                 args_factory=lambda stop: (stop,),
+                progress_timeout_seconds=120.0,
             ),
             "inference": WorkerSpec(
                 name="inference",
@@ -228,24 +234,28 @@ class AppRuntime:
                     stop,
                     project_inference_service.assign_project_for_activity_in_transaction,
                 ),
+                progress_timeout_seconds=120.0,
             ),
             "activity_resource_repair": WorkerSpec(
                 name="activity_resource_repair",
                 thread_name="WorkTraceActivityResourceRepair",
                 target=activity_fact_repair_service.run_activity_resource_repair_worker,
                 args_factory=lambda stop: (stop,),
+                progress_timeout_seconds=300.0,
             ),
             "startup_recovery": WorkerSpec(
                 name="startup_recovery",
                 thread_name="WorkTraceStartupRecovery",
                 target=recovery_service.run_startup_recovery_worker,
                 args_factory=lambda stop: (stop,),
+                progress_timeout_seconds=300.0,
             ),
             "collector_supervisor": WorkerSpec(
                 name="collector_supervisor",
                 thread_name="WorkTraceCollectorSupervisor",
                 target=self.collector_supervisor.run_worker,
                 args_factory=lambda stop: (stop,),
+                progress_timeout_seconds=30.0,
             ),
         }
 
@@ -360,6 +370,43 @@ class AppRuntime:
             if self.phase in {RuntimePhase.RUNNING, RuntimePhase.STARTING}:
                 self.phase = RuntimePhase.DEGRADED
 
+    def _worker_progress_timeouts(self) -> dict[str, float]:
+        return {
+            name: max(0.0, float(spec.progress_timeout_seconds or 0.0))
+            for name, spec in self._worker_specs.items()
+            if float(spec.progress_timeout_seconds or 0.0) > 0.0
+        }
+
+    def _degraded_workers(self) -> tuple[str, ...]:
+        degraded = set(self._worker_health.degraded_workers())
+        degraded.update(
+            self._worker_health.stalled_workers(self._worker_progress_timeouts())
+        )
+        return tuple(sorted(degraded))
+
+    def _run_worker_progress_watchdog(self) -> None:
+        logging.info("worker progress watchdog loop enter")
+        while not self.stop_event.wait(_WORKER_PROGRESS_WATCHDOG_SECONDS):
+            try:
+                self._reconcile_worker_health_phase()
+            except Exception:
+                logging.exception("worker progress watchdog reconciliation failed")
+        logging.info("worker progress watchdog loop exit")
+
+    def _ensure_worker_progress_watchdog(self) -> None:
+        with self._lifecycle_lock:
+            if self._shutdown or self.stop_event.is_set():
+                return
+            if _thread_is_alive(self._worker_progress_watchdog_thread):
+                return
+            thread = threading.Thread(
+                target=self._run_worker_progress_watchdog,
+                name="WorkTraceWorkerProgressWatchdog",
+                daemon=True,
+            )
+            self._worker_progress_watchdog_thread = thread
+            thread.start()
+
     def _reconcile_worker_health_phase(self) -> None:
         with self._lifecycle_lock:
             if self.phase not in {
@@ -381,7 +428,7 @@ class AppRuntime:
                 if self.phase is not RuntimePhase.STARTING:
                     self.phase = RuntimePhase.DEGRADED
                 return
-            if self._worker_health.degraded_workers():
+            if self._degraded_workers():
                 self.phase = RuntimePhase.DEGRADED
                 return
 
@@ -563,9 +610,10 @@ class AppRuntime:
         )
 
     def worker_health_snapshot(self) -> dict[str, object]:
+        self._reconcile_worker_health_phase()
         return {
             "workers": self._worker_health.public_snapshot(),
-            "degraded_workers": list(self._worker_health.degraded_workers()),
+            "degraded_workers": list(self._degraded_workers()),
         }
 
     def worker_registry_snapshot(self) -> dict[str, _WorkerStartupStatus]:
@@ -817,6 +865,7 @@ class AppRuntime:
             report.ready,
             list(report.failed_workers),
         )
+        self._ensure_worker_progress_watchdog()
         return report
 
     def start_authorized_collection(self) -> _RuntimeStartResult:
@@ -1195,6 +1244,7 @@ class AppRuntime:
             self.stop_event.set()
             collector_thread = self._collector_thread
             collector_control = self.collector_control
+            watchdog_thread = self._worker_progress_watchdog_thread
             if self._collector_stop_event is not None:
                 self._collector_stop_event.set()
 
@@ -1212,6 +1262,8 @@ class AppRuntime:
         for handle in handles:
             if handle.thread is not None:
                 handle.thread.join(timeout=5)
+        if watchdog_thread is not None:
+            watchdog_thread.join(timeout=1.0)
 
         self._adapter.shutdown()
 
@@ -1225,6 +1277,8 @@ class AppRuntime:
             self._worker_handles = {
                 handle.spec.name: handle for handle in surviving_workers
             }
+            if not _thread_is_alive(watchdog_thread):
+                self._worker_progress_watchdog_thread = None
             if self.owns_application_instance and writers_stopped:
                 if (
                     self._initialized
