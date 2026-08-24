@@ -25,6 +25,7 @@ class ApplicationRuntimeCapability(Protocol):
     """Narrow runtime capability consumed by API-facing application commands."""
 
     collector_control: Any
+    phase: Any
 
     def start_authorized_collection(self) -> RuntimeStartResult: ...
 
@@ -33,6 +34,8 @@ class ApplicationRuntimeCapability(Protocol):
     def is_collection_running_for_maintenance(self) -> bool: ...
 
     def set_clipboard_capture_enabled(self, enabled: bool) -> bool: ...
+
+    def worker_health_snapshot(self) -> dict[str, object]: ...
 
     def request_shutdown(self) -> None: ...
 
@@ -68,14 +71,21 @@ class ApplicationControlService:
     def get_collection_status(self) -> dict[str, Any]:
         raw_status = settings_api.get_collector_status()
         health_state = settings_api.get_collector_health_state()
+        background_health_state, degraded_workers = self._background_health_state()
         paused = settings_api.is_user_paused() or raw_status == "paused"
         if paused:
             display = "已暂停"
         elif raw_status == "running":
-            display = {
-                "degraded": "记录中，刚才采集短暂异常",
-                "failing": "采集可能中断，请重试",
-            }.get(health_state, "记录中")
+            if health_state == "failing":
+                display = "采集可能中断，请重试"
+            elif background_health_state == "degraded":
+                display = "记录中，部分后台任务异常"
+            elif health_state == "degraded":
+                display = "记录中，刚才采集短暂异常"
+            elif background_health_state == "starting":
+                display = "记录中，后台任务正在准备"
+            else:
+                display = "记录中"
         elif raw_status == "error":
             display = "状态异常"
         else:
@@ -93,9 +103,55 @@ class ApplicationControlService:
             "collector_consecutive_failures": (
                 settings_api.get_collector_consecutive_failures()
             ),
+            "background_health_state": background_health_state,
+            "background_degraded_workers": degraded_workers,
             "paused": paused,
             "display": display,
         }
+
+    def _background_health_state(self) -> tuple[str, list[str]]:
+        """Project derived-worker liveness without exposing internal trace data."""
+
+        try:
+            snapshot = dict(self.runtime.worker_health_snapshot())
+        except Exception:
+            logging.exception("background worker health read failed")
+            return "unknown", []
+
+        raw_workers = snapshot.get("workers")
+        workers = raw_workers if isinstance(raw_workers, dict) else {}
+        raw_degraded = snapshot.get("degraded_workers")
+        degraded = {
+            str(name)
+            for name in (raw_degraded if isinstance(raw_degraded, (list, tuple)) else [])
+            if str(name or "").strip()
+        }
+
+        phase = getattr(self.runtime, "phase", None)
+        phase_value = str(getattr(phase, "value", phase) or "").lower()
+
+        # WorkerHealth deliberately tolerates one or two transient failures after
+        # a service has been established. AppRuntime phase carries the stronger
+        # lifecycle fact: a worker that failed before serving, or whose target is
+        # currently in restart backoff, makes the runtime DEGRADED immediately.
+        if phase_value == "degraded":
+            for name, raw_state in workers.items():
+                if not isinstance(raw_state, dict):
+                    continue
+                if (
+                    raw_state.get("running") is False
+                    or int(raw_state.get("consecutive_failures") or 0) > 0
+                ):
+                    degraded.add(str(name))
+            return "degraded", sorted(degraded)
+
+        if phase_value in {"failed", "recoverable_failure"}:
+            return "degraded", sorted(degraded)
+        if phase_value == "starting":
+            return "starting", sorted(degraded)
+        if degraded:
+            return "degraded", sorted(degraded)
+        return "healthy", []
 
     def is_collection_active(self) -> bool:
         """Return whether the collector is actively observing right now.
@@ -233,7 +289,7 @@ class ApplicationControlService:
             with self.maintenance.external_runtime_mutation_guard():
                 # Privacy authorization must be verified inside the guard so
                 # that maintenance state cannot change between the check and
-                # the runtime mutation. Gate read exceptions fail closed.
+                # runtime mutation. Gate read exceptions fail closed.
                 privacy_gate_service.require_sensitive_runtime_allowed()
                 applied = self.runtime.set_clipboard_capture_enabled(True)
         else:
