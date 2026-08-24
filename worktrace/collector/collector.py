@@ -587,8 +587,6 @@ def run_collector(
                 last_loop_time = discontinuity.safe_end_time
                 next_poll_deadline = observation_monotonic + POLL_CADENCE_SECONDS
                 continue
-            if stop_event.is_set():
-                break
 
             phase = "transition"
             if idle_seconds >= idle_threshold:
