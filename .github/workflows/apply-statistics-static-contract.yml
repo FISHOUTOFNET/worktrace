@@ -25,18 +25,25 @@ jobs:
         run: |
           @'
           from pathlib import Path
-          path = Path('tests/webview/test_statistics_static_contract.py')
-          source = path.read_text(encoding='utf-8')
+          contract_path = Path('tests/webview/test_statistics_static_contract.py')
+          source = contract_path.read_text(encoding='utf-8')
           old = '''    assert 'setStatisticsSelection(true, "", "")' in apply
               assert "setStatisticsSelection(false, draft.dateFrom, draft.dateTo)" in apply'''
           new = '''    assert 'setStatisticsSelection(true, "", "", "all")' in apply
               assert "setStatisticsSelection(false, draft.dateFrom, draft.dateTo, null)" in apply'''
           if old not in source:
               raise SystemExit('legacy Statistics selection contract not found')
-          path.write_text(source.replace(old, new, 1), encoding='utf-8', newline='\n')
+          updated = source.replace(old, new, 1)
+          contract_path.write_text(updated, encoding='utf-8', newline='\n')
+
+          production = Path('worktrace/webview_ui/js/statistics.js').read_text(encoding='utf-8')
+          for expected in (
+              'setStatisticsSelection(true, "", "", "all")',
+              'setStatisticsSelection(false, draft.dateFrom, draft.dateTo, null)',
+          ):
+              if expected not in updated or expected not in production:
+                  raise SystemExit(f'explicit preset contract missing: {expected}')
           '@ | python -
-          python -m pip install --disable-pip-version-check -q pytest
-          python -m pytest tests/webview/test_statistics_static_contract.py -q
 
       - name: Remove one-shot workflow and commit
         shell: pwsh
