@@ -325,7 +325,9 @@ def test_worker_lifecycle_owner_remains_app_runtime() -> None:
     assert '"collector_supervisor": WorkerSpec(' in runtime_source
     assert "target=self.collector_supervisor.run_worker" in runtime_source
     assert "threading.Thread(" not in supervisor_source
-    assert "activity_lifecycle_service.close_all_open_activities" in runtime_source
+    assert "recovery_service.recover_unclosed_activity_facts(" in runtime_source
+    assert "allow_legacy_heartbeat=False" in runtime_source
+    assert "activity_lifecycle_service.close_all_open_activities" not in runtime_source
     for legacy_member in (
         "_index_thread",
         "_history_thread",
