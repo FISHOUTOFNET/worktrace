@@ -8,7 +8,7 @@ from .constants import ANCHOR_FILE_EXTENSIONS
 _ANCHOR_EXT_SET = {item.casefold() for item in ANCHOR_FILE_EXTENSIONS}
 _FILE_EXT_RE = r"[^\\/\r\n<>|?*\"'\s.][^\\/\r\n<>|?*\"'\s]*"
 _DRIVE_PATH_RE = re.compile(
-    rf"(?P<path>[A-Za-z]:[\\/][^\r\n<>|?*]+?\.{_FILE_EXT_RE})(?=$|[\s\"'）)\]】。；;，,]| - )",
+    rf"(?<![A-Za-z0-9])(?P<path>[A-Za-z]:[\\/][^\r\n<>|?*]+?\.{_FILE_EXT_RE})(?=$|[\s\"'）)\]】。；;，,]| - )",
     re.IGNORECASE,
 )
 _UNC_PATH_RE = re.compile(
