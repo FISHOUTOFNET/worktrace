@@ -19,7 +19,6 @@ from ..platforms.windows_adapter import WindowsAdapter
 from ..services import (
     activity_fact_repair_service,
     activity_inference_job_service,
-    activity_lifecycle_service,
     database_maintenance_service,
     folder_index_service,
     history_mutation_job_service,
@@ -524,8 +523,17 @@ class AppRuntime:
         progress_generation = int(progress.get("generation") or 0)
         runtime_status = str(progress.get("runtime_status") or "")
         last_success = str(progress.get("last_successful_observation_at") or "")
+        started_monotonic = float(progress.get("started_monotonic") or 0.0)
         last_monotonic = float(progress.get("last_success_monotonic") or 0.0)
-        age = max(0.0, time.monotonic() - last_monotonic) if last_monotonic > 0 else None
+        progress_anchor = (
+            last_monotonic if last_monotonic > 0.0 else started_monotonic
+        )
+        age = (
+            max(0.0, time.monotonic() - progress_anchor)
+            if progress_anchor > 0.0
+            else None
+        )
+        first_observation_pending = last_monotonic <= 0.0
 
         state = "stopped"
         live_eligible = False
@@ -554,6 +562,8 @@ class AppRuntime:
         elif age > _COLLECTOR_LIVE_FRESHNESS_SECONDS:
             state = "degraded"
             reason = "collector_progress_delayed"
+        elif first_observation_pending:
+            state = "starting"
         elif runtime_status == "running":
             state = "active"
             live_eligible = True
@@ -1285,7 +1295,17 @@ class AppRuntime:
                     and not database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked()
                 ):
                     shutdown_at = db.now_str()
-                    activity_lifecycle_service.close_all_open_activities()
+                    progress = collector_health.runtime_progress_snapshot()
+                    safe_end_time = (
+                        str(progress.get("last_successful_observation_at") or "")
+                        if int(progress.get("generation") or 0)
+                        == int(self._collector_generation)
+                        else ""
+                    )
+                    recovery_service.recover_unclosed_activity_facts(
+                        safe_end_time=safe_end_time or None,
+                        allow_legacy_heartbeat=False,
+                    )
                     set_setting("collector_status", "stopped")
                     set_setting("last_shutdown_at", shutdown_at)
                 release_single_instance()
