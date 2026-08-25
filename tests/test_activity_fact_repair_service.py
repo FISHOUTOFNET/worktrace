@@ -71,7 +71,7 @@ def _legacy_edge_resource() -> DetectedResource:
         resource_kind="browser_tab",
         resource_subtype="browser_page",
         display_name="ChatGPT - WorkTrace - 个人",
-        identity_key="browser_title:msedge.exe:chatgpt-worktrace-个人",
+        identity_key="browser_title:msedge.exe:chatgpt---worktrace---个人",
         is_anchor=True,
         confidence=75,
         source="browser_detector",
@@ -304,7 +304,7 @@ def test_policy_upgrade_repairs_existing_edge_profile_identity_only(temp_db):
         ).fetchone()["window_title"]
 
     assert resource["display_name"] == "ChatGPT - WorkTrace"
-    assert resource["identity_key"] == "browser_title:msedge.exe:chatgpt-worktrace"
+    assert resource["identity_key"] == "browser_title:msedge.exe:chatgpt---worktrace"
     assert resource["window_title"] == EDGE_TITLE
     assert before_activity_title == EDGE_TITLE
     assert after_activity_title == EDGE_TITLE
