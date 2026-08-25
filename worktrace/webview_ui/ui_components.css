@@ -95,6 +95,69 @@ th,
 
 .setting-row small { font-size: var(--font-size-sm); }
 
+/* Single-line controls share an explicit vertical rhythm instead of relying on
+   Chromium's different native text baselines for buttons, inputs and selects. */
+:where(
+    .timeline-toolbar,
+    .statistics-toolbar,
+    .rules-toolbar
+) :is(
+    button:not(.project-autocomplete-option),
+    input:not([type="checkbox"]):not([type="radio"]),
+    select
+) {
+    height: var(--control-height-sm);
+    min-height: var(--control-height-sm);
+}
+
+:where(
+    .timeline-toolbar,
+    .statistics-toolbar,
+    .rules-toolbar
+) :is(
+    input:not([type="checkbox"]):not([type="radio"]),
+    select
+) {
+    padding-block: 0;
+}
+
+:where(
+    .timeline-toolbar,
+    .statistics-toolbar,
+    .rules-toolbar
+) > label:not(.sr-only),
+.statistics-date-inputs > span[aria-hidden="true"] {
+    min-height: var(--control-height-sm);
+    display: inline-flex;
+    align-items: center;
+}
+
+:where(
+    .timeline-toolbar,
+    .statistics-toolbar
+) input[type="date"]::-webkit-datetime-edit {
+    padding-block: 0;
+}
+
+:where(
+    .folder-picker-control,
+    .danger-inline
+) :is(
+    button,
+    input:not([type="checkbox"]):not([type="radio"])
+) {
+    height: var(--control-height);
+    min-height: var(--control-height);
+}
+
+:where(
+    .folder-picker-control,
+    .danger-inline
+) input:not([type="checkbox"]):not([type="radio"]),
+.input-with-unit input {
+    padding-block: 0;
+}
+
 #rules-panel-project-section:not(:has(#rules-panel-fd-work-picker:not([hidden]))) > label.field:first-child {
     grid-column: 1 / -1;
 }
