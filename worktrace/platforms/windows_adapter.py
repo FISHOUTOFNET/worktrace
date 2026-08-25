@@ -5,8 +5,10 @@ from __future__ import annotations
 import ctypes
 import logging
 import threading
+import time
 from ctypes import wintypes
 
+from ..resources.title_parsing import extract_probable_file_name
 from ..worker_health import WorkerHealthReporter
 from .base import (
     ActiveWindow,
@@ -15,6 +17,18 @@ from .base import (
 )
 from .windows_clipboard import ClipboardMonitor
 from .windows_path_resolver import WindowsPathResolver, resolve_title_file_path
+
+_HOST_PROCESS_NAMES = frozenset({"applicationframehost.exe"})
+_GENERIC_PATH_PROBE_EXCLUDED_PROCESSES = frozenset({
+    "chrome.exe", "chrome",
+    "msedge.exe", "msedge",
+    "firefox.exe", "firefox",
+    "brave.exe", "brave",
+    "opera.exe", "opera",
+    "vivaldi.exe", "vivaldi",
+})
+_GENERIC_PATH_FAILURE_COOLDOWN_SECONDS = 30.0
+_MAX_GENERIC_PATH_FAILURES = 256
 
 
 class WindowsAdapter:
@@ -27,6 +41,7 @@ class WindowsAdapter:
     ) -> None:
         self._path_resolver = path_resolver or WindowsPathResolver()
         self._clipboard = ClipboardMonitor(self.get_active_window)
+        self._generic_path_failures: dict[tuple[int, str, str], float] = {}
 
     def get_active_window(self) -> ActiveWindow:
         import psutil
@@ -69,21 +84,44 @@ class WindowsAdapter:
         except psutil.Error:
             pass
 
+        pid, process_name = _resolve_effective_process_identity(
+            hwnd,
+            pid,
+            process_name,
+            psutil=psutil,
+            win32gui=win32gui,
+            win32process=win32process,
+        )
+        app_name = process_name or app_name
+
         requires_path = self._path_resolver.privacy_path_required(process_name, title)
         probe_policy = getattr(
             self._path_resolver,
             "should_probe_path",
             self._path_resolver.privacy_path_required,
         )
-        should_probe_path = probe_policy(process_name, title)
+        policy_probe = bool(probe_policy(process_name, title))
+        generic_file_candidate = bool(
+            process_name.strip().casefold() not in _GENERIC_PATH_PROBE_EXCLUDED_PROCESSES
+            and extract_probable_file_name(title)
+        )
+        should_probe_path = policy_probe or generic_file_candidate
         file_path_hint = resolve_title_file_path(title)
         if not file_path_hint and should_probe_path:
-            file_path_hint = self._path_resolver.resolve(
-                (hwnd, pid, process_name, title),
-                process_name,
-                title,
-                pid,
-            )
+            generic_probe = generic_file_candidate and not policy_probe
+            probe_key = (pid, process_name.casefold(), title)
+            if not generic_probe or self._generic_probe_due(probe_key):
+                file_path_hint = self._path_resolver.resolve(
+                    (hwnd, pid, process_name, title),
+                    process_name,
+                    title,
+                    pid,
+                )
+                if generic_probe:
+                    if file_path_hint:
+                        self._generic_path_failures.pop(probe_key, None)
+                    else:
+                        self._mark_generic_probe_failure(probe_key)
 
         # ``None`` after an explicit authoritative probe is not proof that the
         # document has no local path. Keep that uncertainty at the platform /
@@ -109,6 +147,18 @@ class WindowsAdapter:
             privacy_path_required=requires_path,
             path_resolution_uncertain=path_resolution_uncertain,
         )
+
+    def _generic_probe_due(self, key: tuple[int, str, str]) -> bool:
+        failed_at = self._generic_path_failures.get(key)
+        return (
+            failed_at is None
+            or time.monotonic() - failed_at >= _GENERIC_PATH_FAILURE_COOLDOWN_SECONDS
+        )
+
+    def _mark_generic_probe_failure(self, key: tuple[int, str, str]) -> None:
+        if len(self._generic_path_failures) >= _MAX_GENERIC_PATH_FAILURES:
+            self._generic_path_failures.clear()
+        self._generic_path_failures[key] = time.monotonic()
 
     def get_idle_seconds(self) -> int:
         class LASTINPUTINFO(ctypes.Structure):
@@ -143,11 +193,66 @@ class WindowsAdapter:
 
     def reset_runtime_state(self) -> None:
         self._clipboard.reset()
+        self._generic_path_failures.clear()
         self._path_resolver.reset()
 
     def shutdown(self) -> None:
         self._clipboard.shutdown()
+        self._generic_path_failures.clear()
         self._path_resolver.reset()
+
+
+def _resolve_effective_process_identity(
+    hwnd: int,
+    pid: int,
+    process_name: str,
+    *,
+    psutil,
+    win32gui,
+    win32process,
+) -> tuple[int, str]:
+    """Resolve a unique app process hosted behind a known Windows frame.
+
+    The physical foreground HWND remains authoritative for title/class sampling.
+    We only replace its PID when all non-host descendant windows agree on one
+    process. Ambiguous or unavailable enumeration fails closed to the physical
+    owner instead of guessing.
+    """
+
+    if str(process_name or "").strip().casefold() not in _HOST_PROCESS_NAMES:
+        return pid, process_name
+    enum_children = getattr(win32gui, "EnumChildWindows", None)
+    if not callable(enum_children):
+        return pid, process_name
+
+    candidates: dict[int, str] = {}
+
+    def _visit(child_hwnd, _extra):
+        try:
+            _, child_raw_pid = win32process.GetWindowThreadProcessId(child_hwnd)
+            child_pid = int(child_raw_pid)
+            if child_pid <= 0 or child_pid == pid:
+                return True
+            child_name = str(psutil.Process(child_pid).name() or "").strip()
+            if not child_name or child_name.casefold() in _HOST_PROCESS_NAMES:
+                return True
+            candidates[child_pid] = child_name
+        except (ValueError, psutil.Error):
+            pass
+        except Exception:
+            logging.debug("host child process lookup failed", exc_info=True)
+        return True
+
+    try:
+        enum_children(hwnd, _visit, None)
+    except Exception:
+        logging.debug("host child window enumeration failed", exc_info=True)
+        return pid, process_name
+
+    if len(candidates) != 1:
+        return pid, process_name
+    effective_pid, effective_name = next(iter(candidates.items()))
+    return effective_pid, effective_name
 
 
 __all__ = ["WindowsAdapter"]
