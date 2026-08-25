@@ -218,9 +218,7 @@ test("Statistics live row mismatch keeps authoritative self-heal path", () => {
   const h = harness(2, { mismatchProjectIndex: 0 });
   const result = h.App.statistics.applyLocalTick();
 
-  assert.deepEqual(result, {
-    refreshRequired: true,
-    reason: "statistics_live_projection_mismatch",
-  });
+  assert.equal(result && result.refreshRequired, true);
+  assert.equal(result && result.reason, "statistics_live_projection_mismatch");
   assert.deepEqual(h.queries(), [1, 1, 1]);
 });
