@@ -49,7 +49,6 @@ class WorkerHealthSnapshot:
         return bool(
             self.started
             and self.running
-            and self.served
             and not self.maintenance_paused
             and self.last_progress_monotonic > 0.0
             and max(0.0, float(now_monotonic) - self.last_progress_monotonic)
