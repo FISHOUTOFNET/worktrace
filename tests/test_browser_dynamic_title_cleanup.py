@@ -54,12 +54,61 @@ def test_observed_edge_title_is_normalized():
     assert result.window_title == title
 
 
+@pytest.mark.parametrize(
+    "window_title",
+    [
+        "ChatGPT - WorkTrace - 个人 - Microsoft Edge",
+        "ChatGPT - WorkTrace - Personal - Microsoft Edge",
+        "ChatGPT - WorkTrace - Profile 1 - Microsoft Edge",
+        "ChatGPT - WorkTrace ‐ Profile 12 ‐ Microsoft Edge Dev",
+        "ChatGPT - WorkTrace — Personal — Microsoft Edge Canary",
+    ],
+)
+def test_single_page_edge_profile_suffix_does_not_change_page_identity(window_title: str):
+    detector = BrowserDetector()
+    baseline = detector.detect(
+        ActiveWindow(
+            app_name="Edge",
+            process_name="msedge.exe",
+            window_title="ChatGPT - WorkTrace - Microsoft Edge",
+        )
+    )
+    result = detector.detect(
+        ActiveWindow(
+            app_name="Edge",
+            process_name="msedge.exe",
+            window_title=window_title,
+        )
+    )
+
+    assert baseline is not None
+    assert result is not None
+    assert result.display_name == "ChatGPT - WorkTrace"
+    assert result.identity_key == baseline.identity_key
+    assert result.window_title == window_title
+
+
 def test_dynamic_window_suffix_is_cleaned_before_blank_page_detection():
     result = BrowserDetector().detect(
         ActiveWindow(
             app_name="Edge",
             process_name="msedge.exe",
             window_title="New Tab and 2 more pages - Personal - Microsoft Edge Canary",
+        )
+    )
+
+    assert result is not None
+    assert result.display_name == "New Tab"
+    assert result.identity_key == "browser_blank:msedge.exe"
+    assert result.is_anchor is False
+
+
+def test_single_page_profile_suffix_is_cleaned_before_blank_page_detection():
+    result = BrowserDetector().detect(
+        ActiveWindow(
+            app_name="Edge",
+            process_name="msedge.exe",
+            window_title="New Tab - Personal - Microsoft Edge Canary",
         )
     )
 
@@ -110,14 +159,22 @@ def test_unconfirmed_other_tabs_wording_is_not_collapsed():
     assert result.display_name == "Guide and 2 other tabs"
 
 
-def test_profile_like_page_title_is_preserved_without_dynamic_page_count():
+@pytest.mark.parametrize(
+    "window_title",
+    [
+        "Project - Acme - Microsoft Edge",
+        "Project - Personal Notes - Microsoft Edge",
+        "Project - Profile Settings - Microsoft Edge",
+    ],
+)
+def test_unconfirmed_profile_like_page_title_is_preserved(window_title: str):
     result = BrowserDetector().detect(
         ActiveWindow(
             app_name="Edge",
             process_name="msedge.exe",
-            window_title="Project - Personal - Microsoft Edge",
+            window_title=window_title,
         )
     )
 
     assert result is not None
-    assert result.display_name == "Project - Personal"
+    assert result.display_name == window_title.rsplit(" - Microsoft Edge", 1)[0]
