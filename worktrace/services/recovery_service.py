@@ -24,15 +24,17 @@ _WORKER_SEGMENT_BATCH_SIZE = 7
 _WORKER_IDLE_SECONDS = 1.0
 
 
-def _durable_recovery_watermark() -> str:
+def _durable_recovery_watermark(*, allow_legacy_heartbeat: bool = True) -> str:
     """Return the safest durable Collector observation known across processes."""
 
     successful = get_setting("collector_last_successful_observation_at", "") or ""
     if _parse_time(successful) is not None:
         return successful
+    if not allow_legacy_heartbeat:
+        return ""
     # Backward compatibility for databases created before the successful-
-    # observation watermark existed. New runtimes no longer prefer heartbeat
-    # because it can be persisted before the following observation completes.
+    # observation watermark existed. Runtime-owned crash/shutdown recovery
+    # disables this fallback because heartbeat can precede a completed sample.
     heartbeat = get_setting("last_collector_heartbeat", "") or ""
     return heartbeat if _parse_time(heartbeat) is not None else ""
 
@@ -87,10 +89,17 @@ def _safe_recovery_point(
 def recover_unclosed_activity_facts(
     *,
     safe_end_time: str | None = None,
+    allow_legacy_heartbeat: bool = True,
 ) -> int:
     """Seal durable open facts without claiming a process-restart boundary."""
 
-    preferred = str(safe_end_time or _durable_recovery_watermark() or "")
+    preferred = str(
+        safe_end_time
+        or _durable_recovery_watermark(
+            allow_legacy_heartbeat=allow_legacy_heartbeat,
+        )
+        or ""
+    )
     fallback_now = now_str()
     with get_connection() as conn:
         rows = conn.execute(
@@ -183,7 +192,10 @@ def recover_after_collector_crash(
     """Reconcile a dead Collector before AppRuntime creates a replacement."""
 
     try:
-        recovered = recover_unclosed_activity_facts(safe_end_time=safe_end_time)
+        recovered = recover_unclosed_activity_facts(
+            safe_end_time=safe_end_time,
+            allow_legacy_heartbeat=False,
+        )
         clear_runtime_activity_state("collector_crash_recovery")
     except sqlite3.OperationalError as exc:
         sqlite_code = getattr(exc, "sqlite_errorcode", None)
