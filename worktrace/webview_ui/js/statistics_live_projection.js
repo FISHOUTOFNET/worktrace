@@ -1,0 +1,201 @@
+// WorkTrace WebView frontend — lightweight Statistics live projection owner.
+// Keeps authoritative snapshot/rendering semantics in statistics.js while
+// making the 1-second local projection proportional to visible changes.
+(function () {
+    "use strict";
+    var App = window.WorkTraceApp = window.WorkTraceApp || {};
+    var baseCapability = App.statistics;
+    if (!baseCapability || typeof baseCapability !== "object") return;
+
+    var rowIndex = null;
+
+    function element(id) { return document.getElementById(id); }
+
+    function nonNegativeInt(value) {
+        var parsed = parseInt(value, 10);
+        return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    }
+
+    function statisticsGroupKey(group, index) {
+        group = group || {};
+        var key = String(group.key || "");
+        if (key) return key;
+        return "display:" + String(group.display_name || "未知") + "|" + String(index || 0);
+    }
+
+    function liveTargetElapsedSeconds(target, nowMs) {
+        var sampledSeconds = nonNegativeInt(target && target.elapsed_seconds_at_sample);
+        if (!target || target.enabled !== true || target.ticking !== true) return sampledSeconds;
+        var sampledAt = nonNegativeInt(target.sampled_at_epoch_ms);
+        if (!sampledAt) return sampledSeconds;
+        return sampledSeconds + Math.max(0, Math.floor((nowMs - sampledAt) / 1000));
+    }
+
+    function buildGroupIndex(tbodyId, groups) {
+        var body = element(tbodyId);
+        if (!body || typeof body.querySelectorAll !== "function") return null;
+        var rows = body.querySelectorAll("tr");
+        groups = Array.isArray(groups) ? groups : [];
+        if (rows.length !== groups.length) return null;
+        var entries = [];
+        for (var index = 0; index < rows.length; index++) {
+            var row = rows[index];
+            var expectedKey = statisticsGroupKey(groups[index], index);
+            if (typeof row.getAttribute === "function"
+                && String(row.getAttribute("data-statistics-key") || "") !== expectedKey) {
+                return null;
+            }
+            var cells = row.children;
+            var bar = typeof row.querySelector === "function"
+                ? row.querySelector(".stats-share-bar i")
+                : null;
+            if (!cells || cells.length < 4 || !bar || !bar.style) return null;
+            entries.push({
+                key: expectedKey,
+                cells: cells,
+                bar: bar
+            });
+        }
+        return entries;
+    }
+
+    function buildRowIndex(summary, owner) {
+        var project = buildGroupIndex("stats-by-project", summary.by_project || []);
+        var file = buildGroupIndex("stats-by-file", summary.by_file || []);
+        var app = buildGroupIndex("stats-by-app", summary.by_app || []);
+        if (!project || !file || !app) return null;
+        return {
+            owner: owner,
+            project: project,
+            file: file,
+            app: app
+        };
+    }
+
+    function ensureRowIndex(summary) {
+        var owner = App.statisticsAcceptedPayload || summary;
+        if (rowIndex && rowIndex.owner === owner) return rowIndex;
+        rowIndex = buildRowIndex(summary, owner);
+        return rowIndex;
+    }
+
+    function invalidateRowIndex() {
+        rowIndex = null;
+    }
+
+    function writeText(target, value) {
+        if (target && target.textContent !== value) target.textContent = value;
+    }
+
+    function writeWidth(target, value) {
+        if (target && target.style && target.style.width !== value) target.style.width = value;
+    }
+
+    function patchGroup(entries, groups, liveKey, delta, totalSeconds) {
+        groups = Array.isArray(groups) ? groups : [];
+        if (!entries || entries.length !== groups.length) return false;
+        var normalizedLiveKey = String(liveKey || "");
+        var matchedLiveKey = !normalizedLiveKey;
+        for (var index = 0; index < groups.length; index++) {
+            var group = groups[index] || {};
+            var expectedKey = statisticsGroupKey(group, index);
+            var entry = entries[index];
+            if (!entry || entry.key !== expectedKey) return false;
+
+            var rawKey = String(group.key || "");
+            var isLive = !!normalizedLiveKey && rawKey === normalizedLiveKey;
+            if (isLive) matchedLiveKey = true;
+            var seconds = nonNegativeInt(group.duration_seconds) + (isLive ? delta : 0);
+            var duration = isLive && delta > 0
+                ? App.formatDuration(seconds)
+                : String(group.duration || App.formatDuration(seconds));
+            var percentage = totalSeconds > 0
+                ? Math.round(seconds / totalSeconds * 1000) / 10
+                : 0;
+            var percentageText = String(percentage || 0) + "%";
+            var width = Math.max(0, Math.min(100, percentage)) + "%";
+
+            writeText(entry.cells[1], duration);
+            writeText(entry.cells[3], percentageText);
+            writeWidth(entry.bar, width);
+        }
+        return matchedLiveKey;
+    }
+
+    function patchLiveProjection(summary, target, delta) {
+        if (!summary) return false;
+        var total = element("stats-total");
+        var index = ensureRowIndex(summary);
+        if (!total || !index) return false;
+
+        var totalSeconds = nonNegativeInt(summary.total_duration_seconds) + delta;
+        writeText(total, App.formatDuration(totalSeconds));
+        if (!patchGroup(index.project, summary.by_project || [], target.project_key, delta, totalSeconds)) {
+            return false;
+        }
+        if (!patchGroup(index.file, summary.by_file || [], target.file_key, delta, totalSeconds)) {
+            return false;
+        }
+        if (!patchGroup(index.app, summary.by_app || [], target.app_key, delta, totalSeconds)) {
+            return false;
+        }
+        return true;
+    }
+
+    function applyStatisticsLocalTick() {
+        if (App.currentPage !== "statistics" || App.statisticsLiveTickerSuspended === true) return null;
+        var accepted = App.statisticsAcceptedPayload;
+        if (!accepted || !accepted.summary || !accepted.filters) return null;
+        var target = accepted.exportTicket && accepted.exportTicket.live_target;
+        if (!target || target.enabled !== true) return null;
+
+        var sampledSeconds = nonNegativeInt(target.elapsed_seconds_at_sample);
+        var currentSeconds = liveTargetElapsedSeconds(target, Date.now());
+        var delta = Math.max(0, currentSeconds - sampledSeconds);
+        var renderKey = [
+            String(accepted.summary.snapshot_revision
+                || accepted.exportTicket && accepted.exportTicket.revision || ""),
+            String(delta)
+        ].join("|");
+        if (App.statisticsLastLiveRenderKey === renderKey) return null;
+
+        if (patchLiveProjection(accepted.summary, target, delta)) {
+            App.statisticsLastLiveRenderKey = renderKey;
+            return null;
+        }
+        invalidateRowIndex();
+        if (delta > 0) {
+            return {
+                refreshRequired: true,
+                reason: "statistics_live_projection_mismatch"
+            };
+        }
+        return null;
+    }
+
+    function onStatisticsRuntimeTransition(change) {
+        change = change || {};
+        if (change.source !== "refresh-state" || change.reportStructureChanged !== true) return;
+        if (App.statisticsLiveTickerSuspended === true) return;
+        applyStatisticsLocalTick();
+        App.statisticsLiveTickerSuspended = true;
+    }
+
+    var refreshPolicy = Object.assign({}, baseCapability.refreshPolicy || {}, {
+        deferred: false,
+        preservePresentation: true
+    });
+    var capability = {};
+    Object.keys(baseCapability).forEach(function (key) {
+        capability[key] = baseCapability[key];
+    });
+    capability.applyLocalTick = applyStatisticsLocalTick;
+    capability.onRuntimeTransition = onStatisticsRuntimeTransition;
+    capability.refreshPolicy = Object.freeze(refreshPolicy);
+
+    App.applyStatisticsLocalTicker = applyStatisticsLocalTick;
+    App.statistics = Object.freeze(capability);
+    App.statisticsLiveProjection = Object.freeze({
+        invalidateRowIndex: invalidateRowIndex
+    });
+})();
