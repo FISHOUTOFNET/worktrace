@@ -46,16 +46,20 @@ _OFFICE_DOCUMENT_EXTENSIONS = frozenset({
 
 class LocalFileDetector:
     def detect(self, active_window: ActiveWindow) -> DetectedResource | None:
+        title = active_window.window_title or ""
         file_path = resolve_file_candidate(
             active_window,
             allowed_extensions=_LOCAL_FILE_EXTENSIONS,
             prefer_hint=True,
             allow_title_path=True,
-            allow_title_file=True,
+            # A URL may legitimately end in a known extension (report.pdf),
+            # but that is web evidence, not a bare local-file name. Full local
+            # paths embedded in file:// titles are still accepted above.
+            allow_title_file="://" not in title,
         )
         probable_title_file = False
         if file_path is None:
-            file_path = extract_probable_file_name(active_window.window_title)
+            file_path = extract_probable_file_name(title)
             probable_title_file = file_path is not None
         if file_path is None:
             return None
