@@ -28,9 +28,22 @@ _BROWSER_TITLE_SUFFIXES = [
     "— Mozilla Firefox",
 ]
 
+_TITLE_SEPARATOR_CLASS = r"[-‐‑‒–—]"
+
 # Page-count text is browser-window state, not page identity.
 _BROWSER_DYNAMIC_PAGE_COUNT_SUFFIX = re.compile(
     r"(?:\s*和另外\s*\d+\s*个页面|\s+and\s+\d+\s+more\s+pages?).*$",
+    re.IGNORECASE,
+)
+
+# Edge appends a small set of built-in profile labels between the page title and
+# the browser brand. Treat only confirmed browser-owned labels as window chrome;
+# arbitrary text in the same position may be part of the real page title.
+_EDGE_PROFILE_AND_BRAND_SUFFIX = re.compile(
+    rf"\s*{_TITLE_SEPARATOR_CLASS}\s*"
+    r"(?:个人|Personal|Profile\s+\d+)\s*"
+    rf"{_TITLE_SEPARATOR_CLASS}\s*"
+    r"Microsoft Edge(?: Beta| Dev| Canary)?\s*$",
     re.IGNORECASE,
 )
 
@@ -97,13 +110,16 @@ class BrowserDetector:
         if dynamic_cleaned != cleaned:
             return dynamic_cleaned
 
+        cleaned = _EDGE_PROFILE_AND_BRAND_SUFFIX.sub("", cleaned).strip()
+
         for suffix in _BROWSER_TITLE_SUFFIXES:
             if cleaned.endswith(suffix):
                 cleaned = cleaned[: -len(suffix)].strip()
                 break
-        # Also try regex-based cleanup for variations and Edge release channels.
+        # Also try regex-based cleanup for variations and browser release channels.
         cleaned = re.sub(
-            r"\s*[-–—]\s*(Google Chrome|Microsoft Edge(?: Beta| Dev| Canary)?|Mozilla Firefox|Brave|Opera|Vivaldi)\s*$",
+            rf"\s*{_TITLE_SEPARATOR_CLASS}\s*"
+            r"(Google Chrome|Microsoft Edge(?: Beta| Dev| Canary)?|Mozilla Firefox|Brave|Opera|Vivaldi)\s*$",
             "",
             cleaned,
             flags=re.IGNORECASE,
