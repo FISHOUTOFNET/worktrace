@@ -12,6 +12,7 @@ from typing import TextIO
 _STARTUP_LOG_NAME = "startup.log"
 _MAINTENANCE_SHUTDOWN_ARGUMENT = "--shutdown-for-maintenance"
 _PRIVACY_ACCEPT_ARGUMENT = "--accept-privacy-notice"
+_STARTUP_CONTROL_ARGUMENT = "--configure-launch-at-login"
 
 
 def _startup_log_candidates() -> list[Path]:
@@ -119,6 +120,30 @@ def _run_installer_privacy_acceptance(argv: list[str]) -> int:
         return 1
 
 
+def _run_launch_at_login_control(argv: list[str]) -> int:
+    """Run one installer-owned launch-at-login state transition and exit."""
+
+    if len(argv) != 2 or argv[0] != _STARTUP_CONTROL_ARGUMENT:
+        return 64
+    operation = argv[1]
+    if operation not in {"enable", "disable", "migrate"}:
+        return 64
+
+    try:
+        from worktrace.platforms.windows_startup import WindowsStartupRegistration
+
+        registration = WindowsStartupRegistration()
+        if operation == "enable":
+            registration.enable()
+        elif operation == "disable":
+            registration.disable()
+        else:
+            registration.migrate_legacy_registration()
+        return 0
+    except Exception:
+        return 1
+
+
 def _run_application(argv: list[str]) -> int:
     stream, log_path = _open_startup_log()
     _attach_windowed_streams(stream)
@@ -156,4 +181,6 @@ if __name__ == "__main__":
         raise SystemExit(_run_windows_probe_helper())
     if len(sys.argv) >= 2 and sys.argv[1] == _PRIVACY_ACCEPT_ARGUMENT:
         raise SystemExit(_run_installer_privacy_acceptance(list(sys.argv[1:])))
+    if len(sys.argv) >= 2 and sys.argv[1] == _STARTUP_CONTROL_ARGUMENT:
+        raise SystemExit(_run_launch_at_login_control(list(sys.argv[1:])))
     raise SystemExit(_run_application(list(sys.argv[1:])))

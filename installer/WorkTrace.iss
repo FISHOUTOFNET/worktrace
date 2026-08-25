@@ -73,14 +73,21 @@ Name: "{group}\有迹"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; 
 Name: "{autodesktop}\有迹"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyInstalledIconName}"; Tasks: desktopicon
 
 [Registry]
-; Keep the legacy Run value name as a compatibility identifier; its target is Trace.exe.
+; The legacy Run value is now only a short-lived installer compatibility bootstrap.
+; The frozen executable migrates it to the canonical current-user logon task below.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "WorkTrace"; ValueData: """{app}\Trace.exe"" --background"; Tasks: startup; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "WorkTrace"; Tasks: not startup; Flags: deletevalue
 Root: HKCU; Subkey: "Software\WorkTrace\InstallBootstrap"; ValueType: dword; ValueName: "EnableFDWork"; ValueData: "1"; Tasks: fdwork; Flags: uninsdeletevalue uninsdeletekeyifempty
 Root: HKCU; Subkey: "Software\WorkTrace\InstallBootstrap"; ValueType: none; ValueName: "EnableFDWork"; Tasks: not fdwork; Flags: deletevalue
 
 [Run]
+; Always resolve installer/bootstrap startup state before any optional visible launch.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--configure-launch-at-login migrate"; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "启动有迹"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; Remove both the scheduled task and any legacy Run fallback before payload deletion.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--configure-launch-at-login disable"; Flags: runhidden waituntilterminated
 
 [Code]
 const
@@ -120,7 +127,7 @@ function OpenEvent(
   external 'OpenEventW@kernel32.dll stdcall';
 
 function SetEvent(hEvent: THandle): BOOL;
-  external 'SetEvent@kernel32.dll stdcall';
+  external 'SetEventW@kernel32.dll stdcall';
 
 function CreateFile(
   lpFileName: String;
