@@ -36,6 +36,7 @@ datas = [
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline_editor_state.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline_fd_work.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline_selection_continuity.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline_delete_actions.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline_action_presentation.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'statistics.js'), 'worktrace/webview_ui/js'),
