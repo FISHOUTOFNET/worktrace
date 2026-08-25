@@ -37,8 +37,6 @@ _EXT_TO_SUBTYPE: dict[str, str] = {
     ".csv": "csv_file",
 }
 
-# Office document extensions are owned by OfficeWpsDetector / FallbackFileDetector
-# with dedicated subtypes; LocalFileDetector defers them to preserve those subtypes.
 _OFFICE_DOCUMENT_EXTENSIONS = frozenset({
     ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
 })
@@ -52,9 +50,6 @@ class LocalFileDetector:
             allowed_extensions=_LOCAL_FILE_EXTENSIONS,
             prefer_hint=True,
             allow_title_path=True,
-            # A URL may legitimately end in a known extension (report.pdf),
-            # but that is web evidence, not a bare local-file name. Full local
-            # paths embedded in file:// titles are still accepted above.
             allow_title_file="://" not in title,
         )
         probable_title_file = False
@@ -69,8 +64,6 @@ class LocalFileDetector:
         ext_lower = ext.casefold()
         is_full_local_path = looks_like_local_file_path(file_path)
 
-        # Dedicated Office/WPS/Fallback detectors own these extensions even when
-        # only a bare title file name is available.
         if ext_lower in _OFFICE_DOCUMENT_EXTENSIONS:
             return None
 
@@ -79,14 +72,8 @@ class LocalFileDetector:
             if ext_lower in _CODE_EXTENSIONS:
                 subtype = "code_file"
             elif ext_lower in _LOCAL_FILE_EXTENSIONS:
-                # Whitelisted extension without a dedicated subtype
-                # (e.g. .json, .yaml, .html).
                 subtype = "text_file"
             else:
-                # A full local path is authoritative regardless of extension.
-                # A conservative probable-title candidate is lower-confidence
-                # evidence, but still enough to preserve file identity instead
-                # of degrading to the host application process.
                 if not is_full_local_path and not probable_title_file:
                     return None
                 subtype = "unknown"
