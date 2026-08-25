@@ -120,6 +120,9 @@
 
     function timelineIntent(item, focusTarget) {
         if (!item || !item.projection_instance_key) return;
+        if (typeof App.openTimelineSelectionIntent === "function") {
+            return App.openTimelineSelectionIntent(item, focusTarget || "");
+        }
         var date = String(item.start_time || item.report_date || App.timelineDate || "").slice(0, 10);
         if (!date) return;
         App.pendingTimelineSelectionIntent = {
@@ -129,16 +132,9 @@
         };
         App.timelineDate = date;
         App.switchPage("timeline");
-        App.loadTimelineReport(date, {
+        return App.loadTimelineReport(date, {
             showLoading: true,
             resetSelection: false
-        }).then(function () {
-            var selected = App.findSessionByProjectionKey(item.projection_instance_key);
-            if (!selected) return;
-            App.selectTimelineSession(item.projection_instance_key, App.currentSessions || []);
-            if (typeof App.focusTimelineEditorField === "function") {
-                App.focusTimelineEditorField(focusTarget || "");
-            }
         });
     }
     App.openOverviewTimelineIntent = timelineIntent;
