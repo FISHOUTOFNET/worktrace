@@ -10,6 +10,7 @@ from .resource_helpers import (
     resolve_file_candidate,
 )
 from .resource_policy import validate_resource_kind, validate_resource_subtype
+from .title_parsing import extract_probable_file_name
 from .types import DetectedResource
 
 _LOCAL_FILE_EXTENSIONS = frozenset({
@@ -52,6 +53,10 @@ class LocalFileDetector:
             allow_title_path=True,
             allow_title_file=True,
         )
+        probable_title_file = False
+        if file_path is None:
+            file_path = extract_probable_file_name(active_window.window_title)
+            probable_title_file = file_path is not None
         if file_path is None:
             return None
 
@@ -60,11 +65,9 @@ class LocalFileDetector:
         ext_lower = ext.casefold()
         is_full_local_path = looks_like_local_file_path(file_path)
 
-        # Office document extensions are the one exception on full paths: they
-        if not is_full_local_path:
-            if ext_lower not in _LOCAL_FILE_EXTENSIONS:
-                return None
-        elif ext_lower in _OFFICE_DOCUMENT_EXTENSIONS:
+        # Dedicated Office/WPS/Fallback detectors own these extensions even when
+        # only a bare title file name is available.
+        if ext_lower in _OFFICE_DOCUMENT_EXTENSIONS:
             return None
 
         subtype = _EXT_TO_SUBTYPE.get(ext_lower)
@@ -76,9 +79,12 @@ class LocalFileDetector:
                 # (e.g. .json, .yaml, .html).
                 subtype = "text_file"
             else:
-                # Unknown extension on a full local path — still a valid file
-                # anchor, but we have no more specific subtype. Reuse the
-                # existing "unknown" subtype instead of adding a schema value.
+                # A full local path is authoritative regardless of extension.
+                # A conservative probable-title candidate is lower-confidence
+                # evidence, but still enough to preserve file identity instead
+                # of degrading to the host application process.
+                if not is_full_local_path and not probable_title_file:
+                    return None
                 subtype = "unknown"
 
         identity_key = build_path_or_name_identity(file_path, "file_path", "file_name")
@@ -89,7 +95,7 @@ class LocalFileDetector:
             display_name=file_name,
             identity_key=identity_key,
             is_anchor=True,
-            confidence=80,
+            confidence=65 if probable_title_file and not is_full_local_path else 80,
             source="local_file_detector",
             app_name=active_window.app_name or "",
             process_name=active_window.process_name or "",
