@@ -127,7 +127,7 @@ function OpenEvent(
   external 'OpenEventW@kernel32.dll stdcall';
 
 function SetEvent(hEvent: THandle): BOOL;
-  external 'SetEventW@kernel32.dll stdcall';
+  external 'SetEvent@kernel32.dll stdcall';
 
 function CreateFile(
   lpFileName: String;
