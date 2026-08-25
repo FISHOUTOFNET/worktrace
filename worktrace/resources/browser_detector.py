@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from ..path_utils import looks_like_local_file_path
 from ..platforms.base import ActiveWindow
 from .resource_helpers import normalize_for_key
 from .resource_policy import validate_resource_kind, validate_resource_subtype
@@ -63,6 +64,13 @@ class BrowserDetector:
     def detect(self, active_window: ActiveWindow) -> DetectedResource | None:
         process_lower = (active_window.process_name or "").strip().lower()
         if process_lower not in BROWSER_PROCESS_NAMES:
+            return None
+
+        # A browser process alone is not proof that the resource is a web page.
+        # Only defer when the platform has already established an authoritative
+        # local path; a title such as "report.pdf" without that path remains a
+        # browser page and cannot be promoted to a local file by title alone.
+        if looks_like_local_file_path(active_window.file_path_hint):
             return None
 
         title = (active_window.window_title or "").strip()
