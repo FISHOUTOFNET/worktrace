@@ -40,6 +40,7 @@ class _RuntimeHealthState:
 class _RuntimeProgressState:
     generation: int = 0
     runtime_status: str = "stopped"
+    started_monotonic: float = 0.0
     last_successful_observation_at: str = ""
     last_success_monotonic: float = 0.0
     terminal_reason: str = ""
@@ -78,6 +79,7 @@ def begin_runtime_invocation(generation: int) -> None:
     with _PROGRESS_LOCK:
         _RUNTIME_PROGRESS.generation = max(0, int(generation))
         _RUNTIME_PROGRESS.runtime_status = "starting"
+        _RUNTIME_PROGRESS.started_monotonic = time.monotonic()
         _RUNTIME_PROGRESS.last_successful_observation_at = ""
         _RUNTIME_PROGRESS.last_success_monotonic = 0.0
         _RUNTIME_PROGRESS.terminal_reason = ""
@@ -106,6 +108,7 @@ def runtime_progress_snapshot() -> dict[str, object]:
         return {
             "generation": int(_RUNTIME_PROGRESS.generation),
             "runtime_status": str(_RUNTIME_PROGRESS.runtime_status),
+            "started_monotonic": float(_RUNTIME_PROGRESS.started_monotonic),
             "last_successful_observation_at": str(
                 _RUNTIME_PROGRESS.last_successful_observation_at
             ),
