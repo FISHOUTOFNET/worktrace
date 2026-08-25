@@ -12,6 +12,7 @@ from .resource_helpers import (
     normalize_for_key,
 )
 from .resource_policy import validate_resource_kind, validate_resource_subtype
+from .title_parsing import extract_probable_file_name
 from .types import DetectedResource
 
 IDE_PROCESS_NAMES = frozenset({
@@ -35,6 +36,22 @@ IDE_CODE_EXTENSIONS = frozenset({
     ".html", ".css", ".scss", ".less", ".vue", ".svelte",
 })
 
+_IDE_EXTENSIONLESS_FILE_NAMES = frozenset({
+    "readme",
+    "license",
+    "makefile",
+    "dockerfile",
+    "procfile",
+    "rakefile",
+    "gemfile",
+    "vagrantfile",
+})
+_DOTFILE_RE = re.compile(r"^\.[A-Za-z0-9][A-Za-z0-9._-]*$")
+_IDE_SUFFIX_RE = re.compile(
+    r"\s*[-–—]\s*(Visual Studio Code|VS Code|PyCharm|IntelliJ IDEA|WebStorm|PhpStorm|Rider|Visual Studio|Sublime Text|Notepad\+\+|Cursor).*$",
+    re.IGNORECASE,
+)
+
 
 class IdeDetector:
     def detect(self, active_window: ActiveWindow) -> DetectedResource | None:
@@ -42,7 +59,7 @@ class IdeDetector:
         if process_lower not in IDE_PROCESS_NAMES:
             return None
 
-        # 1. Try file_path_hint or title for a code file
+        # 1. Try file_path_hint or title for a code file.
         hint = (active_window.file_path_hint or "").strip()
         title = (active_window.window_title or "").strip()
 
@@ -51,30 +68,44 @@ class IdeDetector:
             _, ext = ntpath.splitext(hint)
             if ext.casefold() in IDE_CODE_EXTENSIONS:
                 code_file_path = hint
-            else:
-                # hint present but not a code extension; still trust it as a
-                # full path if it looks like one, so title-based detection can
-                # try next.
-                pass
+            elif looks_like_local_file_path(hint):
+                hint_name = ntpath.basename(hint)
+                if self._is_special_extensionless_file(hint_name):
+                    code_file_path = hint
+                else:
+                    # The platform proved this is a local file, but it is not a
+                    # code-file subtype owned by this detector. Let the generic
+                    # LocalFileDetector preserve the concrete path instead of
+                    # degrading it to an IDE workspace.
+                    return None
 
         if code_file_path is None:
             file_name = extract_file_name_from_title(title)
             if file_name:
                 _, ext = ntpath.splitext(file_name)
                 if ext.casefold() in IDE_CODE_EXTENSIONS:
-                    # Prefer a full path from hint when available, else the
-                    # bare file name from the title.
                     code_file_path = hint if hint and looks_like_local_file_path(hint) else file_name
+
+        if code_file_path is None:
+            special_file = self._extract_special_file_name(title)
+            if special_file:
+                code_file_path = special_file
 
         if code_file_path:
             return self._make_code_file_resource(active_window, code_file_path)
 
-        # 2. Try to identify workspace/project from title
+        # A strong dotted file candidate with an unsupported IDE subtype belongs
+        # to LocalFileDetector. This also prevents image/archive/design files
+        # opened in an IDE from being mislabeled as the workspace.
+        if extract_probable_file_name(title):
+            return None
+
+        # 2. Try to identify workspace/project from title.
         workspace = self._extract_workspace(title, process_lower)
         if workspace:
             return self._make_workspace_resource(active_window, workspace)
 
-        # 3. No file or workspace identified - let GenericAppDetector handle it
+        # 3. No file or workspace identified - let GenericAppDetector handle it.
         return None
 
     def _make_code_file_resource(self, active_window: ActiveWindow, file_path: str) -> DetectedResource:
@@ -118,31 +149,42 @@ class IdeDetector:
         re.IGNORECASE,
     )
 
+    def _extract_special_file_name(self, title: str) -> str | None:
+        if not title:
+            return None
+        cleaned = _IDE_SUFFIX_RE.sub("", title).strip()
+        if not cleaned:
+            return None
+        first_segment = re.split(r"\s*[-–—]\s*", cleaned, maxsplit=1)[0].strip()
+        return first_segment if self._is_special_extensionless_file(first_segment) else None
+
+    @staticmethod
+    def _is_special_extensionless_file(file_name: str) -> bool:
+        normalized = str(file_name or "").strip()
+        if not normalized:
+            return False
+        if normalized.casefold() in _IDE_EXTENSIONLESS_FILE_NAMES:
+            return True
+        return bool(_DOTFILE_RE.fullmatch(normalized))
+
     def _extract_workspace(self, title: str, process_lower: str) -> str | None:
         if not title:
             return None
         # IDE titles use "file - project - IDE" or "project - IDE" form;
         # the workspace is the last segment after stripping the IDE suffix.
-        cleaned = re.sub(
-            r"\s*[-–—]\s*(Visual Studio Code|VS Code|PyCharm|IntelliJ IDEA|WebStorm|PhpStorm|Rider|Visual Studio|Sublime Text|Notepad\+\+|Cursor).*$",
-            "",
-            title,
-            flags=re.IGNORECASE,
-        ).strip()
+        cleaned = _IDE_SUFFIX_RE.sub("", title).strip()
         if not cleaned:
             return None
-        # If the cleaned title is just an IDE name, it's not a workspace
+        # If the cleaned title is just an IDE name, it's not a workspace.
         if self._IDE_NAME_PATTERNS.match(cleaned):
             return None
-        # Split by " - " or " – " and take the last segment as workspace
+        # Split by " - " or " – " and take the last segment as workspace.
         parts = re.split(r"\s*[-–—]\s*", cleaned)
         if len(parts) >= 2:
-            # Last part before IDE name is likely workspace
             candidate = parts[-1].strip()
             if candidate and len(candidate) >= 2 and not self._IDE_NAME_PATTERNS.match(candidate):
                 return candidate
         elif len(parts) == 1:
-            # Only one segment (e.g., "MyProject" after removing "– PyCharm")
             candidate = parts[0].strip()
             if candidate and len(candidate) >= 2 and not self._IDE_NAME_PATTERNS.match(candidate):
                 return candidate
