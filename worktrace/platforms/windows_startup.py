@@ -18,6 +18,8 @@ _TASK_CREATE_OR_UPDATE = 6
 _TASK_LOGON_INTERACTIVE_TOKEN = 3
 _TASK_RUNLEVEL_LUA = 0
 _TASK_INSTANCES_IGNORE_NEW = 2
+_TASK_PRIORITY_NORMAL = 6
+_TASK_TRIGGER_DELAY = "PT0S"
 
 
 @dataclass(frozen=True)
@@ -142,6 +144,7 @@ class WindowsTaskScheduler:
                 == _normalized_windows_path(spec.working_directory),
                 int(trigger.Type) == _TASK_TRIGGER_LOGON,
                 bool(trigger.Enabled),
+                str(trigger.Delay or "").upper() == _TASK_TRIGGER_DELAY,
                 int(principal.LogonType) == _TASK_LOGON_INTERACTIVE_TOKEN,
                 int(principal.RunLevel) == _TASK_RUNLEVEL_LUA,
                 bool(settings.Enabled),
@@ -150,6 +153,7 @@ class WindowsTaskScheduler:
                 not bool(settings.StopIfGoingOnBatteries),
                 str(settings.ExecutionTimeLimit or "").upper() == "PT0S",
                 int(settings.MultipleInstances) == _TASK_INSTANCES_IGNORE_NEW,
+                int(settings.Priority) == _TASK_PRIORITY_NORMAL,
             )
         )
 
@@ -169,7 +173,7 @@ class WindowsTaskScheduler:
         trigger = definition.Triggers.Create(_TASK_TRIGGER_LOGON)
         trigger.Id = "CurrentUserLogon"
         trigger.UserId = user_sid
-        trigger.Delay = "PT0S"
+        trigger.Delay = _TASK_TRIGGER_DELAY
         trigger.Enabled = True
 
         action = definition.Actions.Create(_TASK_ACTION_EXEC)
@@ -184,6 +188,7 @@ class WindowsTaskScheduler:
         settings.StopIfGoingOnBatteries = False
         settings.ExecutionTimeLimit = "PT0S"
         settings.MultipleInstances = _TASK_INSTANCES_IGNORE_NEW
+        settings.Priority = _TASK_PRIORITY_NORMAL
 
         root.RegisterTaskDefinition(
             name,
@@ -256,6 +261,10 @@ class WindowsStartupRegistration:
     def _legacy_value(self) -> str | None:
         return self._registry.read_run_value(RUN_VALUE_NAME)
 
+    def _legacy_is_enabled(self) -> bool:
+        value = self._legacy_value()
+        return isinstance(value, str) and bool(value.strip())
+
     def _legacy_is_configured(self) -> bool:
         try:
             value = self._legacy_value()
@@ -265,14 +274,19 @@ class WindowsStartupRegistration:
             return False
         return ntpath.normcase(value.strip()) == ntpath.normcase(self.expected_command())
 
-    def is_configured(self) -> bool:
+    def is_canonical(self) -> bool:
         if not self.supported:
             return False
         try:
-            if self._scheduler.is_configured(TASK_NAME, self._task_spec()):
-                return True
+            return self._scheduler.is_configured(TASK_NAME, self._task_spec())
         except Exception:
-            pass
+            return False
+
+    def is_configured(self) -> bool:
+        if not self.supported:
+            return False
+        if self.is_canonical():
+            return True
         return self._legacy_is_configured()
 
     def enable(self, executable_path: Path | None = None) -> None:
@@ -291,16 +305,30 @@ class WindowsStartupRegistration:
         # so a registration failure cannot silently remove a working startup path.
         self._registry.delete_run_value(RUN_VALUE_NAME)
 
+    def repair_if_needed(self) -> str:
+        """Repair an existing launch-at-login intent without creating new intent."""
+
+        if not self.supported:
+            return "unsupported"
+
+        task_exists = self._scheduler.exists(TASK_NAME)
+        legacy_enabled = self._legacy_is_enabled()
+        if not task_exists and not legacy_enabled:
+            return "disabled"
+
+        if self._scheduler.is_configured(TASK_NAME, self._task_spec()):
+            if legacy_enabled:
+                self._registry.delete_run_value(RUN_VALUE_NAME)
+                return "repaired"
+            return "canonical"
+
+        self.enable()
+        return "repaired"
+
     def migrate_legacy_registration(self) -> None:
         if not self.supported:
             raise RuntimeError("launch_at_login_unsupported")
-
-        task_exists = self._scheduler.exists(TASK_NAME)
-        legacy_value = self._legacy_value()
-        legacy_enabled = isinstance(legacy_value, str) and bool(legacy_value.strip())
-        if not task_exists and not legacy_enabled:
-            return
-        self.enable()
+        self.repair_if_needed()
 
     def disable(self) -> None:
         if not self.supported:
@@ -320,6 +348,22 @@ class WindowsStartupRegistration:
             raise first_error
 
 
+def repair_launch_at_login_for_current_user() -> str:
+    """Best-effort repair entry for a frozen process worker thread."""
+
+    registration = WindowsStartupRegistration()
+    if not registration.supported:
+        return "unsupported"
+
+    import pythoncom
+
+    pythoncom.CoInitialize()
+    try:
+        return registration.repair_if_needed()
+    finally:
+        pythoncom.CoUninitialize()
+
+
 __all__ = [
     "BACKGROUND_ARGUMENT",
     "RUN_KEY",
@@ -329,4 +373,5 @@ __all__ = [
     "WindowsStartupRegistration",
     "WindowsTaskScheduler",
     "installed_executable_path",
+    "repair_launch_at_login_for_current_user",
 ]
