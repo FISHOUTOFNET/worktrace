@@ -7,6 +7,7 @@ from PyInstaller.utils.hooks import collect_all
 root = Path(SPECPATH)
 brand_icon = root / 'build' / 'brand' / 'worktrace.ico'
 paused_brand_icon = root / 'build' / 'brand' / 'worktrace-paused.ico'
+app_manifest = root / 'packaging' / 'windows' / 'trace.manifest.xml'
 icon_generator = runpy.run_path(str(root / 'scripts' / 'generate_brand_icon.py'))
 icon_generator['generate_icon'](brand_icon)
 icon_generator['generate_icon'](paused_brand_icon, grayscale=True)
@@ -106,6 +107,7 @@ portable_exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=str(brand_icon),
+    manifest=str(app_manifest),
 )
 
 installed_exe = EXE(
@@ -126,6 +128,7 @@ installed_exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=str(brand_icon),
+    manifest=str(app_manifest),
 )
 
 installed_app = COLLECT(
