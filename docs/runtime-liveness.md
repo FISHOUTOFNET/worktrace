@@ -64,16 +64,23 @@ previously persisted duration.
 ## WebView live projection authority
 
 Receiving a runtime envelope does not by itself grant another live-time lease.
-Live projection requires both a fresh client receipt and a fresh source clock
-sample, with materially future-dated source clocks failing closed. A stale
-refresh-state response may be observed for recovery coordination but cannot
+Canonical LiveClock projection requires both a fresh client receipt and a fresh
+source clock sample, with materially future-dated source clocks failing closed. A
+stale refresh-state response may be observed for recovery coordination but cannot
 release a pending authoritative page rebase.
 
-All presentation paths share one live-projection capability. Cached Timeline,
-Overview or Statistics data may reuse durable values, but direct `Date.now()`
-clock projection is permitted only while the current runtime is fresh and the
-clock identity belongs to that runtime. Presentation code does not own freshness
-or rebase policy.
+Overview, Timeline and cached canonical-clock presentation paths share the central
+LiveClock projection capability and runtime identity checks. Statistics has a
+separate snapshot-owned `live_target` because its authoritative read is the
+verified Statistics snapshot rather than a page runtime envelope. It must use the
+same source-sample freshness predicate, freeze when that target expires or runtime
+collection becomes non-live, and resume only after a newly accepted authoritative
+Statistics snapshot replaces the target. A refresh-state transition may request
+that rebase but must never mint a final `Date.now()` delta from the old target.
+
+Presentation code therefore does not invent freshness policy: canonical clocks
+use the runtime projection owner, while Statistics owns only the lifecycle of its
+accepted live target and delegates freshness timing to the shared predicate.
 
 ## Desktop restore capability
 

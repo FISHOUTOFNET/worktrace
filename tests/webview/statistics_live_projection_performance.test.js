@@ -63,6 +63,7 @@ function loadModule(context, name) {
 
 function harness(count = 1000, options = {}) {
   let nowMs = 1_000_005_000;
+  let runtimeLive = true;
   const groups = Array.from({ length: count }, (_, index) => ({
     key: `K${index}`,
     display_name: `K${index}`,
@@ -100,6 +101,13 @@ function harness(count = 1000, options = {}) {
     statisticsLastLiveRenderKey: "",
     formatDuration,
     escapeHtml(value) { return String(value || ""); },
+    liveSampleFresh(sampledAtEpochMs, currentNowMs) {
+      const age = currentNowMs - Number(sampledAtEpochMs || 0);
+      return Number(sampledAtEpochMs || 0) > 0 && age >= -2000 && age <= 10000;
+    },
+    liveRuntimeStore: {
+      get() { return { collector: { live_eligible: runtimeLive } }; },
+    },
   };
   const FakeDate = class extends Date {
     static now() { return nowMs; }
@@ -161,6 +169,8 @@ function harness(count = 1000, options = {}) {
     appRows,
     queries() { return [projectQueries, fileQueries, appQueries]; },
     advance(ms) { nowMs += ms; },
+    nowValue() { return nowMs; },
+    setRuntimeLive(value) { runtimeLive = value === true; },
   };
 }
 
@@ -202,8 +212,10 @@ test("Statistics live tick caches row discovery and skips unchanged DOM writes",
   assert.equal(h.projectRows[999].style.writes(), 0);
 });
 
-test("Statistics structure transition freezes old live target without deferred refresh policy", () => {
+test("Statistics structure transition freezes without one last stale projection", () => {
   const h = harness(2);
+  resetWrites(h);
+
   h.App.statistics.onRuntimeTransition({
     source: "refresh-state",
     reportStructureChanged: true,
@@ -212,6 +224,39 @@ test("Statistics structure transition freezes old live target without deferred r
   assert.equal(h.App.statisticsLiveTickerSuspended, true);
   assert.equal(h.App.statistics.refreshPolicy.deferred, false);
   assert.equal(h.App.statistics.refreshPolicy.preservePresentation, true);
+  assert.equal(h.total.writes(), 0, "transition must not mint another second from the old target");
+  assert.equal(h.projectRows[0].duration.writes(), 0);
+});
+
+test("Statistics stale live target freezes and resumes only after authoritative target replacement", () => {
+  const h = harness(2);
+  h.advance(6000);
+  resetWrites(h);
+
+  const stale = h.App.statistics.applyLocalTick();
+  assert.equal(stale && stale.refreshRequired, true);
+  assert.equal(stale && stale.reason, "statistics_live_target_stale");
+  assert.equal(h.App.statisticsLiveTickerSuspended, true);
+  assert.equal(h.total.writes(), 0);
+
+  h.App.statisticsAcceptedPayload.exportTicket.live_target.sampled_at_epoch_ms = h.nowValue();
+  h.App.resumeStatisticsLiveTicker();
+  h.advance(1000);
+
+  const resumed = h.App.statistics.applyLocalTick();
+  assert.equal(resumed, null);
+  assert.equal(h.App.statisticsLiveTickerSuspended, false);
+  assert.equal(h.total.writes(), 1);
+});
+
+test("Statistics runtime stop freezes an otherwise fresh live target immediately", () => {
+  const h = harness(2);
+  h.setRuntimeLive(false);
+
+  const result = h.App.statistics.applyLocalTick();
+  assert.equal(result && result.refreshRequired, true);
+  assert.equal(result && result.reason, "statistics_runtime_not_live");
+  assert.equal(h.App.statisticsLiveTickerSuspended, true);
 });
 
 test("Statistics live row mismatch keeps authoritative self-heal path", () => {

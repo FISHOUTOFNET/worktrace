@@ -56,7 +56,10 @@ function harness(initialPage = "overview") {
   let renderCalls = 0;
   let statisticsTicks = 0;
   let timelineTicks = 0;
+  let toggleCalls = 0;
+  const toggleResolvers = [];
   const target = { clock: null };
+  const toggleButton = { disabled: false, addEventListener() {} };
 
   const capabilities = {
     overview: {
@@ -137,6 +140,7 @@ function harness(initialPage = "overview") {
     showStatus() {},
     showGlobalAlert() {},
     clearGlobalAlert() {},
+    extractBridgeError(_result, fallback) { return fallback; },
     handleResult(value) { return value; },
   };
 
@@ -144,6 +148,7 @@ function harness(initialPage = "overview") {
     readyState: "loading",
     addEventListener() {},
     getElementById(id) {
+      if (id === "toggle-pause-btn") return toggleButton;
       return id === `page-${App.currentPage}` ? pageRoot : null;
     },
     querySelectorAll() { return []; },
@@ -153,7 +158,14 @@ function harness(initialPage = "overview") {
   const context = {
     window: {
       WorkTraceApp: App,
-      pywebview: { api: {} },
+      pywebview: {
+        api: {
+          toggle_pause() {
+            toggleCalls += 1;
+            return new Promise((resolve) => toggleResolvers.push(resolve));
+          },
+        },
+      },
       addEventListener() {},
       removeEventListener() {},
       setTimeout,
@@ -189,6 +201,7 @@ function harness(initialPage = "overview") {
   return {
     App: context.window.WorkTraceApp,
     target,
+    toggleButton,
     acceptRefresh(live, revision, sampledAt = now) {
       return App.acceptRefreshStateRuntime(
         runtimeState(App.currentPage, live, revision, sampledAt)
@@ -201,7 +214,12 @@ function harness(initialPage = "overview") {
     },
     advance(milliseconds) { now += milliseconds; },
     nowValue() { return now; },
-    counts() { return { renderCalls, statisticsTicks, timelineTicks }; },
+    resolveToggle(result) {
+      const resolve = toggleResolvers.shift();
+      assert.ok(resolve, "expected an in-flight toggle request");
+      resolve(result);
+    },
+    counts() { return { renderCalls, statisticsTicks, timelineTicks, toggleCalls }; },
   };
 }
 
@@ -265,6 +283,16 @@ test("cached presentation projection cannot bypass an expired runtime lease", ()
   );
 });
 
+test("shared live sample freshness uses the runtime lease and future-skew boundary", () => {
+  const { App, nowValue } = harness("overview");
+  const now = nowValue();
+
+  assert.equal(App.liveSampleFresh(now - 10000, now), true);
+  assert.equal(App.liveSampleFresh(now - 10001, now), false);
+  assert.equal(App.liveSampleFresh(now + 2000, now), true);
+  assert.equal(App.liveSampleFresh(now + 2001, now), false);
+});
+
 test("a live response stale before arrival never receives a fresh projection lease", () => {
   const { App, acceptRefresh, acceptPage, nowValue } = harness("overview");
 
@@ -311,8 +339,8 @@ test("failed page rebase remains fail-closed after bridge recovery", () => {
   assert.equal(counts().renderCalls, 0, "later heartbeat cannot bypass pending page rebase");
 });
 
-test("statistics freezes on stale or non-live runtime and requires page rebase before resuming", () => {
-  const { App, acceptRefresh, acceptPage, advance, counts } = harness("statistics");
+test("statistics freshness is page-owned rather than canonical runtime-rebase gated", () => {
+  const { App, acceptRefresh, advance, counts } = harness("statistics");
 
   acceptRefresh(true, "live-1");
   App.applyLocalTicker();
@@ -320,27 +348,19 @@ test("statistics freezes on stale or non-live runtime and requires page rebase b
 
   advance(10001);
   App.applyLocalTicker();
-  assert.equal(counts().statisticsTicks, 1, "stale statistics snapshot must stop extrapolating");
+  assert.equal(
+    counts().statisticsTicks,
+    2,
+    "the coordinator must delegate stale Statistics handling to its snapshot-owned live target"
+  );
 
   acceptRefresh(true, "live-2");
   App.applyLocalTicker();
-  assert.equal(counts().statisticsTicks, 1, "fresh refresh-state still requires statistics page rebase");
-
-  acceptPage(true, "page-live");
-  App.applyLocalTicker();
-  assert.equal(counts().statisticsTicks, 2);
+  assert.equal(counts().statisticsTicks, 3);
 
   acceptRefresh(false, "stopped");
   App.applyLocalTicker();
-  assert.equal(counts().statisticsTicks, 2, "live_eligible=false must freeze statistics immediately");
-
-  acceptRefresh(true, "resumed");
-  App.applyLocalTicker();
-  assert.equal(counts().statisticsTicks, 2, "resume cannot reuse the pre-stop statistics target");
-
-  acceptPage(true, "resumed-page");
-  App.applyLocalTicker();
-  assert.equal(counts().statisticsTicks, 3);
+  assert.equal(counts().statisticsTicks, 4, "runtime liveness must not create a second Statistics gate");
 });
 
 test("timeline structural local tick still runs while live projection is stale", () => {
@@ -351,4 +371,28 @@ test("timeline structural local tick still runs while live projection is stale",
   App.applyLocalTicker();
 
   assert.equal(counts().timelineTicks, 1, "freshness safety must not block timeline structural draining");
+});
+
+test("pause toggle is single-flight until the authoritative mutation settles", async () => {
+  const h = harness("overview");
+
+  const first = h.App.togglePause();
+  const second = h.App.togglePause();
+
+  assert.equal(first, second);
+  assert.equal(h.toggleButton.disabled, true);
+  await Promise.resolve();
+  assert.equal(h.counts().toggleCalls, 1);
+
+  h.resolveToggle({ ok: true, status: "paused", paused: true, display: "已暂停" });
+  await first;
+
+  assert.equal(h.toggleButton.disabled, false);
+
+  const third = h.App.togglePause();
+  await Promise.resolve();
+  assert.equal(h.counts().toggleCalls, 2, "a later deliberate action must still be allowed");
+  h.resolveToggle({ ok: true, status: "running", paused: false, display: "记录中" });
+  await third;
+  assert.equal(h.toggleButton.disabled, false);
 });

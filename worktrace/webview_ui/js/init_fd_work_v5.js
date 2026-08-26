@@ -80,7 +80,7 @@
     var RUNTIME_SOURCE_FUTURE_SKEW_MS = 2000;
     var runtimeLeaseExpired = false;
     var runtimeRebasePending = false;
-    var LIVE_PROJECTION_PAGES = Object.freeze(["overview", "timeline", "statistics"]);
+    var LIVE_PROJECTION_PAGES = Object.freeze(["overview", "timeline"]);
     var AUTOMATIC_PAGE_REFRESH_DELAY_MS = 1500;
     var AUTOMATIC_PAGE_REFRESH_RETRY_MS = 5000;
     var automaticPageRefreshTimer = null;
@@ -125,15 +125,20 @@
         return false;
     }
 
-    function sourceClockFresh(clock, nowMs) {
-        var acceptedClock = App.validateLiveClock(clock);
-        if (!acceptedClock || acceptedClock.is_live !== true) return true;
-        var sampledAt = nonNegativeInt(acceptedClock.sampled_at_epoch_ms, 0);
+    function liveSampleFresh(sampledAtEpochMs, nowMs) {
+        var sampledAt = nonNegativeInt(sampledAtEpochMs, 0);
         var now = nonNegativeInt(nowMs, Date.now());
         if (!sampledAt) return false;
         var sourceAge = now - sampledAt;
         return sourceAge >= -RUNTIME_SOURCE_FUTURE_SKEW_MS
             && sourceAge <= RUNTIME_FRESHNESS_LEASE_MS;
+    }
+    App.liveSampleFresh = liveSampleFresh;
+
+    function sourceClockFresh(clock, nowMs) {
+        var acceptedClock = App.validateLiveClock(clock);
+        if (!acceptedClock || acceptedClock.is_live !== true) return true;
+        return liveSampleFresh(acceptedClock.sampled_at_epoch_ms, nowMs);
     }
 
     function runtimeFresh(runtime, nowMs) {
@@ -656,7 +661,6 @@
         }
         var capability = pageCapability(tickerPage);
         if (capability && typeof capability.applyLocalTick === "function") {
-            if (tickerPage === "statistics" && !projectionAllowed) return;
             var pageTick = capability.applyLocalTick();
             if (pageTick && typeof pageTick.then === "function") {
                 pageTick.then(function (result) {
@@ -771,17 +775,34 @@
     App.refreshCurrentPageData = refreshCurrentPageData;
     App.refreshAll = function () { return refreshCurrentPageData(); };
 
+    var togglePausePromise = null;
+
+    function setTogglePauseBusy(busy) {
+        var button = document.getElementById("toggle-pause-btn");
+        if (button) button.disabled = busy === true;
+    }
+
     function togglePause() {
-        App.bridge.togglePause().then(function (result) {
+        if (togglePausePromise) return togglePausePromise;
+        setTogglePauseBusy(true);
+        togglePausePromise = Promise.resolve().then(function () {
+            return App.bridge.togglePause();
+        }).then(function (result) {
             if (!result || result.ok === false) {
                 App.showGlobalAlert(App.extractBridgeError(result, "切换暂停状态失败，请稍后重试。"));
-                return;
+                return result || null;
             }
             App.clearGlobalAlert();
             App.showStatus(result);
+            return result;
         }).catch(function () {
             App.showGlobalAlert("切换暂停状态失败，请稍后重试。");
+            return null;
+        }).finally(function () {
+            togglePausePromise = null;
+            setTogglePauseBusy(false);
         });
+        return togglePausePromise;
     }
     App.togglePause = togglePause;
 

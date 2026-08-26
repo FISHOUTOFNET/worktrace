@@ -281,6 +281,27 @@ test("shell hide clears presentation-only UI and safely cancels confirmation", a
   assert.equal(h.App.transientInputModality(), "none");
 });
 
+test("hidden shell rejects late transient disclosure after cleanup", async () => {
+  const h = createHarness();
+  const target = h.node("late-trigger");
+  const toast = h.node("app-toast");
+  const dialogLayer = h.node("confirm-dialog-layer");
+  toast.hidden = true;
+  dialogLayer.hidden = true;
+
+  h.App.shellVisible = false;
+  h.App.uiPrimitives.onShellHidden();
+
+  h.App.showToast("晚到的完成提示");
+  const confirmation = h.App.openConfirmDialog({ trigger: target, title: "晚到确认" });
+
+  assert.equal(toast.hidden, true);
+  assert.equal(toast.textContent, "");
+  assert.equal(dialogLayer.hidden, true);
+  assert.equal(await confirmation, false);
+  assert.equal(h.pendingTimers().length, 0, "hidden disclosure must not arm a toast timer");
+});
+
 test("window blur disarms restored focus until a new user input", () => {
   const h = createHarness();
   const target = h.node("nav-rules");

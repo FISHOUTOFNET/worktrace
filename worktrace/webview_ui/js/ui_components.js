@@ -224,6 +224,7 @@
     }
 
     App.openConfirmDialog = function (options) {
+        if (App.shellVisible === false) return Promise.resolve(false);
         options = Object.assign({}, options || {});
         if (dialogState) return Promise.resolve(false);
         return new Promise(function (resolve) {
@@ -283,6 +284,10 @@
     App.clearToast = clearToast;
 
     App.showToast = function (message) {
+        if (App.shellVisible === false) {
+            clearToast();
+            return;
+        }
         var toast = document.getElementById("app-toast");
         if (!toast) return;
         clearToast();

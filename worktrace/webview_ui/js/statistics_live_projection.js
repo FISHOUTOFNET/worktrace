@@ -31,6 +31,21 @@
         return sampledSeconds + Math.max(0, Math.floor((nowMs - sampledAt) / 1000));
     }
 
+    function liveTargetFresh(target, nowMs) {
+        if (!target || target.enabled !== true || target.ticking !== true) return true;
+        if (typeof App.liveSampleFresh !== "function") return false;
+        return App.liveSampleFresh(nonNegativeInt(target.sampled_at_epoch_ms), nowMs);
+    }
+
+    function runtimeLiveEligible() {
+        var store = App.liveRuntimeStore;
+        if (!store || typeof store.get !== "function") return true;
+        var runtime = store.get();
+        var collector = runtime && runtime.collector;
+        if (!collector || typeof collector.live_eligible !== "boolean") return true;
+        return collector.live_eligible;
+    }
+
     function buildGroupIndex(tbodyId, groups) {
         var body = element(tbodyId);
         if (!body || typeof body.querySelectorAll !== "function") return null;
@@ -142,6 +157,15 @@
         return true;
     }
 
+    function freezeStatisticsProjection(reason) {
+        App.statisticsLiveTickerSuspended = true;
+        invalidateRowIndex();
+        return {
+            refreshRequired: true,
+            reason: String(reason || "statistics_live_projection_stale")
+        };
+    }
+
     function applyStatisticsLocalTick() {
         if (App.currentPage !== "statistics" || App.statisticsLiveTickerSuspended === true) return null;
         var accepted = App.statisticsAcceptedPayload;
@@ -149,8 +173,16 @@
         var target = accepted.exportTicket && accepted.exportTicket.live_target;
         if (!target || target.enabled !== true) return null;
 
+        var nowMs = Date.now();
+        if (target.ticking === true && runtimeLiveEligible() !== true) {
+            return freezeStatisticsProjection("statistics_runtime_not_live");
+        }
+        if (!liveTargetFresh(target, nowMs)) {
+            return freezeStatisticsProjection("statistics_live_target_stale");
+        }
+
         var sampledSeconds = nonNegativeInt(target.elapsed_seconds_at_sample);
-        var currentSeconds = liveTargetElapsedSeconds(target, Date.now());
+        var currentSeconds = liveTargetElapsedSeconds(target, nowMs);
         var delta = Math.max(0, currentSeconds - sampledSeconds);
         var renderKey = [
             String(accepted.summary.snapshot_revision
@@ -177,8 +209,8 @@
         change = change || {};
         if (change.source !== "refresh-state" || change.reportStructureChanged !== true) return;
         if (App.statisticsLiveTickerSuspended === true) return;
-        applyStatisticsLocalTick();
         App.statisticsLiveTickerSuspended = true;
+        invalidateRowIndex();
     }
 
     var refreshPolicy = Object.assign({}, baseCapability.refreshPolicy || {}, {
