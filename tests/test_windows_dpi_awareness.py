@@ -12,9 +12,10 @@ pytestmark = [pytest.mark.unit, pytest.mark.contract]
 
 
 def _fake_user32(*, current: int = 1, equal: object = False, set_result: bool = False):
+    comparer = equal if isinstance(equal, Mock) else Mock(return_value=equal)
     return SimpleNamespace(
         GetThreadDpiAwarenessContext=Mock(return_value=current),
-        AreDpiAwarenessContextsEqual=Mock(return_value=equal),
+        AreDpiAwarenessContextsEqual=comparer,
         SetProcessDpiAwarenessContext=Mock(return_value=set_result),
     )
 
