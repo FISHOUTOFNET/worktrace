@@ -141,6 +141,19 @@ try {
         throw "PyInstaller generated the portable Trace executable without the canonical 有迹 icon."
     }
 
+    & python `
+        (Join-Path $repoRoot "scripts\verify_windows_exe_manifest.py") `
+        --exe $stagedExePath
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyInstaller generated Trace.exe without the required PerMonitorV2 manifest."
+    }
+    & python `
+        (Join-Path $repoRoot "scripts\verify_windows_exe_manifest.py") `
+        --exe $stagedPortableExePath
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyInstaller generated the portable Trace executable without the required PerMonitorV2 manifest."
+    }
+
     Copy-Item -Force -LiteralPath $stagedPortableExePath -Destination $portablePath
     # Previous one-file-only flow used:
     # Copy-Item -Force -LiteralPath $stagedExePath -Destination $portablePath
