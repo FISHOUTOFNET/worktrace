@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -81,6 +82,13 @@ def _format_fatal_message(*, log_path: Path | None, exit_code: int | None = None
     return "\n".join(lines)
 
 
+def _exception_marker(prefix: str, exc: BaseException) -> str:
+    return (
+        f"{prefix} exception_type={type(exc).__name__} "
+        f"hresult={getattr(exc, 'hresult', None)!r} message={exc!r}"
+    )
+
+
 def _run_windows_probe_helper() -> int:
     """Run one closed Windows probe operation in the frozen executable."""
 
@@ -129,6 +137,8 @@ def _run_launch_at_login_control(argv: list[str]) -> int:
     if operation not in {"enable", "disable", "migrate"}:
         return 64
 
+    stream, _log_path = _open_startup_log()
+    _write_startup_marker(stream, f"launch_at_login control start operation={operation}")
     try:
         from worktrace.platforms.windows_startup import WindowsStartupRegistration
 
@@ -139,9 +149,66 @@ def _run_launch_at_login_control(argv: list[str]) -> int:
             registration.disable()
         else:
             registration.migrate_legacy_registration()
+        _write_startup_marker(
+            stream,
+            f"launch_at_login control complete operation={operation}",
+        )
         return 0
-    except Exception:
+    except Exception as exc:
+        _write_startup_marker(
+            stream,
+            _exception_marker(
+                f"launch_at_login control failed operation={operation}",
+                exc,
+            ),
+        )
+        if stream is not None:
+            traceback.print_exc(file=stream)
+            stream.flush()
         return 1
+    finally:
+        if stream is not None:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+
+def _start_launch_at_login_repair(stream: TextIO | None) -> None:
+    """Repair degraded startup registration without delaying application startup."""
+
+    if not sys.platform.startswith("win") or not bool(getattr(sys, "frozen", False)):
+        return
+
+    def repair() -> None:
+        try:
+            from worktrace.platforms.windows_startup import (
+                repair_launch_at_login_for_current_user,
+            )
+
+            outcome = repair_launch_at_login_for_current_user()
+            if outcome == "repaired":
+                _write_startup_marker(
+                    stream,
+                    "launch_at_login background repair outcome=repaired",
+                )
+        except Exception as exc:
+            _write_startup_marker(
+                stream,
+                _exception_marker("launch_at_login background repair failed", exc),
+            )
+            if stream is not None:
+                try:
+                    traceback.print_exc(file=stream)
+                    stream.flush()
+                except OSError:
+                    pass
+
+    threading.Thread(
+        target=repair,
+        name="worktrace-launch-at-login-repair",
+        daemon=True,
+    ).start()
 
 
 def _run_application(argv: list[str]) -> int:
@@ -157,6 +224,8 @@ def _run_application(argv: list[str]) -> int:
     try:
         from worktrace.main import main
 
+        if not maintenance_control:
+            _start_launch_at_login_repair(stream)
         exit_code = int(main(argv))
     except BaseException:
         _write_startup_marker(stream, "unhandled startup exception")
