@@ -27,6 +27,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         return 0 if request_running_instance_shutdown(timeout_seconds=20.0) else 5
 
+    from .platforms.windows_dpi import configure_process_dpi_awareness
+
+    configure_process_dpi_awareness()
+
     try:
         from .desktop.install_bootstrap import consume_privacy_install_intent
 
