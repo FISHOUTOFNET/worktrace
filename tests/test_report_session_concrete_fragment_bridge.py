@@ -190,8 +190,8 @@ def test_concrete_bridge_respects_explicit_boundary() -> None:
     result = _compact(
         _session(1, "A", "09:00:00", "09:10:00", 600, 1),
         _session(2, "X", "09:10:00", "09:10:05", 5, 2),
-        _session(3, "B", "09:10:05", "09:20:05", 600, 3),
-        boundary_times=(_stamp("09:10:03"),),
+        _session(3, "B", "09:11:00", "09:21:00", 600, 3),
+        boundary_times=(_stamp("09:10:30"),),
     )
 
     assert _project_ids(result) == [1, 2, 3]
