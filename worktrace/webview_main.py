@@ -501,7 +501,17 @@ def main(*, background: bool = False) -> int:
     update_shutdown_prepared = False
     exit_lock = threading.Lock()
     exit_worker_running = False
+    runtime_shutdown_lock = threading.Lock()
+    runtime_shutdown_completed = False
     deferred_ui: DeferredUIGate | None = None
+
+    def shutdown_runtime_once() -> None:
+        nonlocal runtime_shutdown_completed
+        with runtime_shutdown_lock:
+            if runtime_shutdown_completed:
+                return
+            runtime.shutdown()
+            runtime_shutdown_completed = True
 
     try:
         try:
@@ -667,9 +677,9 @@ def main(*, background: bool = False) -> int:
                         _run_cleanup_step("tray_exit", lambda: tray.stop())
 
                     # Explicit application exit owns full runtime terminalization.
-                    # The outer finally remains an idempotent crash/bootstrap
-                    # fallback instead of the only path that releases resources.
-                    _run_cleanup_step("runtime_exit", lambda: runtime.shutdown())
+                    # The outer finally reuses the same once-guarded capability,
+                    # so GUI-loop return cannot race a second terminal shutdown.
+                    _run_cleanup_step("runtime_exit", shutdown_runtime_once)
                 finally:
                     with exit_lock:
                         exit_worker_running = False
@@ -803,7 +813,7 @@ def main(*, background: bool = False) -> int:
             _run_cleanup_step("desktop_shell", lambda: shell.stop())
         elif tray is not None:
             _run_cleanup_step("tray", lambda: tray.stop())
-        _run_cleanup_step("runtime", lambda: runtime.shutdown())
+        _run_cleanup_step("runtime", shutdown_runtime_once)
         _run_cleanup_step("update_shutdown", lambda: update_shutdown.close())
         logging.info("application cleanup end")
 

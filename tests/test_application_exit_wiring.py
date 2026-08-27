@@ -34,10 +34,10 @@ def test_explicit_exit_owns_full_terminal_cleanup_before_outer_finally() -> None
         "shell.exit_application()"
     )
     assert exit_source.index("shell.exit_application()") < exit_source.index(
-        "runtime.shutdown()"
+        "shutdown_runtime_once"
     )
     assert '"tray_exit", lambda: tray.stop()' in exit_source
-    assert '"runtime_exit", lambda: runtime.shutdown()' in exit_source
+    assert '"runtime_exit", shutdown_runtime_once' in exit_source
     assert "exit_worker_running = False" in exit_source
 
 
@@ -51,7 +51,23 @@ def test_explicit_exit_coalesces_only_concurrent_workers_and_stays_retryable() -
     assert "exit_worker_running = True" in exit_source
     assert "finally:" in exit_source
     assert "exit_worker_running = False" in exit_source
-    assert "exit_requested" not in exit_source
+    assert "nonlocal exit_requested" not in exit_source
+    assert "exit_requested = True" not in exit_source
+
+
+def test_runtime_terminal_shutdown_is_once_guarded_across_exit_and_finally() -> None:
+    source = (ROOT / "worktrace" / "webview_main.py").read_text(encoding="utf-8")
+    main_start = source.index("def main(*, background: bool = False) -> int:")
+    exit_start = source.index("        def exit_application() -> None:", main_start)
+    setup_source = source[main_start:exit_start]
+
+    assert "runtime_shutdown_lock = threading.Lock()" in setup_source
+    assert "runtime_shutdown_completed = False" in setup_source
+    assert "def shutdown_runtime_once() -> None:" in setup_source
+    assert "if runtime_shutdown_completed:\n                return" in setup_source
+    assert setup_source.index("runtime.shutdown()") < setup_source.index(
+        "runtime_shutdown_completed = True"
+    )
 
 
 def test_window_close_remains_hide_to_tray_not_runtime_shutdown() -> None:
@@ -83,16 +99,18 @@ def test_shell_terminal_exit_destroys_main_window_before_releasing_tray() -> Non
 
 def test_outer_cleanup_remains_idempotent_terminal_fallback() -> None:
     source = (ROOT / "worktrace" / "webview_main.py").read_text(encoding="utf-8")
-    finally_source = source[source.index("    finally:") :]
+    cleanup_start = source.index('        logging.info("application cleanup begin")')
+    cleanup_end = source.index('        logging.info("application cleanup end")', cleanup_start)
+    finally_source = source[cleanup_start:cleanup_end]
 
     assert finally_source.index("update_shutdown.stop_listener()") < finally_source.index(
-        "runtime.shutdown()"
+        '"runtime", shutdown_runtime_once'
     )
-    assert finally_source.index("runtime.shutdown()") < finally_source.index(
+    assert finally_source.index('"runtime", shutdown_runtime_once') < finally_source.index(
         "update_shutdown.close()"
     )
     assert '_run_cleanup_step("desktop_shell", lambda: shell.stop())' in finally_source
-    assert '_run_cleanup_step("runtime", lambda: runtime.shutdown())' in finally_source
+    assert '_run_cleanup_step("runtime", shutdown_runtime_once)' in finally_source
 
 
 def test_tray_native_window_owns_windows_session_end_messages() -> None:
