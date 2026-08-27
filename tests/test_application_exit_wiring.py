@@ -17,13 +17,14 @@ def test_external_exit_sources_share_one_application_exit_path() -> None:
     assert "update_shutdown.bind_shutdown_handler(exit_application)" in source
     assert "on_exit=exit_application" in source
     assert "on_session_end=exit_application" in source
-    assert "exit_requested = False" in source
+    assert "exit_worker_running = False" in source
+    assert 'name="WorkTraceApplicationExit"' in source
 
 
-def test_explicit_exit_requests_runtime_stop_before_ui_teardown() -> None:
+def test_explicit_exit_owns_full_terminal_cleanup_before_outer_finally() -> None:
     source = (ROOT / "worktrace" / "webview_main.py").read_text(encoding="utf-8")
-    start = source.index("        def exit_application() -> None:")
-    end = source.index("        icon_path = desktop_resource_path", start)
+    start = source.index("            def perform_application_exit() -> None:")
+    end = source.index("            try:\n                threading.Thread(", start)
     exit_source = source[start:end]
 
     assert exit_source.index("_request_runtime_shutdown(runtime)") < exit_source.index(
@@ -32,7 +33,25 @@ def test_explicit_exit_requests_runtime_stop_before_ui_teardown() -> None:
     assert exit_source.index("services.fd_work.shutdown()") < exit_source.index(
         "shell.exit_application()"
     )
-    assert "if exit_requested:\n                    return" not in exit_source
+    assert exit_source.index("shell.exit_application()") < exit_source.index(
+        "runtime.shutdown()"
+    )
+    assert '"tray_exit", lambda: tray.stop()' in exit_source
+    assert '"runtime_exit", lambda: runtime.shutdown()' in exit_source
+    assert "exit_worker_running = False" in exit_source
+
+
+def test_explicit_exit_coalesces_only_concurrent_workers_and_stays_retryable() -> None:
+    source = (ROOT / "worktrace" / "webview_main.py").read_text(encoding="utf-8")
+    start = source.index("        def exit_application() -> None:")
+    end = source.index("        icon_path = desktop_resource_path", start)
+    exit_source = source[start:end]
+
+    assert "if exit_worker_running:\n                    return" in exit_source
+    assert "exit_worker_running = True" in exit_source
+    assert "finally:" in exit_source
+    assert "exit_worker_running = False" in exit_source
+    assert "exit_requested" not in exit_source
 
 
 def test_window_close_remains_hide_to_tray_not_runtime_shutdown() -> None:
@@ -48,7 +67,7 @@ def test_window_close_remains_hide_to_tray_not_runtime_shutdown() -> None:
     assert "request_shutdown" not in close_source
 
 
-def test_shell_keeps_tray_until_webview_exit_is_confirmed_by_outer_cleanup() -> None:
+def test_shell_terminal_exit_destroys_main_window_before_releasing_tray() -> None:
     source = (ROOT / "worktrace" / "desktop" / "shell.py").read_text(
         encoding="utf-8"
     )
@@ -56,12 +75,13 @@ def test_shell_keeps_tray_until_webview_exit_is_confirmed_by_outer_cleanup() -> 
     end = source.index("    def stop(self) -> None:", start)
     exit_source = source[start:end]
 
-    assert "_submit_window_action(self._execute_exit_destroy)" in exit_source
-    assert "self._tray.stop()" not in exit_source
-    assert "self._exit_destroy_scheduled" in exit_source
+    assert exit_source.index("self._window.destroy()") < exit_source.index("self.stop()")
+    assert "_submit_window_action" not in exit_source
+    assert "self._exit_completed" in exit_source
+    assert "return False" in exit_source
 
 
-def test_update_shutdown_lifetime_marker_outlives_runtime_cleanup() -> None:
+def test_outer_cleanup_remains_idempotent_terminal_fallback() -> None:
     source = (ROOT / "worktrace" / "webview_main.py").read_text(encoding="utf-8")
     finally_source = source[source.index("    finally:") :]
 
@@ -71,6 +91,7 @@ def test_update_shutdown_lifetime_marker_outlives_runtime_cleanup() -> None:
     assert finally_source.index("runtime.shutdown()") < finally_source.index(
         "update_shutdown.close()"
     )
+    assert '_run_cleanup_step("desktop_shell", lambda: shell.stop())' in finally_source
     assert '_run_cleanup_step("runtime", lambda: runtime.shutdown())' in finally_source
 
 

@@ -500,7 +500,7 @@ def main(*, background: bool = False) -> int:
     update_shutdown = get_application_update_shutdown_coordinator()
     update_shutdown_prepared = False
     exit_lock = threading.Lock()
-    exit_requested = False
+    exit_worker_running = False
     deferred_ui: DeferredUIGate | None = None
 
     try:
@@ -616,26 +616,74 @@ def main(*, background: bool = False) -> int:
             return bool(shell and shell.show_window())
 
         def exit_application() -> None:
-            nonlocal exit_requested
+            nonlocal exit_worker_running
             with exit_lock:
-                first_request = not exit_requested
-                exit_requested = True
-            if first_request:
+                if exit_worker_running:
+                    return
+                exit_worker_running = True
+
+            def perform_application_exit() -> None:
+                nonlocal exit_worker_running
                 logging.info("application exit requested")
+                try:
+                    _run_cleanup_step(
+                        "runtime_request",
+                        lambda: _request_runtime_shutdown(runtime),
+                    )
+                    if services is not None:
+                        _run_cleanup_step(
+                            "fd_work_exit",
+                            lambda: services.fd_work.shutdown(),
+                        )
+                    elif fd_work_controller is not None:
+                        _run_cleanup_step(
+                            "fd_work_controller_exit",
+                            lambda: fd_work_controller.shutdown(),
+                        )
+
+                    shell = shell_holder.get("shell")
+                    if deferred_ui is not None:
+                        _run_cleanup_step(
+                            "deferred_ui_exit",
+                            lambda: deferred_ui.request_exit(),
+                        )
+                        if shell is not None:
+                            # request_exit owns the normal bound-shell path. Call
+                            # the shell capability once more so a transient native
+                            # destroy failure stays retryable instead of becoming
+                            # sticky behind DeferredUIGate._exit_requested.
+                            _run_cleanup_step(
+                                "desktop_shell_exit",
+                                lambda: shell.exit_application(),
+                            )
+                        elif tray is not None:
+                            _run_cleanup_step("tray_exit", lambda: tray.stop())
+                    elif shell is not None:
+                        _run_cleanup_step(
+                            "desktop_shell_exit",
+                            lambda: shell.exit_application(),
+                        )
+                    elif tray is not None:
+                        _run_cleanup_step("tray_exit", lambda: tray.stop())
+
+                    # Explicit application exit owns full runtime terminalization.
+                    # The outer finally remains an idempotent crash/bootstrap
+                    # fallback instead of the only path that releases resources.
+                    _run_cleanup_step("runtime_exit", lambda: runtime.shutdown())
+                finally:
+                    with exit_lock:
+                        exit_worker_running = False
+
             try:
-                _request_runtime_shutdown(runtime)
+                threading.Thread(
+                    target=perform_application_exit,
+                    name="WorkTraceApplicationExit",
+                    daemon=True,
+                ).start()
             except Exception:
-                logging.exception("runtime cooperative shutdown request failed")
-            try:
-                services.fd_work.shutdown()
-            except Exception:
-                logging.exception("FD Work shutdown during application exit failed")
-            if deferred_ui is not None:
-                deferred_ui.request_exit()
-                return
-            shell = shell_holder.get("shell")
-            if shell is not None:
-                shell.exit_application()
+                with exit_lock:
+                    exit_worker_running = False
+                logging.exception("application exit worker startup failed")
 
         icon_path = desktop_resource_path("worktrace.ico")
         tray = WindowsTrayHost(

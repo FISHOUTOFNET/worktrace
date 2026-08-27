@@ -97,7 +97,7 @@ class DesktopShellController:
         # successful startup as a sticky promise that Explorer still has an icon.
         self._tray_available = False
         self._notice_shown = False
-        self._exit_destroy_scheduled = False
+        self._exit_completed = False
         self._window_loaded = False
         self._show_when_loaded = not initial_hidden
         self._activation_requested = False
@@ -258,11 +258,23 @@ class DesktopShellController:
             self.state = ShellState.EXITING
             self._show_when_loaded = False
             self._activation_requested = False
-            if self._exit_destroy_scheduled:
+            if self._exit_completed:
                 return False
-            self._exit_destroy_scheduled = True
         self._stop_icon_monitor()
-        self._submit_window_action(self._execute_exit_destroy)
+        with self._window_action_lock:
+            with self._lock:
+                if self._exit_completed:
+                    return False
+            try:
+                logger.info("desktop shell exit destroy begin")
+                self._window.destroy()
+                logger.info("desktop shell exit destroy returned")
+            except Exception:
+                logger.exception("desktop shell failed to destroy window")
+                return False
+            with self._lock:
+                self._exit_completed = True
+        self.stop()
         return True
 
     def stop(self) -> None:
@@ -391,20 +403,6 @@ class DesktopShellController:
                         self.state = ShellState.VISIBLE
                 elif action == self._execute_pending_show:
                     self._show_scheduled = False
-                elif action == self._execute_exit_destroy:
-                    self._exit_destroy_scheduled = False
-
-    def _execute_exit_destroy(self) -> None:
-        with self._window_action_lock:
-            try:
-                logger.info("desktop shell exit destroy begin")
-                self._window.destroy()
-                logger.info("desktop shell exit destroy returned")
-            except Exception:
-                logger.exception("desktop shell failed to destroy window")
-            finally:
-                with self._lock:
-                    self._exit_destroy_scheduled = False
 
     def _execute_pending_hide(self) -> None:
         with self._window_action_lock:
