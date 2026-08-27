@@ -447,3 +447,161 @@ th,
 @media (min-width: 960px) {
     .statistics-date-range { min-width: 310px; }
 }
+
+/* Compact desktop layout is deterministic: related labels and controls move
+   together instead of relying on generic flex wrapping or grid auto-placement. */
+@media (max-width: 959px) {
+    .statistics-toolbar {
+        grid-template-columns: auto minmax(0, 1fr);
+        column-gap: 6px;
+        row-gap: 6px;
+    }
+    .statistics-toolbar > .statistics-date-range {
+        grid-column: 1 / -1;
+        grid-row: 1;
+    }
+    .statistics-toolbar > label[for="statistics-project-filter"] {
+        grid-column: 1;
+        grid-row: 2;
+        align-self: center;
+    }
+    .statistics-toolbar > #statistics-project-filter {
+        grid-column: 2;
+        grid-row: 2;
+        justify-self: start;
+        min-width: 0;
+        max-width: 100%;
+    }
+    .statistics-toolbar > .project-autocomplete-shell.project-autocomplete-filter {
+        grid-column: 2;
+        grid-row: 2;
+        justify-self: start;
+        min-width: 0;
+        max-width: 100%;
+    }
+    .statistics-toolbar > .toolbar-spacer { display: none; }
+    .statistics-toolbar > .quick-ranges {
+        grid-column: 1 / -1;
+        grid-row: 3;
+    }
+    .statistics-date-editor,
+    .statistics-date-inputs {
+        min-width: 0;
+        max-width: 100%;
+    }
+}
+
+@media (max-width: 767px) {
+    .timeline-toolbar {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        column-gap: 6px;
+        row-gap: 6px;
+    }
+    .timeline-toolbar > .timeline-date-controls {
+        grid-column: 1;
+        grid-row: 1;
+    }
+    .timeline-toolbar > #timeline-today-btn {
+        grid-column: 2;
+        grid-row: 1;
+        justify-self: start;
+    }
+    .timeline-toolbar > label[for="timeline-project-filter"] {
+        grid-column: 1;
+        grid-row: 2;
+        align-self: center;
+    }
+    .timeline-toolbar > #timeline-project-filter {
+        grid-column: 2;
+        grid-row: 2;
+        justify-self: start;
+        min-width: 0;
+        max-width: 100%;
+    }
+    .timeline-toolbar > .project-autocomplete-shell.project-autocomplete-filter {
+        grid-column: 2;
+        grid-row: 2;
+        justify-self: start;
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    .rules-toolbar {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        column-gap: 6px;
+        row-gap: 6px;
+    }
+    .rules-toolbar > #rules-search-input {
+        grid-column: 1 / -1;
+        grid-row: 1;
+        width: 100%;
+        min-width: 0;
+    }
+    .rules-toolbar > .toolbar-spacer { display: none; }
+    .rules-toolbar > label[for="rules-sort-select"] {
+        grid-column: 1;
+        grid-row: 2;
+    }
+    .rules-toolbar > #rules-sort-select {
+        grid-column: 2;
+        grid-row: 2;
+        justify-self: start;
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    .settings-content .setting-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        column-gap: 10px;
+    }
+    .settings-content .setting-row > :first-child { min-width: 0; }
+    .settings-content .toggle-wrap { min-width: 0; }
+    #settings-storage-card {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+    .settings-local-data-path {
+        min-width: 0;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        text-align: right;
+    }
+    .settings-content .button-row { flex-wrap: wrap; }
+    .settings-content .danger-zone .setting-row { grid-template-columns: 1fr; }
+    .settings-content .danger-inline {
+        width: 100%;
+        min-width: 0;
+    }
+    .settings-content .danger-inline input {
+        min-width: 0;
+        flex: 1 1 180px;
+    }
+    #settings-fd-work-reconnect:not([hidden]) {
+        margin-left: auto;
+        margin-right: 0;
+    }
+}
+
+@media (max-width: 479px) {
+    .statistics-date-inputs {
+        width: 100%;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+    }
+    .statistics-date-control-shell {
+        width: 100%;
+        min-width: 0;
+    }
+    .credential-row {
+        width: 100%;
+        grid-template-columns: 72px minmax(0, 1fr);
+    }
+    .password-control,
+    .password-control input {
+        width: 100%;
+        max-width: none;
+    }
+}
