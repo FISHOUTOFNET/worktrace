@@ -14,6 +14,7 @@ from ..platforms.base import ActiveWindow
 from ..resources.detectors import detect_resource
 from ..resources.resource_builders import make_system_resource
 from ..resources.types import DetectedResource
+from ..retry_state import RetryEpisode
 from ..worker_health import WorkerHealthReporter
 from ..write_gate import DATABASE_WRITE_GATE
 from .resource_service import create_or_update_activity_resource
@@ -222,6 +223,7 @@ def run_activity_resource_repair_worker(
 
     size = max(1, int(batch_size))
     interval = max(0.1, float(poll_seconds))
+    retry_episode = RetryEpisode()
     logging.info("activity resource repair worker loop enter")
     while not stop_event.is_set():
         if DATABASE_WRITE_GATE.writes_blocked():
@@ -232,11 +234,29 @@ def run_activity_resource_repair_worker(
         try:
             repaired = repair_missing_activity_resources(size)
         except Exception:
-            logging.exception("activity resource repair worker iteration failed")
+            retry = retry_episode.failed("activity_resource_repair_iteration_failed")
             health.failed("activity_resource_repair_iteration_failed")
-            repaired = 0
-        else:
-            health.succeeded()
+            if retry.detail_log_due:
+                logging.warning(
+                    "activity resource repair worker iteration failed",
+                    exc_info=True,
+                )
+            elif retry.summary_log_due:
+                logging.warning(
+                    "activity resource repair worker failure continues consecutive=%s elapsed_seconds=%.1f",
+                    retry.attempt,
+                    retry.elapsed_seconds,
+                )
+            stop_event.wait(max(interval, retry.delay_seconds))
+            continue
+        recovery = retry_episode.succeeded()
+        health.succeeded()
+        if recovery.recovered:
+            logging.info(
+                "activity resource repair worker recovered attempts=%s elapsed_seconds=%.1f",
+                recovery.attempts,
+                recovery.elapsed_seconds,
+            )
         if repaired >= size:
             continue
         stop_event.wait(interval)

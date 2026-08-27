@@ -23,6 +23,7 @@ HEALTH_STOPPED = "stopped"
 
 _FAILING_THRESHOLD = 3
 _SUCCESS_PERSIST_INTERVAL_SECONDS = 30
+_FAILURE_PERSIST_INTERVAL_SECONDS = 60
 _STATE_LOCK = threading.RLock()
 _PROGRESS_LOCK = threading.RLock()
 _SAFE_CODE_PATTERN = re.compile(r"[^a-z0-9_]+")
@@ -34,6 +35,9 @@ class _RuntimeHealthState:
     failures: int
     last_failure_at: str
     last_success_persisted_at: str
+    last_failure_persisted_at: str
+    last_failure_phase: str
+    last_failure_code: str
 
 
 @dataclass
@@ -65,6 +69,21 @@ def _runtime_state() -> _RuntimeHealthState:
                 last_failure_at=get_setting("collector_last_failure_at", "") or "",
                 last_success_persisted_at=get_setting(
                     "collector_last_successful_observation_at",
+                    "",
+                )
+                or "",
+                last_failure_persisted_at=get_setting(
+                    "collector_last_failure_at",
+                    "",
+                )
+                or "",
+                last_failure_phase=get_setting(
+                    "collector_last_failure_phase",
+                    "",
+                )
+                or "",
+                last_failure_code=get_setting(
+                    "collector_last_failure_kind",
                     "",
                 )
                 or "",
@@ -120,6 +139,14 @@ def runtime_progress_snapshot() -> dict[str, object]:
 def _record_successful_runtime_progress(at_time: str) -> None:
     with _PROGRESS_LOCK:
         _RUNTIME_PROGRESS.last_successful_observation_at = str(at_time or "")
+        _RUNTIME_PROGRESS.last_success_monotonic = time.monotonic()
+        _RUNTIME_PROGRESS.runtime_status = "running"
+
+
+def record_sampling_progress() -> None:
+    """Refresh process-local liveness without advancing the durable time watermark."""
+
+    with _PROGRESS_LOCK:
         _RUNTIME_PROGRESS.last_success_monotonic = time.monotonic()
         _RUNTIME_PROGRESS.runtime_status = "running"
 
@@ -198,11 +225,15 @@ def record_transient_failure(
     at_time: str | None = None,
 ) -> None:
     safe_code = _safe_failure_code(code)
+    safe_phase = _safe_phase(phase)
     if code not in RETRYABLE_COLLECTOR_FAILURE_CODES:
         raise ValueError("collector_failure_code_not_retryable")
     at = at_time or now_str()
     state = _runtime_state()
     with _STATE_LOCK:
+        previous_health = state.health_state
+        previous_phase = state.last_failure_phase
+        previous_code = state.last_failure_code
         state.failures += 1
         state.health_state = (
             HEALTH_FAILING
@@ -210,22 +241,33 @@ def record_transient_failure(
             else HEALTH_DEGRADED
         )
         state.last_failure_at = at
+        state.last_failure_phase = safe_phase
+        state.last_failure_code = safe_code
+        elapsed = _elapsed_seconds(state.last_failure_persisted_at, at)
+        should_persist = bool(
+            state.failures == 1
+            or state.health_state != previous_health
+            or safe_phase != previous_phase
+            or safe_code != previous_code
+            or elapsed is None
+            or elapsed < 0
+            or elapsed >= _FAILURE_PERSIST_INTERVAL_SECONDS
+        )
         failures = state.failures
         health_state = state.health_state
+        if should_persist:
+            state.last_failure_persisted_at = at
+
+    if not should_persist:
+        return
     set_settings(
         {
             "collector_health_state": health_state,
             "collector_last_failure_at": at,
             "collector_consecutive_failures": str(failures),
-            "collector_last_failure_phase": _safe_phase(phase),
+            "collector_last_failure_phase": safe_phase,
             "collector_last_failure_kind": safe_code,
         }
-    )
-    logging.warning(
-        "collector transient failure phase=%s code=%s consecutive=%s",
-        _safe_phase(phase),
-        safe_code,
-        failures,
     )
 
 
@@ -362,6 +404,7 @@ __all__ = [
     "record_fatal_failure",
     "record_health_code",
     "record_runtime_status",
+    "record_sampling_progress",
     "record_successful_observation",
     "record_transient_failure",
     "record_unhandled_runtime_failure",

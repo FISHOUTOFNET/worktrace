@@ -43,7 +43,7 @@ class WindowsAdapter:
         self._clipboard = ClipboardMonitor(self.get_active_window)
         self._generic_path_failures: dict[tuple[int, str, str], float] = {}
 
-    def get_active_window(self) -> ActiveWindow:
+    def get_active_window(self) -> ActiveWindow | None:
         import psutil
         import win32gui
         import win32process
@@ -51,9 +51,7 @@ class WindowsAdapter:
         try:
             hwnd = int(win32gui.GetForegroundWindow() or 0)
             if hwnd <= 0:
-                raise PlatformTemporarilyUnavailableError(
-                    "foreground_window_unavailable"
-                )
+                return None
             title = win32gui.GetWindowText(hwnd) or ""
             _, raw_pid = win32process.GetWindowThreadProcessId(hwnd)
             pid = int(raw_pid)

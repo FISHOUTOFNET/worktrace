@@ -23,7 +23,8 @@ from . import (
 )
 
 if TYPE_CHECKING:
-    from ..worker_health import WorkerHealthReporter
+    from ..retry_state import RetryEpisode
+from ..worker_health import WorkerHealthReporter
 
 INDEX_STATUS_PENDING = "pending"
 INDEX_STATUS_INDEXING = "indexing"
@@ -317,6 +318,10 @@ def run_folder_index_worker(
 ) -> None:
     """Run iterations only; AppRuntime owns thread started/stopped state."""
 
+    retry_episode = RetryEpisode(
+        initial_delay_seconds=_WORKER_IDLE_SECONDS,
+        max_delay_seconds=30.0,
+    )
     logging.info("folder index worker loop enter")
     next_hot_refresh_at = 0.0
     startup_reconciliation_pending = True
@@ -343,7 +348,15 @@ def run_folder_index_worker(
                 recover_interrupted_indexes()
                 validate_ready_indexes(stop_event)
                 startup_reconciliation_pending = False
+                recovery = retry_episode.succeeded()
                 health.succeeded()
+                if recovery.recovered:
+                    logging.info(
+                        "folder index worker recovered code=%s attempts=%s elapsed_seconds=%.1f",
+                        recovery.code,
+                        recovery.attempts,
+                        recovery.elapsed_seconds,
+                    )
                 _wait_for_worker()
                 continue
 
@@ -368,16 +381,38 @@ def run_folder_index_worker(
                     # A ready index remains authoritative even if post-refresh
                     # project convergence fails; retry on a later rebuild.
                     logging.exception("folder index post-refresh reconciliation failed")
+            recovery = retry_episode.succeeded()
             health.succeeded()
+            if recovery.recovered:
+                logging.info(
+                    "folder index worker recovered code=%s attempts=%s elapsed_seconds=%.1f",
+                    recovery.code,
+                    recovery.attempts,
+                    recovery.elapsed_seconds,
+                )
             _wait_for_worker()
         except Exception:
-            if startup_reconciliation_pending:
-                logging.exception("folder index startup reconciliation failed")
-                health.failed("folder_index_startup_failed")
-            else:
-                logging.exception("folder index worker error")
-                health.failed("folder_index_iteration_failed")
-            _wait_for_worker()
+            code = (
+                "folder_index_startup_failed"
+                if startup_reconciliation_pending
+                else "folder_index_iteration_failed"
+            )
+            retry = retry_episode.failed(code)
+            health.failed(code)
+            if retry.detail_log_due:
+                logging.warning(
+                    "folder index worker failure code=%s",
+                    code,
+                    exc_info=True,
+                )
+            elif retry.summary_log_due:
+                logging.warning(
+                    "folder index worker failure continues code=%s consecutive=%s elapsed_seconds=%.1f",
+                    code,
+                    retry.attempt,
+                    retry.elapsed_seconds,
+                )
+            _wait_for_worker(max(_WORKER_IDLE_SECONDS, retry.delay_seconds))
     logging.info("folder index worker loop exit")
 
 
@@ -385,8 +420,13 @@ def wake_folder_index_worker() -> None:
     _WORKER_WAKE_EVENT.set()
 
 
-def _wait_for_worker() -> None:
-    _WORKER_WAKE_EVENT.wait(_WORKER_IDLE_SECONDS)
+def _wait_for_worker(timeout_seconds: float | None = None) -> None:
+    timeout = (
+        _WORKER_IDLE_SECONDS
+        if timeout_seconds is None
+        else max(0.0, float(timeout_seconds))
+    )
+    _WORKER_WAKE_EVENT.wait(timeout)
     _WORKER_WAKE_EVENT.clear()
 
 

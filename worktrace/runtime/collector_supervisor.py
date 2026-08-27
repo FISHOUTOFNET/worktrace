@@ -9,6 +9,7 @@ from collections import deque
 from typing import TYPE_CHECKING, Callable, Protocol
 
 from ..services import database_maintenance_service, privacy_gate_service
+from ..retry_state import RetryEpisode
 from ..services.settings_service import get_bool_setting
 
 if TYPE_CHECKING:
@@ -93,28 +94,47 @@ class CollectorSupervisor:
         health: "WorkerHealthReporter",
     ) -> None:
         logging.info("collector supervisor worker loop enter")
+        retry_episode = RetryEpisode(
+            initial_delay_seconds=self._poll_seconds,
+            max_delay_seconds=30.0,
+            monotonic_func=self._monotonic,
+        )
         health.succeeded()
-        while not stop_event.wait(self._poll_seconds):
+        delay = self._poll_seconds
+        while not stop_event.wait(delay):
+            delay = self._poll_seconds
             if self._runtime.stop_event.is_set():
                 break
             try:
                 self.check_once()
             except Exception:
+                retry = retry_episode.failed("collector_supervisor_iteration_failed")
                 health.failed("collector_supervisor_iteration_failed")
-                logging.exception("collector supervisor check failed")
+                if retry.detail_log_due:
+                    logging.warning("collector supervisor check failed", exc_info=True)
+                elif retry.summary_log_due:
+                    logging.warning(
+                        "collector supervisor failure continues consecutive=%s elapsed_seconds=%.1f",
+                        retry.attempt,
+                        retry.elapsed_seconds,
+                    )
+                delay = max(self._poll_seconds, retry.delay_seconds)
             else:
+                recovery = retry_episode.succeeded()
                 health.succeeded()
+                if recovery.recovered:
+                    logging.info(
+                        "collector supervisor recovered attempts=%s elapsed_seconds=%.1f",
+                        recovery.attempts,
+                        recovery.elapsed_seconds,
+                    )
         logging.info("collector supervisor worker loop exit")
 
     def _liveness(self) -> dict[str, object]:
         reader = getattr(self._runtime, "collection_liveness_snapshot", None)
         if not callable(reader):
             return {}
-        try:
-            return dict(reader())
-        except Exception:
-            logging.exception("collector supervisor liveness read failed")
-            return {"state": "recovery_required", "live_eligible": False}
+        return dict(reader())
 
     def check_once(self) -> bool:
         """Run one bounded liveness check; return True only when restart is attempted."""

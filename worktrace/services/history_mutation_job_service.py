@@ -18,6 +18,7 @@ from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 from ..path_utils import looks_like_anchor_file_path
+from ..retry_state import RetryEpisode
 from ..worker_health import WorkerHealthReporter
 from ..write_gate import DATABASE_WRITE_GATE
 from . import (
@@ -392,6 +393,7 @@ def run_history_worker(
 ) -> None:
     """Run iterations only; AppRuntime owns thread started/stopped state."""
 
+    retry_episode = RetryEpisode()
     logging.info("history mutation worker loop enter")
     while not stop_event.is_set():
         if DATABASE_WRITE_GATE.writes_blocked():
@@ -402,11 +404,26 @@ def run_history_worker(
         try:
             processed = run_pending_jobs(limit=1)
         except Exception:
-            logging.exception("history mutation worker error")
+            retry = retry_episode.failed("history_iteration_failed")
             health.failed("history_iteration_failed")
-            processed = 0
-        else:
-            health.succeeded()
+            if retry.detail_log_due:
+                logging.warning("history mutation worker error", exc_info=True)
+            elif retry.summary_log_due:
+                logging.warning(
+                    "history mutation worker failure continues consecutive=%s elapsed_seconds=%.1f",
+                    retry.attempt,
+                    retry.elapsed_seconds,
+                )
+            stop_event.wait(max(_WORKER_IDLE_SECONDS, retry.delay_seconds))
+            continue
+        recovery = retry_episode.succeeded()
+        health.succeeded()
+        if recovery.recovered:
+            logging.info(
+                "history mutation worker recovered attempts=%s elapsed_seconds=%.1f",
+                recovery.attempts,
+                recovery.elapsed_seconds,
+            )
         if processed:
             continue
         stop_event.wait(_WORKER_IDLE_SECONDS)

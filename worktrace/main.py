@@ -7,12 +7,9 @@ from typing import Sequence
 
 
 def setup_logging(log_path) -> None:
-    logging.basicConfig(
-        filename=log_path,
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-        encoding="utf-8",
-    )
+    from .logging_config import configure_file_logging
+
+    configure_file_logging(log_path)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

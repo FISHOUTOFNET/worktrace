@@ -54,7 +54,7 @@ class ClipboardMonitor:
 
     def __init__(
         self,
-        source_window_provider: Callable[[], ActiveWindow],
+        source_window_provider: Callable[[], ActiveWindow | None],
         *,
         poll_seconds: float = 0.25,
     ) -> None:
@@ -144,6 +144,8 @@ class ClipboardMonitor:
         if not self._enabled or generation != self._generation:
             return
         source_window = self._source_window_provider()
+        if source_window is None:
+            return
         text = read_clipboard_unicode_text()
         if not text or not self._enabled or generation != self._generation:
             return

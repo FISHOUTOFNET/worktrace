@@ -12,6 +12,7 @@ from typing import Any, Callable
 from ..constants import DEFAULT_IDLE_THRESHOLD_SECONDS, TIME_FORMAT
 from ..db import now_str
 from ..platforms.base import PlatformAdapter
+from ..retry_state import RetryEpisode
 from ..services import (
     clipboard_service,
     folder_index_service,
@@ -357,6 +358,11 @@ def run_collector(
     try:
         machine = CollectorStateMachine()
         clock_tracker = ClockTracker()
+        transient_episode = RetryEpisode(
+            initial_delay_seconds=0.0,
+            max_delay_seconds=0.0,
+            summary_interval_seconds=60.0,
+        )
         last_loop_time: str | None = None
         last_safe_boundary_time: str | None = None
         heartbeat_counter = 0
@@ -518,6 +524,8 @@ def run_collector(
                 midnight = _midnight_crossed_between(last_loop_time, now)
                 if midnight is not None:
                     machine.split_at_midnight(midnight)
+                    last_loop_time = midnight
+                    last_safe_boundary_time = midnight
 
             phase = "heartbeat"
             heartbeat_counter += 1
@@ -549,18 +557,30 @@ def run_collector(
                 last_loop_time = now
                 continue
 
-            phase = "active_window"
-            active_window = adapter.get_active_window()
-            phase = "clipboard"
-            capture_enabled = clipboard_service.is_capture_enabled()
-            _set_clipboard_capture_enabled(adapter, capture_enabled)
-            clipboard_events = _clipboard_events(adapter) if capture_enabled else []
             phase = "idle"
             idle_seconds = adapter.get_idle_seconds()
             idle_threshold = max(1, idle_threshold_seconds)
 
+            active_window = None
+            clipboard_events = []
             decision = None
-            if idle_seconds < idle_threshold:
+            if idle_seconds >= idle_threshold:
+                _set_clipboard_capture_enabled(adapter, False)
+            else:
+                phase = "active_window"
+                active_window = adapter.get_active_window()
+                if active_window is None:
+                    collector_health.record_sampling_progress()
+                    next_poll_deadline = _sleep_until_next_poll(
+                        stop_event,
+                        control,
+                        next_poll_deadline,
+                    )
+                    continue
+                phase = "clipboard"
+                capture_enabled = clipboard_service.is_capture_enabled()
+                _set_clipboard_capture_enabled(adapter, capture_enabled)
+                clipboard_events = _clipboard_events(adapter) if capture_enabled else []
                 phase = "privacy"
                 decision = privacy_service.evaluate_exclusion(active_window)
 
@@ -618,7 +638,15 @@ def run_collector(
                             event,
                             at_time=observation_time,
                         )
+            recovery = transient_episode.succeeded()
             collector_health.record_successful_observation(observation_time)
+            if recovery.recovered:
+                logging.info(
+                    "collector transient failure recovered code=%s attempts=%s elapsed_seconds=%.1f",
+                    recovery.code,
+                    recovery.attempts,
+                    recovery.elapsed_seconds,
+                )
             last_loop_time = observation_time
             next_poll_deadline = _sleep_until_next_poll(
                 stop_event,
@@ -639,11 +667,21 @@ def run_collector(
                 fatal_stop = True
                 break
 
+            retry = transient_episode.failed(disposition.code.value)
             if startup_runtime_pending:
-                logging.exception(
-                    "collector transient startup failure code=%s",
-                    disposition.code.value,
-                )
+                if retry.detail_log_due:
+                    logging.warning(
+                        "collector transient startup failure code=%s",
+                        disposition.code.value,
+                        exc_info=True,
+                    )
+                elif retry.summary_log_due:
+                    logging.warning(
+                        "collector transient startup failure continues code=%s consecutive=%s elapsed_seconds=%.1f",
+                        disposition.code.value,
+                        retry.attempt,
+                        retry.elapsed_seconds,
+                    )
                 _wait_for_poll_delay(stop_event, control, POLL_CADENCE_SECONDS)
                 continue
 
@@ -652,11 +690,22 @@ def run_collector(
                 disposition.code,
                 now_str(),
             )
-            logging.exception(
-                "collector transient failure phase=%s code=%s",
-                phase,
-                disposition.code.value,
-            )
+            if retry.detail_log_due:
+                logging.warning(
+                    "collector transient failure phase=%s code=%s consecutive=%s",
+                    phase,
+                    disposition.code.value,
+                    retry.attempt,
+                    exc_info=True,
+                )
+            elif retry.summary_log_due:
+                logging.warning(
+                    "collector transient failure continues phase=%s code=%s consecutive=%s elapsed_seconds=%.1f",
+                    phase,
+                    disposition.code.value,
+                    retry.attempt,
+                    retry.elapsed_seconds,
+                )
             # Best-effort fail-closed: stop sensitive clipboard capture before
             # the retry sleep so a transient failure cannot keep the clipboard
             # monitor producing observations while the collector is degraded.

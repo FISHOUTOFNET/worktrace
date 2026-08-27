@@ -8,6 +8,7 @@ from datetime import datetime, time as datetime_time, timedelta
 from ..constants import STATUS_ERROR, TIME_FORMAT
 from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
+from ..retry_state import RetryEpisode
 from ..worker_health import WorkerHealthReporter
 from ..write_gate import DATABASE_WRITE_GATE
 from . import (
@@ -247,6 +248,7 @@ def run_startup_recovery_worker(
 
     limit = max(1, int(batch_segments))
     interval = max(0.1, float(poll_seconds))
+    discovery_retry = RetryEpisode()
     logging.info("startup recovery continuation worker loop enter")
     while not stop_event.is_set():
         if DATABASE_WRITE_GATE.writes_blocked():
@@ -264,6 +266,14 @@ def run_startup_recovery_worker(
                 jobs = startup_recovery_job_repository.list_runnable_jobs(
                     conn,
                     limit=1,
+                )
+            recovery = discovery_retry.succeeded()
+            if recovery.recovered:
+                logging.info(
+                    "startup recovery discovery recovered code=%s attempts=%s elapsed_seconds=%.1f",
+                    recovery.code,
+                    recovery.attempts,
+                    recovery.elapsed_seconds,
                 )
             if not jobs:
                 health.succeeded()
@@ -285,13 +295,31 @@ def run_startup_recovery_worker(
         except Exception as exc:
             code = _classify_recovery_failure(exc)
             job_id = int(job["id"]) if job is not None else None
-            logging.exception(
+            if job_id is None:
+                retry = discovery_retry.failed(code.value)
+                if retry.detail_log_due:
+                    logging.warning(
+                        "startup recovery discovery failed code=%s",
+                        code.value,
+                        exc_info=True,
+                    )
+                elif retry.summary_log_due:
+                    logging.warning(
+                        "startup recovery discovery failure continues code=%s consecutive=%s elapsed_seconds=%.1f",
+                        code.value,
+                        retry.attempt,
+                        retry.elapsed_seconds,
+                    )
+                health.failed(code.value)
+                stop_event.wait(max(interval, retry.delay_seconds))
+                continue
+            logging.warning(
                 "startup recovery continuation failed job_id=%s code=%s",
                 job_id,
                 code.value,
+                exc_info=True,
             )
-            if job_id is not None:
-                _record_recovery_failure_safely(job_id, code)
+            _record_recovery_failure_safely(job_id, code)
             health.failed(code.value)
             stop_event.wait(interval)
         else:
