@@ -15,6 +15,7 @@ from ..data_generation_repository import (
 from ..db import dict_rows, get_connection, get_db_path, now_str
 from ..path_utils import normalize_path_key
 from ..resources.title_parsing import normalize_file_name
+from ..retry_state import RetryEpisode
 from ..write_gate import DATABASE_WRITE_GATE
 from . import (
     folder_index_maintenance_service,
@@ -23,8 +24,7 @@ from . import (
 )
 
 if TYPE_CHECKING:
-    from ..retry_state import RetryEpisode
-from ..worker_health import WorkerHealthReporter
+    from ..worker_health import WorkerHealthReporter
 
 INDEX_STATUS_PENDING = "pending"
 INDEX_STATUS_INDEXING = "indexing"
