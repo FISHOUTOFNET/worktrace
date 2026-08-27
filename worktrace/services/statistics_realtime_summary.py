@@ -1,10 +1,11 @@
 """Request-local realtime overlay for compact Statistics summaries.
 
-The durable Statistics summary is cached independently of runtime ticks.  A live
+The durable Statistics summary is cached independently of runtime ticks. A live
 sample is applied only to the current session fragment: the fragment is summarized
 before and after the existing canonical as-of overlay, then its delta is merged
-into the durable summary.  Historical ranges are never thawed or re-frozen for a
-one-second runtime update.
+into the durable summary. Historical ranges are never thawed or re-frozen for a
+one-second runtime update. The same tiny-fragment overlay is also reusable by
+point-in-time export so export does not reintroduce a full-range as-of snapshot.
 """
 
 from __future__ import annotations
@@ -28,6 +29,16 @@ from .timeline_service import get_default_report_date
 @dataclass(frozen=True)
 class RealtimeStatisticsSummary:
     projection: StatisticsSummaryProjection
+    live_target: Mapping[str, Any] | None
+
+
+@dataclass(frozen=True)
+class StatisticsRealtimeOverlay:
+    """Request-local replacement of only the verified live Statistics fragment."""
+
+    before_fragment: ReportProjectionSnapshot
+    after_fragment: ReportProjectionSnapshot
+    runtime_snapshot: Mapping[str, Any]
     live_target: Mapping[str, Any] | None
 
 
@@ -416,6 +427,117 @@ def _merge_summary_delta(
     )
 
 
+def build_statistics_realtime_overlay(
+    snapshot_revision: str,
+    start_date: str,
+    end_date: str,
+    *,
+    range_projection: StatisticsRangeProjection | None = None,
+) -> StatisticsRealtimeOverlay | None:
+    """Build only the verified live fragment replacement for one request sample."""
+
+    context = current_page_read_context()
+    if context is None or not context.runtime_consistent:
+        return None
+
+    runtime_snapshot = context.runtime_sample.snapshot
+    if not isinstance(runtime_snapshot, Mapping):
+        return None
+    if (
+        snapshot_seconds_for_date_range(
+            runtime_snapshot,
+            start_date,
+            end_date,
+        )
+        <= 0
+    ):
+        return None
+
+    open_activity_id = context.verified_open_activity_id
+    if open_activity_id is None:
+        fragment = _empty_fragment_snapshot(
+            start_date,
+            end_date,
+            snapshot_revision,
+        )
+    else:
+        try:
+            runtime_id = int(runtime_snapshot.get("persisted_activity_id") or 0)
+        except (TypeError, ValueError):
+            return None
+        if runtime_id != int(open_activity_id):
+            return None
+        if range_projection is not None:
+            fragment = _fragment_from_compact_range(
+                range_projection,
+                runtime_id=runtime_id,
+                start_date=start_date,
+                end_date=end_date,
+                snapshot_revision=snapshot_revision,
+            )
+        else:
+            fragment = _fragment_from_day_projections(
+                runtime_snapshot,
+                runtime_id=runtime_id,
+                start_date=start_date,
+                end_date=end_date,
+                snapshot_revision=snapshot_revision,
+            )
+
+    # Reuse the canonical runtime-overlay policy only on the tiny live fragment.
+    from . import report_as_of_snapshot_service
+
+    as_of = report_as_of_snapshot_service.build_statistics_as_of_snapshot(
+        start_date,
+        end_date,
+        base_snapshot=fragment,
+    )
+    if (
+        as_of.live_target is None
+        and as_of.snapshot.snapshot_revision == snapshot_revision
+    ):
+        return None
+
+    return StatisticsRealtimeOverlay(
+        before_fragment=fragment,
+        after_fragment=as_of.snapshot,
+        runtime_snapshot=runtime_snapshot,
+        live_target=as_of.live_target,
+    )
+
+
+def merge_statistics_realtime_overlay(
+    durable: StatisticsSummaryProjection,
+    overlay: StatisticsRealtimeOverlay | None,
+    project_id: str | int | None = None,
+) -> RealtimeStatisticsSummary:
+    """Merge a precomputed tiny-fragment overlay into one durable summary."""
+
+    if overlay is None:
+        return RealtimeStatisticsSummary(durable, None)
+
+    before = build_statistics_summary_projection(
+        overlay.before_fragment,
+        project_id=project_id,
+        live_runtime_snapshot=overlay.runtime_snapshot,
+    )
+    after = build_statistics_summary_projection(
+        overlay.after_fragment,
+        project_id=project_id,
+        live_runtime_snapshot=overlay.runtime_snapshot,
+    )
+    projection = _merge_summary_delta(
+        durable,
+        before,
+        after,
+        snapshot_revision=overlay.after_fragment.snapshot_revision,
+    )
+    return RealtimeStatisticsSummary(
+        projection=projection,
+        live_target=overlay.live_target,
+    )
+
+
 def build_statistics_realtime_summary(
     durable: StatisticsSummaryProjection,
     start_date: str,
@@ -426,93 +548,23 @@ def build_statistics_realtime_summary(
 ) -> RealtimeStatisticsSummary:
     """Overlay only the verified live fragment onto a cached durable summary."""
 
-    context = current_page_read_context()
-    if context is None or not context.runtime_consistent:
-        return RealtimeStatisticsSummary(durable, None)
-
-    runtime_snapshot = context.runtime_sample.snapshot
-    if not isinstance(runtime_snapshot, Mapping):
-        return RealtimeStatisticsSummary(durable, None)
-    if (
-        snapshot_seconds_for_date_range(
-            runtime_snapshot,
-            start_date,
-            end_date,
-        )
-        <= 0
-    ):
-        return RealtimeStatisticsSummary(durable, None)
-
-    open_activity_id = context.verified_open_activity_id
-    if open_activity_id is None:
-        fragment = _empty_fragment_snapshot(
-            start_date,
-            end_date,
-            durable.snapshot_revision,
-        )
-    else:
-        try:
-            runtime_id = int(runtime_snapshot.get("persisted_activity_id") or 0)
-        except (TypeError, ValueError):
-            return RealtimeStatisticsSummary(durable, None)
-        if runtime_id != int(open_activity_id):
-            return RealtimeStatisticsSummary(durable, None)
-        if range_projection is not None:
-            fragment = _fragment_from_compact_range(
-                range_projection,
-                runtime_id=runtime_id,
-                start_date=start_date,
-                end_date=end_date,
-                snapshot_revision=durable.snapshot_revision,
-            )
-        else:
-            fragment = _fragment_from_day_projections(
-                runtime_snapshot,
-                runtime_id=runtime_id,
-                start_date=start_date,
-                end_date=end_date,
-                snapshot_revision=durable.snapshot_revision,
-            )
-
-    before = build_statistics_summary_projection(
-        fragment,
-        project_id=project_id,
-        live_runtime_snapshot=runtime_snapshot,
-    )
-
-    # Reuse the existing canonical runtime-overlay policy, but only on the tiny
-    # live fragment rather than the full historical range.
-    from . import report_as_of_snapshot_service
-
-    as_of = report_as_of_snapshot_service.build_statistics_as_of_snapshot(
+    overlay = build_statistics_realtime_overlay(
+        durable.snapshot_revision,
         start_date,
         end_date,
-        base_snapshot=fragment,
+        range_projection=range_projection,
     )
-    if (
-        as_of.live_target is None
-        and as_of.snapshot.snapshot_revision == durable.snapshot_revision
-    ):
-        return RealtimeStatisticsSummary(durable, None)
-
-    after = build_statistics_summary_projection(
-        as_of.snapshot,
-        project_id=project_id,
-        live_runtime_snapshot=runtime_snapshot,
-    )
-    projection = _merge_summary_delta(
+    return merge_statistics_realtime_overlay(
         durable,
-        before,
-        after,
-        snapshot_revision=as_of.snapshot.snapshot_revision,
-    )
-    return RealtimeStatisticsSummary(
-        projection=projection,
-        live_target=as_of.live_target,
+        overlay,
+        project_id=project_id,
     )
 
 
 __all__ = [
     "RealtimeStatisticsSummary",
+    "StatisticsRealtimeOverlay",
+    "build_statistics_realtime_overlay",
     "build_statistics_realtime_summary",
+    "merge_statistics_realtime_overlay",
 ]

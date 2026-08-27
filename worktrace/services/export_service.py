@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import csv
+from collections.abc import Mapping
 from dataclasses import dataclass
 import errno
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
 from ..atomic_file import (
     AtomicFileOutput,
@@ -33,17 +35,45 @@ _DERIVED_RUNTIME_TABLES = frozenset(
 )
 
 
-@dataclass(frozen=True)
-class PreparedStatisticsCsvExport:
-    """Opaque point-in-time statistics export prepared before path selection."""
+@dataclass(frozen=True, slots=True)
+class PreparedStatisticsCsvRow:
+    """Display-safe CSV row frozen at export invocation time."""
 
-    date_from: str
-    date_to: str
-    project_id: str | int | None
-    snapshot: object
+    date: str
+    start_time: str
+    duration: str
+    project: str
+    note: str
+    duration_seconds: int
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, Any]) -> "PreparedStatisticsCsvRow":
+        return cls(
+            date=str(record.get("date") or ""),
+            start_time=str(record.get("start_time") or ""),
+            duration=str(record.get("duration") or ""),
+            project=str(record.get("project") or ""),
+            note=str(record.get("note") or ""),
+            duration_seconds=max(0, int(record.get("duration_seconds") or 0)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedStatisticsCsvExport:
+    """Opaque point-in-time CSV payload with no projection/snapshot retention."""
+
+    rows: tuple[PreparedStatisticsCsvRow, ...]
     activity_count: int
     export_row_count: int
     duration_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
+class _StatisticsExportProjectionView:
+    """Reference-only effective projection used only while preparing CSV rows."""
+
+    final_entries: tuple[Mapping[str, Any], ...]
+    final_contributions: tuple[Mapping[str, Any], ...]
 
 
 class ExportFileError(OSError):
@@ -124,6 +154,44 @@ def _normalized_csv_path(output_path) -> Path:
     return path
 
 
+def _projection_instance_key(value: Mapping[str, Any]) -> str:
+    return str(value.get("projection_instance_key") or "")
+
+
+def _statistics_export_projection_view(range_projection, overlay):
+    """Replace only live-fragment references without copying historical records."""
+
+    if overlay is None:
+        return range_projection
+
+    before = overlay.before_fragment
+    after = overlay.after_fragment
+    replaced_keys = {
+        _projection_instance_key(value)
+        for value in (
+            *before.final_entries,
+            *before.final_contributions,
+            *after.final_entries,
+            *after.final_contributions,
+        )
+        if _projection_instance_key(value)
+    }
+    entries = tuple(
+        entry
+        for entry in range_projection.entries
+        if _projection_instance_key(entry) not in replaced_keys
+    ) + tuple(after.final_entries)
+    contributions = tuple(
+        row
+        for row in range_projection.contributions
+        if _projection_instance_key(row) not in replaced_keys
+    ) + tuple(after.final_contributions)
+    return _StatisticsExportProjectionView(
+        final_entries=entries,
+        final_contributions=contributions,
+    )
+
+
 def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import iter_statistics_export_records
@@ -138,7 +206,7 @@ def prepare_statistics_csv(
     date_to: str,
     project_id: str | int | None = None,
 ) -> PreparedStatisticsCsvExport:
-    """Freeze the exact as-of Statistics projection before opening a save dialog."""
+    """Freeze final display-safe CSV rows before opening the save dialog."""
 
     date_from, date_to = statistics_service.resolve_statistics_date_range(
         date_from, date_to
@@ -146,25 +214,53 @@ def prepare_statistics_csv(
     statistics_service.validate_statistics_project_scope(project_id)
 
     from .page_read_context import page_read_scope
-    from .report_as_of_snapshot_service import build_statistics_as_of_snapshot
-    from .statistics_projection import build_statistics_summary_projection
+    from .statistics_projection import (
+        build_statistics_summary_projection,
+        iter_statistics_export_records,
+    )
+    from .statistics_realtime_summary import (
+        build_statistics_realtime_overlay,
+        merge_statistics_realtime_overlay,
+    )
+    from .statistics_snapshot_provider import get_statistics_range_projection
 
     with page_read_scope(allow_unpersisted_runtime=True):
-        as_of = build_statistics_as_of_snapshot(date_from, date_to)
-        summary = build_statistics_summary_projection(
-            as_of.snapshot,
+        range_projection = get_statistics_range_projection(date_from, date_to)
+        durable_summary = build_statistics_summary_projection(
+            range_projection,
             project_id=project_id,
         )
-    if int(summary.export_row_count) <= 0:
+        overlay = build_statistics_realtime_overlay(
+            durable_summary.snapshot_revision,
+            date_from,
+            date_to,
+            range_projection=range_projection,
+        )
+        realtime = merge_statistics_realtime_overlay(
+            durable_summary,
+            overlay,
+            project_id=project_id,
+        )
+        export_projection = _statistics_export_projection_view(
+            range_projection,
+            overlay,
+        )
+        rows = tuple(
+            PreparedStatisticsCsvRow.from_record(record)
+            for record in iter_statistics_export_records(
+                export_projection,
+                project_id=project_id,
+            )
+        )
+
+    if not rows:
         raise ValueError("empty_data")
+    duration_seconds = sum(row.duration_seconds for row in rows)
     return PreparedStatisticsCsvExport(
-        date_from=date_from,
-        date_to=date_to,
-        project_id=project_id,
-        snapshot=as_of.snapshot,
-        activity_count=int(summary.activity_count),
-        export_row_count=int(summary.export_row_count),
-        duration_seconds=int(summary.total_duration_seconds),
+        rows=rows,
+        activity_count=int(realtime.projection.activity_count),
+        export_row_count=len(rows),
+        duration_seconds=duration_seconds,
     )
 
 
@@ -172,12 +268,11 @@ def write_prepared_statistics_csv(
     prepared: PreparedStatisticsCsvExport,
     output_path,
 ) -> dict:
-    """Write a previously frozen Statistics snapshot without rereading runtime/DB."""
+    """Serialize a frozen row payload without rereading runtime, DB, or projection."""
 
     if not isinstance(prepared, PreparedStatisticsCsvExport):
         raise ValueError("invalid_input")
     path = _normalized_csv_path(output_path)
-    from .statistics_projection import iter_statistics_export_records
 
     headers = [header for _key, header in _CSV_COLUMNS]
     keys = [key for key, _header in _CSV_COLUMNS]
@@ -193,15 +288,12 @@ def write_prepared_statistics_csv(
             ) as handle:
                 writer = csv.writer(handle)
                 writer.writerow(headers)
-                for row in iter_statistics_export_records(
-                    prepared.snapshot,
-                    project_id=prepared.project_id,
-                ):
+                for row in prepared.rows:
                     writer.writerow(
-                        [_escape_csv_cell(row.get(key, "")) for key in keys]
+                        [_escape_csv_cell(getattr(row, key, "")) for key in keys]
                     )
                     row_count += 1
-                    total_seconds += int(row.get("duration_seconds") or 0)
+                    total_seconds += int(row.duration_seconds)
                 if row_count == 0:
                     raise ValueError("empty_data")
                 handle.flush()
@@ -380,6 +472,7 @@ def clear_all_local_data(confirm: bool) -> None:
 __all__ = [
     "ExportFileError",
     "PreparedStatisticsCsvExport",
+    "PreparedStatisticsCsvRow",
     "build_statistics_csv_rows",
     "classify_export_os_error",
     "clear_all_local_data",
