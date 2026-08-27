@@ -459,6 +459,21 @@ def _wait_after_failed_headless_ui(deferred_ui: DeferredUIGate) -> None:
             return
 
 
+def _request_runtime_shutdown(runtime) -> None:
+    request_shutdown = getattr(runtime, "request_shutdown", None)
+    if not callable(request_shutdown):
+        logging.warning("application runtime missing cooperative shutdown capability")
+        return
+    request_shutdown()
+
+
+def _run_cleanup_step(name: str, callback) -> None:
+    try:
+        callback()
+    except Exception:
+        logging.exception("application cleanup failed stage=%s", name)
+
+
 def main(*, background: bool = False) -> int:
     startup_started_at = time.monotonic()
     paths = config.resolve_paths()
@@ -603,11 +618,18 @@ def main(*, background: bool = False) -> int:
         def exit_application() -> None:
             nonlocal exit_requested
             with exit_lock:
-                if exit_requested:
-                    return
+                first_request = not exit_requested
                 exit_requested = True
-            logging.info("application exit requested")
-            services.fd_work.shutdown()
+            if first_request:
+                logging.info("application exit requested")
+            try:
+                _request_runtime_shutdown(runtime)
+            except Exception:
+                logging.exception("runtime cooperative shutdown request failed")
+            try:
+                services.fd_work.shutdown()
+            except Exception:
+                logging.exception("FD Work shutdown during application exit failed")
             if deferred_ui is not None:
                 deferred_ui.request_exit()
                 return
@@ -715,19 +737,27 @@ def main(*, background: bool = False) -> int:
             background=background,
         )
     finally:
-        instance_coordinator.stop_activation_listener()
-        update_shutdown.stop_listener()
+        logging.info("application cleanup begin")
+        _run_cleanup_step(
+            "activation_listener",
+            lambda: instance_coordinator.stop_activation_listener(),
+        )
+        _run_cleanup_step(
+            "update_shutdown_listener",
+            lambda: update_shutdown.stop_listener(),
+        )
         if services is not None:
-            services.fd_work.shutdown()
+            _run_cleanup_step("fd_work", lambda: services.fd_work.shutdown())
         elif fd_work_controller is not None:
-            fd_work_controller.shutdown()
+            _run_cleanup_step("fd_work_controller", lambda: fd_work_controller.shutdown())
         shell = shell_holder.get("shell")
         if shell is not None:
-            shell.stop()
+            _run_cleanup_step("desktop_shell", lambda: shell.stop())
         elif tray is not None:
-            tray.stop()
-        runtime.shutdown()
-        update_shutdown.close()
+            _run_cleanup_step("tray", lambda: tray.stop())
+        _run_cleanup_step("runtime", lambda: runtime.shutdown())
+        _run_cleanup_step("update_shutdown", lambda: update_shutdown.close())
+        logging.info("application cleanup end")
 
 
 if __name__ == "__main__":
