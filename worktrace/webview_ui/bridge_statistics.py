@@ -88,12 +88,15 @@ class StatisticsBridgeMixin:
                 date_to,
                 None if project_id in (None, "") else project_id,
             )
-            return {
+            result = {
                 "ok": True,
                 "summary": envelope["summary"],
                 "export_ticket": envelope["export_ticket"],
-                "runtime_sync": envelope.get("runtime_sync"),
             }
+            runtime_sync = envelope.get("runtime_sync")
+            if isinstance(runtime_sync, dict):
+                result["runtime_sync"] = runtime_sync
+            return result
         except self._services.statistics.StatisticsSummaryError as exc:
             return {
                 "ok": False,
