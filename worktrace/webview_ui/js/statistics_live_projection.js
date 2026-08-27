@@ -293,19 +293,6 @@
         }
     };
 
-    var baseExportStatisticsCsv = App.exportStatisticsCsv;
-    if (typeof baseExportStatisticsCsv === "function") {
-        App.exportStatisticsCsv = function () {
-            if (runtimeSyncPending()) {
-                if (typeof App.setStatisticsExportStatus === "function") {
-                    App.setStatisticsExportStatus("统计数据正在同步，请重试", "error");
-                }
-                return Promise.resolve(null);
-            }
-            return baseExportStatisticsCsv.apply(App, arguments);
-        };
-    }
-
     App.applyStatisticsLocalTicker = applyStatisticsLocalTick;
     App.statistics = Object.freeze(capability);
     App.statisticsLiveProjection = Object.freeze({
