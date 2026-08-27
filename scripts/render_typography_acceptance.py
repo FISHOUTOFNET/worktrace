@@ -148,6 +148,7 @@ def main() -> int:
     profiles = (
         ("desktop", 1080, 720, 1.0),
         ("compact-150", 800, 540, 1.5),
+        ("compact-720", 720, 540, 1.0),
     )
     reports: dict[str, object] = {
         "edge": str(edge),
