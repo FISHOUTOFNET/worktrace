@@ -33,6 +33,7 @@ _STATISTICS_EXPORT_ERROR_MESSAGES = {
     "storage_unavailable": "存储空间或设备不可用",
     "cleanup_failed": "导出未完成，临时文件清理失败",
     "stale_statistics_snapshot": "统计数据已更新，请重新加载后导出",
+    "statistics_sync_pending": "统计数据正在同步，请重试",
     "write_failed": "导出失败，请检查保存位置和权限",
     "operation_failed": "导出失败",
 }
@@ -91,6 +92,7 @@ class StatisticsBridgeMixin:
                 "ok": True,
                 "summary": envelope["summary"],
                 "export_ticket": envelope["export_ticket"],
+                "runtime_sync": envelope.get("runtime_sync"),
             }
         except self._services.statistics.StatisticsSummaryError as exc:
             return {
