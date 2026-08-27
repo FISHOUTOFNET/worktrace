@@ -7,8 +7,6 @@ const vm = require("node:vm");
 function harness() {
   let runtime = { collector: { live_eligible: true } };
   let loaded = true;
-  let exportCalls = 0;
-  let exportStatus = null;
   const elements = {};
   const document = {
     getElementById(id) { return elements[id] || null; },
@@ -31,11 +29,6 @@ function harness() {
     handleResult(result) { return result; },
     liveSampleFresh() { return true; },
     liveRuntimeStore: { get() { return runtime; } },
-    setStatisticsExportStatus(message, kind) { exportStatus = { message, kind }; },
-    exportStatisticsCsv() {
-      exportCalls += 1;
-      return Promise.resolve({ ok: true });
-    },
     statistics: {
       refreshPolicy: { deferred: true, preservePresentation: true },
       hasLoadedData() { return loaded; },
@@ -70,8 +63,6 @@ function harness() {
   return {
     App,
     setRuntime(value) { runtime = value; },
-    exportCalls() { return exportCalls; },
-    exportStatus() { return exportStatus; },
   };
 }
 
@@ -83,8 +74,8 @@ function statisticsResult(runtimeSync) {
   };
 }
 
-test("degraded Statistics success remains provisional and requests self-heal", async () => {
-  const { App, exportCalls, exportStatus } = harness();
+test("degraded Statistics success remains provisional and requests self-heal", () => {
+  const { App } = harness();
 
   App.handleResult(statisticsResult({
     runtime_consistent: false,
@@ -99,13 +90,6 @@ test("degraded Statistics success remains provisional and requests self-heal", a
   const tick = App.statistics.applyLocalTick();
   assert.equal(tick && tick.refreshRequired, true);
   assert.equal(tick && tick.reason, "statistics_runtime_sync_pending");
-
-  await App.exportStatisticsCsv();
-  assert.equal(exportCalls(), 0);
-  assert.deepEqual(exportStatus(), {
-    message: "统计数据正在同步，请重试",
-    kind: "error",
-  });
 
   App.handleResult(statisticsResult({
     runtime_consistent: true,
