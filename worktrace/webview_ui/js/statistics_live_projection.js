@@ -8,6 +8,7 @@
     if (!baseCapability || typeof baseCapability !== "object") return;
 
     var rowIndex = null;
+    var runtimeSyncState = null;
 
     function element(id) { return document.getElementById(id); }
 
@@ -37,13 +38,55 @@
         return App.liveSampleFresh(nonNegativeInt(target.sampled_at_epoch_ms), nowMs);
     }
 
-    function runtimeLiveEligible() {
+    function runtimeLiveEligibility() {
         var store = App.liveRuntimeStore;
-        if (!store || typeof store.get !== "function") return true;
+        if (!store || typeof store.get !== "function") return null;
         var runtime = store.get();
         var collector = runtime && runtime.collector;
-        if (!collector || typeof collector.live_eligible !== "boolean") return true;
+        if (!collector || typeof collector.live_eligible !== "boolean") return null;
         return collector.live_eligible;
+    }
+
+    function runtimeLiveEligible() {
+        var value = runtimeLiveEligibility();
+        return value === null ? true : value;
+    }
+
+    function normalizeRuntimeSync(value) {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+        return {
+            runtimeConsistent: value.runtime_consistent === true,
+            needsFullRefresh: value.needs_full_refresh === true,
+            collectionLiveEligible: value.collection_live_eligible === true
+        };
+    }
+
+    function runtimeSyncPending() {
+        return !!(runtimeSyncState && runtimeSyncState.needsFullRefresh === true);
+    }
+
+    function invalidateRowIndex() {
+        rowIndex = null;
+    }
+
+    function observeStatisticsRuntimeSync(data) {
+        if (!data || typeof data !== "object" || !data.summary || !data.export_ticket) return;
+        var sync = normalizeRuntimeSync(data.runtime_sync);
+        if (!sync) return;
+        runtimeSyncState = sync;
+        if (sync.needsFullRefresh) {
+            App.statisticsLiveTickerSuspended = true;
+            invalidateRowIndex();
+        }
+    }
+
+    var baseHandleResult = App.handleResult;
+    if (typeof baseHandleResult === "function") {
+        App.handleResult = function () {
+            var data = baseHandleResult.apply(App, arguments);
+            observeStatisticsRuntimeSync(data);
+            return data;
+        };
     }
 
     function buildGroupIndex(tbodyId, groups) {
@@ -92,10 +135,6 @@
         if (rowIndex && rowIndex.owner === owner) return rowIndex;
         rowIndex = buildRowIndex(summary, owner);
         return rowIndex;
-    }
-
-    function invalidateRowIndex() {
-        rowIndex = null;
     }
 
     function writeText(target, value) {
@@ -166,8 +205,22 @@
         };
     }
 
+    function runtimeLivenessChanged() {
+        if (!runtimeSyncState || runtimeSyncState.needsFullRefresh) return false;
+        var current = runtimeLiveEligibility();
+        return current !== null
+            && current !== runtimeSyncState.collectionLiveEligible;
+    }
+
     function applyStatisticsLocalTick() {
-        if (App.currentPage !== "statistics" || App.statisticsLiveTickerSuspended === true) return null;
+        if (App.currentPage !== "statistics") return null;
+        if (runtimeSyncPending()) {
+            return freezeStatisticsProjection("statistics_runtime_sync_pending");
+        }
+        if (runtimeLivenessChanged()) {
+            return freezeStatisticsProjection("statistics_runtime_liveness_changed");
+        }
+        if (App.statisticsLiveTickerSuspended === true) return null;
         var accepted = App.statisticsAcceptedPayload;
         if (!accepted || !accepted.summary || !accepted.filters) return null;
         var target = accepted.exportTicket && accepted.exportTicket.live_target;
@@ -221,13 +274,43 @@
     Object.keys(baseCapability).forEach(function (key) {
         capability[key] = baseCapability[key];
     });
+    var baseHasLoadedData = baseCapability.hasLoadedData;
+    var baseResetGeneration = baseCapability.resetGeneration;
     capability.applyLocalTick = applyStatisticsLocalTick;
+    capability.hasLoadedData = function () {
+        if (runtimeSyncPending()) return false;
+        return typeof baseHasLoadedData === "function"
+            ? baseHasLoadedData.call(baseCapability)
+            : true;
+    };
     capability.onRuntimeTransition = onStatisticsRuntimeTransition;
     capability.refreshPolicy = Object.freeze(refreshPolicy);
+    capability.resetGeneration = function () {
+        runtimeSyncState = null;
+        invalidateRowIndex();
+        if (typeof baseResetGeneration === "function") {
+            return baseResetGeneration.call(baseCapability);
+        }
+    };
+
+    var baseExportStatisticsCsv = App.exportStatisticsCsv;
+    if (typeof baseExportStatisticsCsv === "function") {
+        App.exportStatisticsCsv = function () {
+            if (runtimeSyncPending()) {
+                if (typeof App.setStatisticsExportStatus === "function") {
+                    App.setStatisticsExportStatus("统计数据正在同步，请重试", "error");
+                }
+                return Promise.resolve(null);
+            }
+            return baseExportStatisticsCsv.apply(App, arguments);
+        };
+    }
 
     App.applyStatisticsLocalTicker = applyStatisticsLocalTick;
     App.statistics = Object.freeze(capability);
     App.statisticsLiveProjection = Object.freeze({
-        invalidateRowIndex: invalidateRowIndex
+        invalidateRowIndex: invalidateRowIndex,
+        runtimeSyncPending: runtimeSyncPending,
+        runtimeSyncState: function () { return runtimeSyncState; }
     });
 })();
