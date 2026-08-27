@@ -4,6 +4,7 @@
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
     var statisticsQuickRangePreset = "week";
     var statisticsQuickRangeResolvedDate = "";
+    var STATISTICS_QUICK_RANGE_QUERY_DELAY_MS = 120;
 
     function element(id) { return document.getElementById(id); }
 
@@ -693,12 +694,13 @@
     }
     App.handleStatisticsTabKeydown = handleStatisticsTabKeydown;
 
-    function applyStatisticsQuickRange(type) {
+    function applyStatisticsQuickRange(type, queryDelay) {
         var today = new Date();
         var range = shortcutRange(type, today);
         if (!range) return Promise.resolve(null);
         setStatisticsSelection(type === "all", range.dateFrom, range.dateTo, type);
-        return beginStatisticsQuery(0);
+        if (queryDelay === undefined) return beginStatisticsQuery(0);
+        return beginStatisticsQuery(nonNegativeInt(queryDelay));
     }
     App.applyStatisticsQuickRange = applyStatisticsQuickRange;
 
@@ -799,16 +801,16 @@
 
     function bindStatisticsEvents() {
         bindStatisticsControl("statistics-today-btn", "click", function () {
-            App.applyStatisticsQuickRange("today");
+            App.applyStatisticsQuickRange("today", STATISTICS_QUICK_RANGE_QUERY_DELAY_MS);
         });
         bindStatisticsControl("statistics-week-btn", "click", function () {
-            App.applyStatisticsQuickRange("week");
+            App.applyStatisticsQuickRange("week", STATISTICS_QUICK_RANGE_QUERY_DELAY_MS);
         });
         bindStatisticsControl("statistics-month-btn", "click", function () {
-            App.applyStatisticsQuickRange("month");
+            App.applyStatisticsQuickRange("month", STATISTICS_QUICK_RANGE_QUERY_DELAY_MS);
         });
         bindStatisticsControl("statistics-all-btn", "click", function () {
-            App.applyStatisticsQuickRange("all");
+            App.applyStatisticsQuickRange("all", STATISTICS_QUICK_RANGE_QUERY_DELAY_MS);
         });
         bindStatisticsControl(
             "statistics-apply-range-btn", "click", App.applyStatisticsDraftSelection
