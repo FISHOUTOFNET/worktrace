@@ -289,7 +289,7 @@ test("Settings generation refresh while visible is background-only", async () =>
   assert.equal(App.settings.refreshPending(), false);
 });
 
-test("Timeline consumes one live-only collection refresh but preserves structural refreshes", async () => {
+test("Timeline live-only refresh is never suppressed and structural refreshes still reload", async () => {
   const { App, counters } = harness(runtime());
   App.currentPage = "timeline";
   App.timelineEditorState = {
@@ -299,15 +299,14 @@ test("Timeline consumes one live-only collection refresh but preserves structura
 
   App.acceptRefreshStateRuntime({ nextRuntime: runtime({ live: "l2" }) });
   await App.refreshTimeline();
-  assert.equal(counters.timeline(), 0);
-  assert.equal(App.suppressNextTimelineCollectionRefresh, false);
+  assert.equal(counters.timeline(), 1);
 
   App.acceptRefreshStateRuntime({ nextRuntime: runtime({ structure: "s2", live: "l3" }) });
   await App.refreshTimeline();
-  assert.equal(counters.timeline(), 1);
+  assert.equal(counters.timeline(), 2);
 });
 
-test("Overview runtime reconciliation is dispatched as transition facts", () => {
+test("Overview runtime reconciliation no longer uses page-local suppression transitions", () => {
   const { App, counters } = harness(runtime());
   App.currentPage = "overview";
 
@@ -315,10 +314,7 @@ test("Overview runtime reconciliation is dispatched as transition facts", () => 
   App.acceptRefreshStateRuntime({ nextRuntime: runtime({ structure: "s2", live: "l3" }) });
 
   assert.equal(counters.overview(), 0);
-  assert.deepEqual(
-    counters.overviewTransitions().map((change) => [change.structureChanged, change.liveChanged]),
-    [[false, true], [true, true]]
-  );
+  assert.deepEqual(counters.overviewTransitions(), []);
 });
 
 test("Statistics local ticker patches numeric cells without calling full renderer", () => {
