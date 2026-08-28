@@ -3,10 +3,6 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    if (typeof App.suppressNextOverviewCollectionRefresh !== "boolean") {
-        App.suppressNextOverviewCollectionRefresh = false;
-    }
-
     function aggregateLiveProjection(clock, durableSeconds, enabled) {
         var raw = Number(durableSeconds);
         var durable = Number.isFinite(raw) ? Math.max(0, raw) : 0;
@@ -174,14 +170,16 @@
         bindIntentButtons(list, items, "data-recent-index");
     }
 
+    function currentRuntimeIdentity() {
+        var store = App.liveRuntimeStore;
+        var runtime = store && typeof store.get === "function" ? store.get() : null;
+        return String(runtime && runtime.liveRevision || "");
+    }
+
     function showOverview(bundle) {
         if (!bundle) return;
-        if (App.currentPage === "overview"
-            && App.suppressNextOverviewCollectionRefresh === true) {
-            App.suppressNextOverviewCollectionRefresh = false;
-            return;
-        }
         App.lastOverviewSnapshot = bundle;
+        App.overviewCommittedRuntimeIdentity = currentRuntimeIdentity();
         renderKpi(
             document.getElementById("kpi-total"),
             bundle.today_total_seconds,
@@ -219,9 +217,7 @@
         renderRecent((payload && payload.recent) || []);
     };
 
-    function refreshOverview(options) {
-        options = options || {};
-        var suppressCollectionCommit = options.suppressCollectionCommit === true;
+    function refreshOverview() {
         var token = App.requestCoordinator.beginLatest("overview", "today");
         return App.bridge.getOverview().then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return;
@@ -247,7 +243,6 @@
             if (overview.uncategorized_seconds === undefined) {
                 overview.uncategorized_seconds = bundle.uncategorized_seconds || 0;
             }
-            if (suppressCollectionCommit && App.currentPage === "overview") return;
             showOverview(overview);
         }).catch(function () {
             if (App.requestCoordinator.isCurrent(token)) App.showError("刷新失败");
@@ -256,30 +251,20 @@
     App.refreshOverview = refreshOverview;
 
     function updateCurrentActivity(activity, options) {
-        if (!App.lastOverviewSnapshot) App.lastOverviewSnapshot = {};
-        App.lastOverviewSnapshot.current_activity = activity || {};
         if (!options || options.render !== true || App.currentPage !== "overview") return;
         var target = document.getElementById("current-activity");
-        if (target) App.renderCurrentActivityElement(target, activity || {}, "overview");
-    }
-    function onOverviewRuntimeTransition(change) {
-        change = change || {};
-        if (change.source !== "refresh-state" || App.currentPage !== "overview") return;
-        App.suppressNextOverviewCollectionRefresh = change.structureChanged !== true
-            && change.liveChanged === true;
+        if (!target) return;
+        App.renderCurrentActivityElement(target, activity || {}, "overview");
+        var runtimeIdentity = currentRuntimeIdentity();
+        var committedIdentity = String(App.overviewCommittedRuntimeIdentity || "");
+        if (runtimeIdentity && committedIdentity && runtimeIdentity !== committedIdentity) {
+            target.disabled = true;
+            target.onclick = null;
+        }
     }
 
-    function onOverviewRefreshRequested(options) {
-        options = options || {};
-        var suppressCollectionCommit = options.automatic === true
-            && options.authoritativeRebase !== true
-            && App.suppressNextOverviewCollectionRefresh === true;
-        if (suppressCollectionCommit
-            || options.authoritativeRebase === true
-            || options.automatic !== true) {
-            App.suppressNextOverviewCollectionRefresh = false;
-        }
-        return refreshOverview({ suppressCollectionCommit: suppressCollectionCommit });
+    function onOverviewRefreshRequested() {
+        return refreshOverview();
     }
 
     App.overview = Object.freeze({
@@ -292,11 +277,13 @@
         refreshEvidence: function () { return App.lastOverviewSnapshot || null; },
         onPageEntered: onOverviewRefreshRequested,
         onRefreshRequested: onOverviewRefreshRequested,
-        onRuntimeTransition: onOverviewRuntimeTransition,
+        runtimeRefreshIdentity: function (runtime) {
+            return String(runtime && runtime.liveRevision || "");
+        },
         updateCurrentActivity: updateCurrentActivity,
         resetGeneration: function () {
             App.overviewRequestToken = (App.overviewRequestToken || 0) + 1;
-            App.suppressNextOverviewCollectionRefresh = false;
+            App.overviewCommittedRuntimeIdentity = "";
         }
     });
 })();
