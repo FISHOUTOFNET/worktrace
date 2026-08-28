@@ -19,35 +19,63 @@ def test_application_metadata_uses_canonical_release_version() -> None:
     assert APPLICATION_METADATA.creator == "Sun Yi"
 
 
-def test_status_projects_application_metadata_without_settings_dependency() -> None:
+def test_metadata_bridge_is_independent_of_settings_and_runtime_status() -> None:
     settings = FakeSettingsCapability()
     settings.get_settings_privacy_status_side_effect = AssertionError(
         "application metadata must not depend on settings status"
     )
     bridge = build_test_bridge(settings=settings)
 
-    result = bridge.get_status()
+    result = bridge.get_application_metadata()
 
-    assert result["application"] == {
-        "version": __version__,
-        "release_channel": "beta",
-        "creator": "Sun Yi",
+    assert result == {
+        "ok": True,
+        "application": {
+            "version": __version__,
+            "release_channel": "beta",
+            "creator": "Sun Yi",
+        },
     }
     assert settings.get_settings_privacy_status_calls == []
 
+    status = bridge.get_status()
+    assert "application" not in status
+    assert settings.get_settings_privacy_status_calls == []
 
-def test_frontend_metadata_projection_is_read_only_and_responsive() -> None:
-    source = (
-        ROOT / "worktrace" / "webview_ui" / "js" / "ui_composition.js"
-    ).read_text(encoding="utf-8")
 
-    assert 'renderApplicationMetadata(statusResult.application)' in source
-    assert '"v" + version' in source
-    assert 'return "测试版"' in source
-    assert 'creator ? "Created by " + creator' in source
-    assert 'document.querySelector(".nav-footer")' in source
-    assert 'document.querySelector(".settings-content")' in source
-    assert '@media (max-width:959px){.application-version-label{display:none;}}' in source
-    assert "App.bridge.getStatus()" not in source
-    assert "window.pywebview.api" not in source
-    assert "getSettingsPrivacyStatus" not in source
+def test_frontend_metadata_projection_uses_static_bootstrap_boundary() -> None:
+    ui_root = ROOT / "worktrace" / "webview_ui"
+    metadata_source = (ui_root / "js" / "application_metadata.js").read_text(
+        encoding="utf-8"
+    )
+    init_source = (ui_root / "js" / "init_fd_work_v5.js").read_text(
+        encoding="utf-8"
+    )
+    composition_source = (ui_root / "js" / "ui_composition.js").read_text(
+        encoding="utf-8"
+    )
+    index_source = (ui_root / "index_fd_work_v5.html").read_text(encoding="utf-8")
+    css_source = (ui_root / "application_metadata.css").read_text(encoding="utf-8")
+
+    assert (
+        'getApplicationMetadata: fixedBridgeMethod("get_application_metadata")'
+        in init_source
+    )
+    assert "App.applicationMetadata.load()" in init_source
+    assert "App.bridge.getApplicationMetadata()" in metadata_source
+    assert "App.bridge.getStatus()" not in metadata_source
+    assert "window.pywebview.api" not in metadata_source
+    assert '"Created By " + creator' in metadata_source
+    assert "statusResult.application" not in composition_source
+    assert 'document.createElement("style")' not in composition_source
+
+    for dom_id in (
+        "application-version-label",
+        "settings-about-application",
+        "settings-application-version",
+        "settings-application-creator",
+    ):
+        assert f'id="{dom_id}"' in index_source
+
+    assert ".application-version-label" in css_source
+    assert "@media (max-width: 959px)" in css_source

@@ -3,108 +3,6 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    function applicationReleaseLabel(channel) {
-        channel = String(channel || "").trim().toLowerCase();
-        if (channel === "beta") return "测试版";
-        if (channel === "stable" || channel === "release") return "";
-        return channel;
-    }
-
-    function applicationVersionLabel(metadata) {
-        metadata = metadata || {};
-        var version = String(metadata.version || "").trim();
-        if (!version) return "";
-        var parts = ["v" + version];
-        var releaseLabel = applicationReleaseLabel(metadata.release_channel);
-        if (releaseLabel) parts.push(releaseLabel);
-        return parts.join(" · ");
-    }
-
-    function ensureApplicationMetadataStyles() {
-        if (document.getElementById("application-metadata-styles")) return;
-        var style = document.createElement("style");
-        style.id = "application-metadata-styles";
-        style.textContent = [
-            ".application-version-label{margin-top:7px;color:var(--color-text-secondary);font-size:var(--font-size-xs);line-height:1.25;text-align:center;white-space:nowrap;}",
-            ".settings-about{margin-top:18px;padding-top:12px;border-top:1px solid var(--color-border);}",
-            ".settings-about h2{margin:0 0 6px;font-size:var(--font-size-lg);font-weight:650;}",
-            ".settings-about-product{display:block;font-weight:650;}",
-            ".settings-about-meta,.settings-about-creator{display:block;margin-top:2px;color:var(--color-text-secondary);font-size:var(--font-size-xs);}",
-            "@media (max-width:959px){.application-version-label{display:none;}}"
-        ].join("");
-        document.head.appendChild(style);
-    }
-
-    function ensureApplicationVersionProjection() {
-        var footer = document.querySelector(".nav-footer");
-        if (!footer) return null;
-        var target = document.getElementById("application-version-label");
-        if (target) return target;
-        target = document.createElement("div");
-        target.id = "application-version-label";
-        target.className = "application-version-label";
-        footer.appendChild(target);
-        return target;
-    }
-
-    function ensureApplicationAboutProjection() {
-        var content = document.querySelector(".settings-content");
-        if (!content) return null;
-        var target = document.getElementById("settings-about-application");
-        if (target) return target;
-
-        target = document.createElement("section");
-        target.id = "settings-about-application";
-        target.className = "settings-about";
-        target.setAttribute("aria-labelledby", "settings-about-application-title");
-
-        var title = document.createElement("h2");
-        title.id = "settings-about-application-title";
-        title.textContent = "关于有迹";
-        target.appendChild(title);
-
-        var product = document.createElement("span");
-        product.className = "settings-about-product";
-        product.textContent = "有迹 · Trace";
-        target.appendChild(product);
-
-        var version = document.createElement("span");
-        version.className = "settings-about-meta";
-        version.setAttribute("data-application-version", "settings");
-        target.appendChild(version);
-
-        var creator = document.createElement("span");
-        creator.className = "settings-about-creator";
-        creator.setAttribute("data-application-creator", "settings");
-        target.appendChild(creator);
-
-        content.appendChild(target);
-        return target;
-    }
-
-    function renderApplicationMetadata(metadata) {
-        if (!metadata || typeof metadata !== "object") return false;
-        var versionLabel = applicationVersionLabel(metadata);
-        if (!versionLabel) return false;
-        ensureApplicationMetadataStyles();
-
-        var sidebarVersion = ensureApplicationVersionProjection();
-        if (sidebarVersion) sidebarVersion.textContent = versionLabel;
-
-        var about = ensureApplicationAboutProjection();
-        if (about) {
-            var settingsVersion = about.querySelector('[data-application-version="settings"]');
-            var settingsCreator = about.querySelector('[data-application-creator="settings"]');
-            if (settingsVersion) settingsVersion.textContent = versionLabel;
-            if (settingsCreator) {
-                var creator = String(metadata.creator || "").trim();
-                settingsCreator.textContent = creator ? "Created by " + creator : "";
-                settingsCreator.hidden = !creator;
-            }
-        }
-        return true;
-    }
-
     function syncFDWorkConsumers(status) {
         if (App.settings && typeof App.settings.onFDWorkStatusChanged === "function") {
             App.settings.onFDWorkStatusChanged(status || App.fdWorkStatus || null);
@@ -212,7 +110,6 @@
     if (typeof baseShowStatus === "function") {
         App.showStatus = function (statusResult) {
             if (!statusResult) return;
-            if (statusResult.application) renderApplicationMetadata(statusResult.application);
             var signature = JSON.stringify([
                 String(statusResult.status || ""),
                 statusResult.paused === true,

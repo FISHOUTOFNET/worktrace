@@ -38,6 +38,7 @@
         deleteProjectKeywordRule: fixedBridgeMethod("delete_project_keyword_rule"),
         exportEncryptedBackup: fixedBridgeMethod("export_encrypted_backup"),
         exportStatisticsCsv: fixedBridgeMethod("export_statistics_csv"),
+        getApplicationMetadata: fixedBridgeMethod("get_application_metadata"),
         getFDWorkStatus: fixedBridgeMethod("get_fd_work_status"),
         getFirstRunNotice: fixedBridgeMethod("get_first_run_notice"),
         getOverview: fixedBridgeMethod("get_overview"),
@@ -1138,6 +1139,9 @@
     function init() {
         initNav();
         initButtons();
+        if (App.applicationMetadata && typeof App.applicationMetadata.load === "function") {
+            Promise.resolve(App.applicationMetadata.load()).catch(function () {});
+        }
         App.privacyNotice.loadGate().then(function (ready) {
             return ready ? continueStartupAfterPrivacyGate() : null;
         });

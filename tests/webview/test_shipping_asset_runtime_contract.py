@@ -61,6 +61,7 @@ def test_shipping_script_composition_contains_current_owners_in_order():
     scripts = [urlsplit(url).path for url in _local_assets(source) if url.startswith("js/")]
     required = [
         "js/core.js",
+        "js/application_metadata.js",
         "js/ui_components.js",
         "js/project_catalog.js",
         "js/timeline_delete_actions.js",
