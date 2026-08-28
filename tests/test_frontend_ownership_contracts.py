@@ -71,7 +71,8 @@ def test_revision_check_owns_periodic_business_refresh():
     heartbeat = between(init, "    function startHeartbeat() {", "    App.startHeartbeat = startHeartbeat;")
     assert "changedGenerationKeys(" in revision
     assert "markPagesDirtyForGenerationChanges(changedGenerations);" in revision
-    assert "dispatchAutomaticRefresh(changedGenerations, previousRuntime, acceptedRuntime);" in revision
+    assert "var runtimeChangedPages = markPagesDirtyForRuntimeChanges(" in revision
+    assert "dispatchAutomaticRefresh(changedGenerations, runtimeChangedPages);" in revision
     assert "App.liveClockContractRefreshRequested" in revision
     assert "runRevisionCheck();" in heartbeat
     for direct_fetch in (
