@@ -126,6 +126,7 @@
             loadApplicationMetadata();
             return;
         }
+        if (typeof window.addEventListener !== "function") return;
         window.addEventListener("pywebviewready", function () {
             loadApplicationMetadata();
         }, { once: true });
