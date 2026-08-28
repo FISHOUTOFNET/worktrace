@@ -11,6 +11,7 @@ from typing import Any
 
 from ..formatters import format_duration
 from ..services import statistics_service
+from .statistics_interactive_range_policy import validate_interactive_statistics_range
 
 
 class StatisticsSummaryError(ValueError):
@@ -58,13 +59,35 @@ def _map_statistics_summary(action) -> dict[str, Any]:
         raise StatisticsSummaryError("operation_failed")
 
 
+def _interactive_statistics_export_summary(
+    date_from: str,
+    date_to: str,
+    project_id: str | int | None,
+) -> dict[str, Any]:
+    validate_interactive_statistics_range(date_from, date_to)
+    return statistics_service.get_statistics_export_summary(
+        date_from, date_to, project_id
+    )
+
+
+def _interactive_statistics_export_view_model(
+    date_from: str,
+    date_to: str,
+    project_id: str | int | None,
+) -> dict[str, Any]:
+    validate_interactive_statistics_range(date_from, date_to)
+    return statistics_service.get_statistics_realtime_export_summary(
+        date_from, date_to, project_id
+    )
+
+
 def get_statistics_export_summary(
     date_from: str, date_to: str, project_id: str | int | None = None
 ) -> dict[str, Any]:
-    """Return the durable closed-only service summary."""
+    """Return the bounded interactive durable Statistics summary."""
 
     return _map_statistics_summary(
-        lambda: statistics_service.get_statistics_export_summary(
+        lambda: _interactive_statistics_export_summary(
             date_from, date_to, project_id
         )
     )
@@ -75,10 +98,10 @@ def get_statistics_export_view_model(
     date_to: str,
     project_id: str | int | None = None,
 ) -> dict[str, Any]:
-    """Return the complete bridge-facing realtime Statistics display envelope."""
+    """Return the complete bounded bridge-facing Statistics display envelope."""
 
     summary = _map_statistics_summary(
-        lambda: statistics_service.get_statistics_realtime_export_summary(
+        lambda: _interactive_statistics_export_view_model(
             date_from, date_to, project_id
         )
     )

@@ -41,6 +41,7 @@ datas = [
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline_delete_actions.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline_action_presentation.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'statistics.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'statistics_interactive_range_policy.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'statistics_live_projection.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'settings_presentation.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'settings_transient_ui.js'), 'worktrace/webview_ui/js'),

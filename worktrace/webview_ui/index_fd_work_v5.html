@@ -106,12 +106,12 @@
                 </div>
             </section>
 
-            <section id="page-statistics" class="page statistics-page">
+            <section id="page-statistics" class="page statistics-page" data-max-range-days="366">
                 <header class="page-header page-header-compact"><div><h1>统计与导出</h1></div><button id="stats-export-action-btn" type="button" class="button primary" disabled><svg class="icon" aria-hidden="true"><use href="#icon-download"/></svg><span>导出 CSV</span></button></header>
                 <div class="toolbar statistics-toolbar">
                     <div class="statistics-date-range" aria-label="统计日期范围"><div class="statistics-date-editor"><div id="statistics-date-inputs" class="statistics-date-inputs"><label class="sr-only" for="statistics-date-from">开始日期</label><span class="statistics-date-control-shell"><input id="statistics-date-from" class="date-control statistics-date-control" type="date" data-empty="true" aria-label="开始日期"><span class="statistics-date-empty-label" aria-hidden="true">YYYY/MM/DD</span></span><span aria-hidden="true">至</span><label class="sr-only" for="statistics-date-to">结束日期</label><span class="statistics-date-control-shell"><input id="statistics-date-to" class="date-control statistics-date-control" type="date" data-empty="true" aria-label="结束日期"><span class="statistics-date-empty-label" aria-hidden="true">YYYY/MM/DD</span></span><button id="statistics-apply-range-btn" type="button">应用</button></div></div><span id="statistics-date-status" class="statistics-date-status" role="status" aria-live="polite" hidden></span></div>
                     <label for="statistics-project-filter">项目</label><select id="statistics-project-filter" class="project-filter-control"><option value="">全部项目</option></select><span class="toolbar-spacer"></span>
-                    <div class="quick-ranges" aria-label="快捷日期范围"><button id="statistics-today-btn" type="button" aria-pressed="false">今日</button><button id="statistics-week-btn" type="button" aria-pressed="false">本周</button><button id="statistics-month-btn" type="button" aria-pressed="false">本月</button><button id="statistics-all-btn" type="button" aria-pressed="false">全部</button></div>
+                    <div class="quick-ranges" aria-label="快捷日期范围"><button id="statistics-today-btn" type="button" aria-pressed="false">今日</button><button id="statistics-week-btn" type="button" aria-pressed="false">本周</button><button id="statistics-month-btn" type="button" aria-pressed="false">本月</button><button id="statistics-all-btn" type="button" aria-pressed="false" hidden disabled aria-hidden="true">全部</button></div>
                 </div>
                 <div id="statistics-error" class="inline-alert error" role="alert" hidden>加载统计失败</div><div id="statistics-loading" class="inline-status" hidden>更新中…</div>
                 <div id="statistics-results" hidden>
@@ -199,6 +199,7 @@
     <script src="js/timeline_delete_actions.js?v=5cf0635fb1418fe8"></script>
     <script src="js/timeline_action_presentation.js?v=657350d41c71d9ab"></script>
     <script src="js/statistics.js?v=4d4f206bcdabd48c"></script>
+    <script src="js/statistics_interactive_range_policy.js?v=7f5bb111fa1b8955"></script>
     <script src="js/statistics_live_projection.js?v=c6347f997d036aa0"></script>
     <script src="js/settings_presentation.js?v=12c08448dafd5640"></script>
     <script src="js/settings_transient_ui.js?v=3ec9edcccfcaa633"></script>
