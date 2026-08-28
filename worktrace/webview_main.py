@@ -13,6 +13,7 @@ from typing import Any
 
 from . import PRODUCT_DISPLAY_NAME, PRODUCT_NAME, config
 from .collector.single_instance import get_application_instance_coordinator
+from .desktop.collection_icon_projection import CollectionIconProjectionHost
 from .desktop.deferred_ui import DeferredUIGate, InitialUIRequest
 from .desktop.install_bootstrap import consume_fd_work_install_intent
 from .desktop.update_shutdown import get_application_update_shutdown_coordinator
@@ -342,8 +343,10 @@ def _run_webview_ui(
             initial_hidden=False,
             window_icons=window_icons,
             webview_power=webview_power,
-            collection_active_provider=lambda: services.app_control.is_collection_active(),
         )
+        attach_window_icons = getattr(tray, "attach_window_icons", None)
+        if callable(attach_window_icons):
+            attach_window_icons(window_icons)
         shell_holder["shell"] = shell
         fd_work_controller.bind_main_focus_callback(shell.show_window)
         _bind_shell_events(
@@ -696,11 +699,14 @@ def main(*, background: bool = False) -> int:
                 logging.exception("application exit worker startup failed")
 
         icon_path = desktop_resource_path("worktrace.ico")
-        tray = WindowsTrayHost(
-            icon_path=icon_path,
-            on_open=open_application,
-            on_exit=exit_application,
-            on_session_end=exit_application,
+        tray = CollectionIconProjectionHost(
+            tray=WindowsTrayHost(
+                icon_path=icon_path,
+                on_open=open_application,
+                on_exit=exit_application,
+                on_session_end=exit_application,
+            ),
+            collection_active_provider=app_control.is_collection_active,
         )
 
         if deferred_ui is not None:
@@ -708,9 +714,7 @@ def main(*, background: bool = False) -> int:
             if update_shutdown_prepared:
                 update_shutdown.bind_shutdown_handler(exit_application)
             tray_available = tray.start()
-            if tray_available:
-                tray.set_collection_active(app_control.is_collection_active())
-            else:
+            if not tray_available:
                 logging.error("headless tray unavailable; opening visible UI")
                 deferred_ui.request_open()
             logging.info(
