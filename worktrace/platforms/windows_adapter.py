@@ -8,6 +8,7 @@ import threading
 import time
 from ctypes import wintypes
 
+from ..constants import CLIPBOARD_CAPTURE_AVAILABLE
 from ..resources.title_parsing import extract_probable_file_name
 from ..worker_health import WorkerHealthReporter
 from .base import (
@@ -40,7 +41,10 @@ class WindowsAdapter:
         path_resolver: WindowsPathResolver | None = None,
     ) -> None:
         self._path_resolver = path_resolver or WindowsPathResolver()
-        self._clipboard = ClipboardMonitor(self.get_active_window)
+        self._clipboard = ClipboardMonitor(
+            self.get_active_window,
+            capture_available=CLIPBOARD_CAPTURE_AVAILABLE,
+        )
         self._generic_path_failures: dict[tuple[int, str, str], float] = {}
 
     def get_active_window(self) -> ActiveWindow | None:
@@ -176,9 +180,11 @@ class WindowsAdapter:
         return max(0, elapsed_ms // 1000)
 
     def set_clipboard_capture_enabled(self, enabled: bool) -> None:
-        self._clipboard.set_enabled(bool(enabled))
+        self._clipboard.set_enabled(bool(enabled) and CLIPBOARD_CAPTURE_AVAILABLE)
 
     def get_clipboard_events(self) -> list[ClipboardTextEvent]:
+        if not CLIPBOARD_CAPTURE_AVAILABLE:
+            return []
         return self._clipboard.drain()
 
     def run_clipboard_capture(
