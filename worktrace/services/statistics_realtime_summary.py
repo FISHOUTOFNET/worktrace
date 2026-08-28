@@ -430,8 +430,17 @@ def _merge_summary_delta(
     )
 
 
-def _snapshot_from_day_projection(projection) -> ReportProjectionSnapshot:
-    entries = tuple(projection.entries)
+def _snapshot_from_day_projection(
+    projection,
+    keys: set[str] | None = None,
+) -> ReportProjectionSnapshot:
+    selected_keys = None if keys is None else {str(key) for key in keys if key}
+    entries = tuple(
+        entry
+        for entry in projection.entries
+        if selected_keys is None
+        or str(entry.get("projection_instance_key") or "") in selected_keys
+    )
     final_sessions = tuple(
         entry
         for entry in entries
@@ -442,6 +451,12 @@ def _snapshot_from_day_projection(projection) -> ReportProjectionSnapshot:
         for entry in entries
         if str(entry.get("row_kind") or "") == "standalone_status"
     )
+    contributions = tuple(
+        row
+        for row in projection.contributions
+        if selected_keys is None
+        or str(row.get("projection_instance_key") or "") in selected_keys
+    )
     return ReportProjectionSnapshot(
         start_date=str(projection.report_date),
         end_date=str(projection.report_date),
@@ -449,8 +464,8 @@ def _snapshot_from_day_projection(projection) -> ReportProjectionSnapshot:
         final_entries=entries,
         final_sessions=final_sessions,
         standalone_status_entries=standalone,
-        final_contributions=tuple(projection.contributions),
-        operation_diagnostics=tuple(projection.operation_diagnostics),
+        final_contributions=contributions,
+        operation_diagnostics=(),
         snapshot_revision=str(projection.snapshot_revision),
     )
 
@@ -485,8 +500,39 @@ def build_statistics_realtime_overlay(
 
     durable_day = get_durable_day_projection(report_today)
     effective_day = get_day_projection(report_today)
-    before = _snapshot_from_day_projection(durable_day)
-    effective_snapshot = _snapshot_from_day_projection(effective_day)
+
+    durable_keys = {
+        str(entry.get("projection_instance_key") or "")
+        for entry in durable_day.entries
+        if str(entry.get("projection_instance_key") or "")
+    }
+    effective_keys = {
+        str(entry.get("projection_instance_key") or "")
+        for entry in effective_day.entries
+        if str(entry.get("projection_instance_key") or "")
+    }
+    try:
+        runtime_id = int(runtime_snapshot.get("persisted_activity_id") or 0)
+    except (TypeError, ValueError):
+        runtime_id = 0
+    durable_live_keys = {
+        str(row.get("projection_instance_key") or "")
+        for row in durable_day.contributions
+        if runtime_id > 0 and _activity_id(row) == runtime_id
+    }
+    effective_live_keys = {
+        str(row.get("projection_instance_key") or "")
+        for row in effective_day.contributions
+        if runtime_id > 0 and _activity_id(row) == runtime_id
+    }
+
+    # Only topology differences plus the exact live entry participate in the
+    # realtime delta. Historical/current-day entries whose member topology is
+    # unchanged remain in the durable cached summary and are never copied.
+    before_keys = (durable_keys - effective_keys).union(durable_live_keys)
+    after_keys = (effective_keys - durable_keys).union(effective_live_keys)
+    before = _snapshot_from_day_projection(durable_day, before_keys)
+    effective_snapshot = _snapshot_from_day_projection(effective_day, after_keys)
 
     from . import report_as_of_snapshot_service
 
