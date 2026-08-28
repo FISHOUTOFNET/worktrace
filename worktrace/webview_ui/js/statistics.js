@@ -374,8 +374,14 @@
 
     function onStatisticsRuntimeTransition(change) {
         change = change || {};
-        if (change.source !== "refresh-state" || change.reportStructureChanged !== true) return;
-        suspendStatisticsProjection("statistics_report_structure_changed");
+        if (change.source !== "refresh-state") return;
+        if (change.reportStructureChanged === true) {
+            suspendStatisticsProjection("statistics_report_structure_changed");
+            return;
+        }
+        if (change.liveChanged === true) {
+            suspendStatisticsProjection("statistics_runtime_identity_changed");
+        }
     }
 
     function validateStatisticsDateRange(dateFrom, dateTo) {
@@ -1054,6 +1060,16 @@
     }
     App.exportStatisticsCsv = exportStatisticsCsv;
 
+    function statisticsSelectionIncludesDate(date) {
+        date = String(date || "");
+        if (!date) return false;
+        var selection = App.statisticsSelection;
+        if (!selection || selection.allTime === true || statisticsQuickRangePreset) return true;
+        var from = String(selection.dateFrom || "");
+        var to = String(selection.dateTo || "");
+        return !!from && !!to && from <= date && to >= date;
+    }
+
     function resetStatisticsGeneration() {
         App.statisticsLoaded = false;
         App.statisticsAcceptedPayload = null;
@@ -1078,13 +1094,7 @@
     }
     App.statistics = Object.freeze({
         applyLocalTick: applyStatisticsLocalTicker,
-        automaticRefreshAllowed: function (today) {
-            var selection = App.statisticsSelection;
-            if (!selection || selection.allTime === true || statisticsQuickRangePreset) return true;
-            var from = String(selection.dateFrom || "");
-            var to = String(selection.dateTo || "");
-            return !!from && !!to && from <= today && to >= today;
-        },
+        automaticRefreshAllowed: statisticsSelectionIncludesDate,
         bindEvents: bindStatisticsEvents,
         refreshPolicy: Object.freeze({
             entryGenerations: Object.freeze(["report_structure"]),
@@ -1110,6 +1120,12 @@
                 String(selection.dateTo || ""),
                 filter ? String(filter.value || "") : ""
             ].join("|");
+        },
+        runtimeRefreshIdentity: function (runtime) {
+            if (!runtime) return "";
+            return statisticsSelectionIncludesDate(runtime.liveReportDate)
+                ? String(runtime.liveRevision || "")
+                : "";
         },
         resetGeneration: resetStatisticsGeneration
     });
