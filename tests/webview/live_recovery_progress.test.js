@@ -246,8 +246,9 @@ test("freshness recovery contracts stay wired through the central coordinator", 
   assert.match(initSource, /authoritativeRebase:\s*true/);
   assert.match(initSource, /ensureActivePageRecovery\(\)/);
   assert.doesNotMatch(initSource, /if \(App\.requestCoordinator\.isCurrent\(token\)\) App\.refreshCheckInFlight = false/);
-  assert.match(overviewSource, /options\.authoritativeRebase\s*!==\s*true/);
-  assert.match(overviewSource, /suppressCollectionCommit/);
+  assert.doesNotMatch(overviewSource, /suppressCollectionCommit/);
+  assert.doesNotMatch(overviewSource, /suppressNextOverviewCollectionRefresh/);
+  assert.match(overviewSource, /runtimeRefreshIdentity/);
   assert.match(statisticsSource, /statistics_projection_blocked/);
   assert.match(statisticsSource, /statistics_live_target_rebase_due/);
   assert.doesNotMatch(compatibilitySource, /App\.statistics\s*=/);
