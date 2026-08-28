@@ -59,6 +59,7 @@ state or database facts.
 | Permanent project deletion orchestration | `project_deletion_command_service` |
 | Rule write invariants | canonical rule command/service layer |
 | Verified page read snapshot | `PageReadContext` |
+| Verified as-of report structure | `report_effective_projection_service` |
 | Row runtime overlay | `ActivityRowOverlay` |
 | Exact live-time DTO | `activity_live_clock` |
 | Application composition | `ApplicationServices` |
@@ -330,9 +331,12 @@ narrow host callbacks for Rules-owned refresh work. FD Work must not read
 `refreshRulesPanelWriteState` directly.
 
 Overview, Timeline, Details, Statistics and Export use the same canonical report
-facts. Natural live-second growth is DOM-local and does not trigger heavy page
-reload. Structural/replacement changes flow through explicit revisions and the
-existing refresh coordinator.
+facts. A verified persisted open activity may be projected through the single
+`report_effective_projection_service` read owner so short-return and boundary
+compaction use the same kernel before presentation; provisional groups are never
+mutation identities. Natural live-second growth is DOM-local and does not trigger
+heavy page reload. Structural/replacement changes flow through explicit revisions
+and the existing refresh coordinator.
 
 Statistics date-range transport uses a single semantic: empty `date_from` and
 `date_to` together mean canonical all-time (1970-01-01 to today); any other

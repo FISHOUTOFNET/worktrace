@@ -37,6 +37,7 @@ class PageReadContext:
     collection_live_eligible: bool = True
     snapshot_cache: dict[tuple[str, str], Any] = field(default_factory=dict)
     day_projection_cache: dict[str, Any] = field(default_factory=dict)
+    effective_day_projection_cache: dict[str, Any] = field(default_factory=dict)
 
 
 _CURRENT_PAGE_READ_CONTEXT: ContextVar[PageReadContext | None] = ContextVar(

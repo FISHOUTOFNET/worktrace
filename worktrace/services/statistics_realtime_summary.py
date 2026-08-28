@@ -17,7 +17,10 @@ from typing import Any, Mapping
 from .live_time_service import snapshot_seconds_for_date_range, snapshot_start_time
 from .page_read_context import current_page_read_context
 from .report_projection_model import ReportProjectionSnapshot
-from .report_projection_provider import get_day_projection
+from .report_projection_provider import (
+    get_day_projection,
+    get_durable_day_projection,
+)
 from .statistics_projection import (
     StatisticsSummaryProjection,
     build_statistics_summary_projection,
@@ -427,6 +430,31 @@ def _merge_summary_delta(
     )
 
 
+def _snapshot_from_day_projection(projection) -> ReportProjectionSnapshot:
+    entries = tuple(projection.entries)
+    final_sessions = tuple(
+        entry
+        for entry in entries
+        if str(entry.get("row_kind") or "project_session") == "project_session"
+    )
+    standalone = tuple(
+        entry
+        for entry in entries
+        if str(entry.get("row_kind") or "") == "standalone_status"
+    )
+    return ReportProjectionSnapshot(
+        start_date=str(projection.report_date),
+        end_date=str(projection.report_date),
+        base_sessions=final_sessions,
+        final_entries=entries,
+        final_sessions=final_sessions,
+        standalone_status_entries=standalone,
+        final_contributions=tuple(projection.contributions),
+        operation_diagnostics=tuple(projection.operation_diagnostics),
+        snapshot_revision=str(projection.snapshot_revision),
+    )
+
+
 def build_statistics_realtime_overlay(
     snapshot_revision: str,
     start_date: str,
@@ -434,8 +462,9 @@ def build_statistics_realtime_overlay(
     *,
     range_projection: StatisticsRangeProjection | None = None,
 ) -> StatisticsRealtimeOverlay | None:
-    """Build only the verified live fragment replacement for one request sample."""
+    """Replace today's durable slice with one verified effective as-of day."""
 
+    del snapshot_revision, range_projection
     context = current_page_read_context()
     if context is None or not context.runtime_consistent:
         return None
@@ -443,63 +472,37 @@ def build_statistics_realtime_overlay(
     runtime_snapshot = context.runtime_sample.snapshot
     if not isinstance(runtime_snapshot, Mapping):
         return None
-    if (
-        snapshot_seconds_for_date_range(
-            runtime_snapshot,
-            start_date,
-            end_date,
-        )
-        <= 0
-    ):
+    if snapshot_seconds_for_date_range(
+        runtime_snapshot,
+        start_date,
+        end_date,
+    ) <= 0:
         return None
 
-    open_activity_id = context.verified_open_activity_id
-    if open_activity_id is None:
-        fragment = _empty_fragment_snapshot(
-            start_date,
-            end_date,
-            snapshot_revision,
-        )
-    else:
-        try:
-            runtime_id = int(runtime_snapshot.get("persisted_activity_id") or 0)
-        except (TypeError, ValueError):
-            return None
-        if runtime_id != int(open_activity_id):
-            return None
-        if range_projection is not None:
-            fragment = _fragment_from_compact_range(
-                range_projection,
-                runtime_id=runtime_id,
-                start_date=start_date,
-                end_date=end_date,
-                snapshot_revision=snapshot_revision,
-            )
-        else:
-            fragment = _fragment_from_day_projections(
-                runtime_snapshot,
-                runtime_id=runtime_id,
-                start_date=start_date,
-                end_date=end_date,
-                snapshot_revision=snapshot_revision,
-            )
+    report_today = get_default_report_date()
+    if not (start_date <= report_today <= end_date):
+        return None
 
-    # Reuse the canonical runtime-overlay policy only on the tiny live fragment.
+    durable_day = get_durable_day_projection(report_today)
+    effective_day = get_day_projection(report_today)
+    before = _snapshot_from_day_projection(durable_day)
+    effective_snapshot = _snapshot_from_day_projection(effective_day)
+
     from . import report_as_of_snapshot_service
 
     as_of = report_as_of_snapshot_service.build_statistics_as_of_snapshot(
-        start_date,
-        end_date,
-        base_snapshot=fragment,
+        report_today,
+        report_today,
+        base_snapshot=effective_snapshot,
     )
     if (
         as_of.live_target is None
-        and as_of.snapshot.snapshot_revision == snapshot_revision
+        and as_of.snapshot.snapshot_revision == effective_snapshot.snapshot_revision
     ):
         return None
 
     return StatisticsRealtimeOverlay(
-        before_fragment=fragment,
+        before_fragment=before,
         after_fragment=as_of.snapshot,
         runtime_snapshot=runtime_snapshot,
         live_target=as_of.live_target,

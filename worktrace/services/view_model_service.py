@@ -179,6 +179,7 @@ def _base_session_row(
         "adjusted_duration_seconds": adjusted,
         "has_duration_override": adjusted is not None,
         "is_in_progress": is_in_progress,
+        "read_provisional": bool(session.get("read_provisional")),
         "contributes_to_totals": bool(session.get("contributes_to_totals", True)),
         "activity_ids": list(session.get("activity_ids") or []),
         "activity_member_hash": str(session.get("activity_member_hash") or ""),

@@ -69,6 +69,7 @@ def merge_short_project_returns(
     interval_rows: Sequence[Mapping] = (),
     unrecorded_gap_boundary_seconds: int = DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS,
     max_interruption_seconds: int = SHORT_PROJECT_RETURN_MERGE_SECONDS,
+    effective_open_activity_id: int = 0,
 ) -> list[dict]:
     """Compact short returns, then assign local context-boundary bridges.
 
@@ -93,6 +94,7 @@ def merge_short_project_returns(
     boundary_index = BoundaryIndex(boundary_times)
     protected = tuple(frozenset(item) for item in protected_member_sets if item)
     interval_source = tuple(dict(row) for row in interval_rows)
+    effective_open_id = max(0, int(effective_open_activity_id or 0))
     result: list[dict] = []
     index = 0
     total = len(sessions)
@@ -100,7 +102,7 @@ def merge_short_project_returns(
     while index < total:
         current = deepcopy(dict(sessions[index]))
         consumed = index
-        if not _is_short_return_anchor(current):
+        if not _is_short_return_anchor(current, effective_open_id):
             result.append(current)
             index += 1
             continue
@@ -120,9 +122,16 @@ def merge_short_project_returns(
                     break
                 if _crosses_session_boundary(current, candidate, boundary_index):
                     break
-                if bool(candidate.get("is_in_progress")):
+                if (
+                    bool(candidate.get("is_in_progress"))
+                    and not _session_contains_activity(candidate, effective_open_id)
+                ):
                     break
-                if _same_concrete_project(current, candidate):
+                if _same_concrete_project(
+                    current,
+                    candidate,
+                    effective_open_id,
+                ):
                     if cursor == consumed + 1:
                         interval_members = _interval_row_member_identity_set(
                             current,
@@ -133,7 +142,7 @@ def merge_short_project_returns(
                             break
                     matched_index = cursor
                     break
-                if _is_short_return_anchor(candidate):
+                if _is_short_return_anchor(candidate, effective_open_id):
                     foreign_project_seconds += max(
                         0,
                         int(candidate.get("duration_seconds") or 0),
@@ -162,7 +171,7 @@ def merge_short_project_returns(
                 protected,
             ):
                 break
-            current = _merge_short_return_group(group)
+            current = _merge_short_return_group(group, effective_open_id)
             consumed = matched_index
 
         result.append(current)
@@ -176,6 +185,7 @@ def merge_short_project_returns(
         gap_threshold_seconds=gap_threshold,
         foreign_threshold_seconds=foreign_threshold,
         window_threshold_seconds=window_threshold,
+        effective_open_activity_id=effective_open_id,
     )
 
 
@@ -326,13 +336,32 @@ def _finalize_session_semantics(
     return session
 
 
-def _is_short_return_anchor(session: Mapping) -> bool:
+def _session_contains_activity(
+    session: Mapping,
+    activity_id: int,
+) -> bool:
+    if int(activity_id or 0) <= 0:
+        return False
+    if int(session.get("open_activity_id") or 0) == int(activity_id):
+        return True
+    return int(activity_id) in {
+        int(value or 0) for value in session.get("activity_ids") or []
+    }
+
+
+def _is_short_return_anchor(
+    session: Mapping,
+    effective_open_activity_id: int = 0,
+) -> bool:
     return bool(
         str(session.get("row_kind") or "project_session") == "project_session"
         and bool(session.get("is_report_project"))
         and int(session.get("project_id") or 0) > 0
         and not bool(session.get("project_is_deleted"))
-        and not bool(session.get("is_in_progress"))
+        and (
+            not bool(session.get("is_in_progress"))
+            or _session_contains_activity(session, effective_open_activity_id)
+        )
     )
 
 
@@ -352,6 +381,8 @@ def _is_short_concrete_bridge(
     session: Mapping,
     foreign_threshold_seconds: int,
 ) -> bool:
+    # A bridge is necessarily bounded by a right neighbour, so it must be
+    # closed. Only the left/right anchors may use the verified open override.
     return bool(
         _is_short_return_anchor(session)
         and max(0, int(session.get("duration_seconds") or 0))
@@ -359,12 +390,20 @@ def _is_short_concrete_bridge(
     )
 
 
-def _same_concrete_project(left: Mapping, right: Mapping) -> bool:
+def _same_concrete_project(
+    left: Mapping,
+    right: Mapping,
+    effective_open_activity_id: int = 0,
+) -> bool:
     return bool(
-        _is_short_return_anchor(left)
+        _is_short_return_anchor(left, effective_open_activity_id)
         and bool(right.get("is_report_project"))
         and int(right.get("project_id") or 0) == int(left.get("project_id") or 0)
         and not bool(right.get("project_is_deleted"))
+        and (
+            not bool(right.get("is_in_progress"))
+            or _session_contains_activity(right, effective_open_activity_id)
+        )
     )
 
 
@@ -386,12 +425,15 @@ def _crosses_session_boundary(
     return boundary_index.crosses(start, end)
 
 
-def _merge_short_return_group(group: Sequence[Mapping]) -> dict:
+def _merge_short_return_group(
+    group: Sequence[Mapping],
+    effective_open_activity_id: int = 0,
+) -> dict:
     if len(group) < 2:
         raise ValueError("short_return_merge_requires_return")
     first = group[0]
     last = group[-1]
-    if not _same_concrete_project(first, last):
+    if not _same_concrete_project(first, last, effective_open_activity_id):
         raise ValueError("short_return_merge_project_mismatch")
 
     duration = _wall_clock_span_seconds(first, last)
@@ -432,13 +474,27 @@ def _merge_session_group(
         )
 
     duration = max(0, int(duration_seconds))
+    is_in_progress = bool(last.get("is_in_progress"))
+    live_component_seconds = (
+        max(
+            0,
+            int(last.get("duration_seconds") or 0)
+            - int(last.get("closed_duration_seconds") or 0),
+        )
+        if is_in_progress
+        else 0
+    )
+    closed_duration_seconds = max(0, duration - live_component_seconds)
+    open_activity_id = (
+        int(last.get("open_activity_id") or 0) if is_in_progress else 0
+    )
     merged.update(
         {
             "start_time": first.get("start_time"),
             "end_time": last.get("end_time"),
             "duration_seconds": duration,
-            "closed_duration_seconds": duration,
-            "open_activity_id": 0,
+            "closed_duration_seconds": closed_duration_seconds,
+            "open_activity_id": open_activity_id,
             "activity_ids": activity_ids,
             "member_slices": member_slices,
             "activity_member_hash": member_set_hash(
@@ -457,9 +513,17 @@ def _merge_session_group(
             "status_code": STATUS_NORMAL,
             "contributes_to_totals": True,
             "live_delta_eligible": False,
-            "editable": all(bool(item.get("editable", True)) for item in group),
-            "exportable": all(bool(item.get("exportable", True)) for item in group),
-            "is_in_progress": False,
+            "editable": (
+                False
+                if is_in_progress
+                else all(bool(item.get("editable", True)) for item in group)
+            ),
+            "exportable": (
+                False
+                if is_in_progress
+                else all(bool(item.get("exportable", True)) for item in group)
+            ),
+            "is_in_progress": is_in_progress,
             "_wall_clock_duration_seconds": duration,
             "_short_project_return_merged": True,
         }
@@ -475,6 +539,7 @@ def _assign_short_context_bridges(
     gap_threshold_seconds: int,
     foreign_threshold_seconds: int,
     window_threshold_seconds: int,
+    effective_open_activity_id: int = 0,
 ) -> list[dict]:
     result = [deepcopy(dict(session)) for session in sessions]
     index = 1
@@ -482,7 +547,10 @@ def _assign_short_context_bridges(
         left = result[index - 1]
         middle = result[index]
         right = result[index + 1]
-        if not (_is_short_return_anchor(left) and _is_short_return_anchor(right)):
+        if not (
+            _is_short_return_anchor(left, effective_open_activity_id)
+            and _is_short_return_anchor(right, effective_open_activity_id)
+        ):
             index += 1
             continue
 
@@ -494,7 +562,11 @@ def _assign_short_context_bridges(
         if not (is_uncategorized_bridge or is_concrete_bridge):
             index += 1
             continue
-        if is_concrete_bridge and _same_concrete_project(left, right):
+        if is_concrete_bridge and _same_concrete_project(
+            left,
+            right,
+            effective_open_activity_id,
+        ):
             # Same-project return ownership belongs solely to the greedy stage.
             # If that stage rejected the return because of a hard/protected
             # boundary, a later bridge pass must not silently undo the rejection.
