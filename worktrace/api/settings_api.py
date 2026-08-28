@@ -117,6 +117,7 @@ def get_settings_privacy_status() -> dict[str, Any]:
                 "page": "settings_privacy",
                 "storage_model": "local_only",
                 "local_data_path": str(resolve_paths().data_dir),
+                "clipboard_capture_supported": CLIPBOARD_CAPTURE_AVAILABLE,
                 "clipboard_capture_enabled": is_clipboard_capture_enabled(),
                 "export_path_configured": bool(get_export_path()),
                 **maintenance,
