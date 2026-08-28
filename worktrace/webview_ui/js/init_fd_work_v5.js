@@ -366,11 +366,21 @@
                 !== capability.runtimeRefreshIdentity(accepted);
     }
 
-    function dispatchAutomaticRefresh(changedKeys, previous, accepted) {
+    function markPagesDirtyForRuntimeChanges(previous, accepted) {
+        var changedPages = {};
+        PAGE_NAMES.forEach(function (page) {
+            if (!pageRuntimeRefreshChanged(page, previous, accepted)) return;
+            markPageDirty(page);
+            changedPages[page] = true;
+        });
+        return changedPages;
+    }
+
+    function dispatchAutomaticRefresh(changedKeys, runtimeChangedPages) {
         var page = App.currentPage || "overview";
         var policy = pageRefreshPolicy(page);
-        var semanticChange = intersects(changedKeys, policy.automaticGenerations);
-        if (pageRuntimeRefreshChanged(page, previous, accepted)) semanticChange = true;
+        var semanticChange = intersects(changedKeys, policy.automaticGenerations)
+            || !!(runtimeChangedPages && runtimeChangedPages[page]);
         if (!semanticChange || !automaticRefreshAllowedForPage(page)) return;
         if (policy.deferred) {
             scheduleAutomaticPageRefresh();
@@ -970,6 +980,10 @@
                 || previousIdentity !== currentActivityRenderIdentity(acceptedRuntime)
                 || App.liveClockContractRefreshRequested;
             markPagesDirtyForGenerationChanges(changedGenerations);
+            var runtimeChangedPages = markPagesDirtyForRuntimeChanges(
+                previousRuntime,
+                acceptedRuntime
+            );
             refreshCurrentActivityFromState(state, { forceRender: renderCurrent });
             refreshStatusFromRuntime(acceptedRuntime);
             if (App.liveClockContractRefreshRequested) {
@@ -982,7 +996,7 @@
                 });
                 return;
             }
-            dispatchAutomaticRefresh(changedGenerations, previousRuntime, acceptedRuntime);
+            dispatchAutomaticRefresh(changedGenerations, runtimeChangedPages);
             ensureActivePageRecovery();
         }).finally(function () {
             // The flight that acquired the single-flight owns its release even
