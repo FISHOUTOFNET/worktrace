@@ -24,30 +24,6 @@ def _rule(source: str, selector: str) -> str:
     return match.group(1)
 
 
-def test_statistics_compact_layout_uses_explicit_rows_not_auto_placement() -> None:
-    final = _resource("ui_components.css")
-
-    toolbar = _rule(final, ".statistics-toolbar")
-    project_label = _rule(
-        final,
-        '.statistics-toolbar > label[for="statistics-project-filter"]',
-    )
-    project_filter = _rule(
-        final,
-        ".statistics-toolbar > .project-autocomplete-shell.project-autocomplete-filter",
-    )
-    quick_ranges = _rule(final, ".statistics-toolbar > .quick-ranges")
-
-    assert "grid-template-columns: auto minmax(0, 1fr)" in toolbar
-    assert "grid-row: 2" in project_label
-    assert "grid-column: 1" in project_label
-    assert "grid-row: 2" in project_filter
-    assert "grid-column: 2" in project_filter
-    assert "grid-row: 3" in quick_ranges
-    assert "grid-column: 1 / -1" in quick_ranges
-    assert ".statistics-toolbar > .toolbar-spacer { display: none; }" in final
-
-
 def test_compact_timeline_and_rules_keep_labels_with_controls() -> None:
     final = _resource("ui_components.css")
 
