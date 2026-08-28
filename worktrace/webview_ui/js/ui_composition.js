@@ -3,8 +3,6 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    var applicationMetadataLoadPromise = null;
-
     function applicationReleaseLabel(channel) {
         channel = String(channel || "").trim().toLowerCase();
         if (channel === "beta") return "测试版";
@@ -105,31 +103,6 @@
             }
         }
         return true;
-    }
-
-    function loadApplicationMetadata() {
-        if (applicationMetadataLoadPromise) return applicationMetadataLoadPromise;
-        if (!App.bridge || typeof App.bridge.getStatus !== "function") {
-            return Promise.resolve(null);
-        }
-        applicationMetadataLoadPromise = Promise.resolve(App.bridge.getStatus())
-            .then(function (result) {
-                var metadata = result && result.application;
-                return renderApplicationMetadata(metadata) ? metadata : null;
-            })
-            .catch(function () { return null; });
-        return applicationMetadataLoadPromise;
-    }
-
-    function scheduleApplicationMetadataLoad() {
-        if (window.pywebview && window.pywebview.api) {
-            loadApplicationMetadata();
-            return;
-        }
-        if (typeof window.addEventListener !== "function") return;
-        window.addEventListener("pywebviewready", function () {
-            loadApplicationMetadata();
-        }, { once: true });
     }
 
     function syncFDWorkConsumers(status) {
@@ -264,5 +237,4 @@
         App.fdWork.bindStatusHost({ onStatusChanged: syncFDWorkConsumers });
     }
     if (App.fdWorkStatus) syncFDWorkConsumers(App.fdWorkStatus);
-    scheduleApplicationMetadataLoad();
 })();

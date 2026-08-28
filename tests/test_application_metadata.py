@@ -41,11 +41,13 @@ def test_frontend_metadata_projection_is_read_only_and_responsive() -> None:
         ROOT / "worktrace" / "webview_ui" / "js" / "ui_composition.js"
     ).read_text(encoding="utf-8")
 
-    assert 'App.bridge.getStatus()' in source
+    assert 'renderApplicationMetadata(statusResult.application)' in source
     assert '"v" + version' in source
     assert 'return "测试版"' in source
     assert 'creator ? "Created by " + creator' in source
     assert 'document.querySelector(".nav-footer")' in source
     assert 'document.querySelector(".settings-content")' in source
     assert '@media (max-width:959px){.application-version-label{display:none;}}' in source
+    assert "App.bridge.getStatus()" not in source
+    assert "window.pywebview.api" not in source
     assert "getSettingsPrivacyStatus" not in source
