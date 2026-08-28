@@ -167,22 +167,13 @@
         }
 
         // A page payload is itself the authoritative refresh for the active page.
-        // Cross-surface invalidation still applies, but current-page reconcile is
-        // reserved for heartbeat refresh-state transitions to avoid double fetches.
+        // Cross-surface invalidation still applies, but current-page transient
+        // interlocks are reserved for heartbeat refresh-state transitions.
         if (source !== "refresh-state") return accepted;
 
         if (page === "timeline" && App.timeline
             && typeof App.timeline.onRuntimeTransition === "function") {
             App.timeline.onRuntimeTransition({
-                source: source,
-                structureChanged: structureChanged,
-                liveChanged: liveChanged
-            });
-        }
-
-        if (page === "overview" && App.overview
-            && typeof App.overview.onRuntimeTransition === "function") {
-            App.overview.onRuntimeTransition({
                 source: source,
                 structureChanged: structureChanged,
                 liveChanged: liveChanged
