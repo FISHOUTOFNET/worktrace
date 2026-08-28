@@ -36,11 +36,7 @@ function loadStatisticsProjection() {
       },
       filters: { allTime: true },
     },
-    statistics: {
-      refreshPolicy: {},
-      hasLoadedData: () => true,
-      resetGeneration() {},
-    },
+    statisticsLoaded: true,
     handleResult: (value) => value,
     liveSampleFresh: (sampledAt, value) => value - sampledAt <= 10000,
     liveSampleRebaseDue: (sampledAt, value) => {
@@ -67,9 +63,9 @@ function loadStatisticsProjection() {
   context.WorkTraceApp = App;
   vm.createContext(context);
   vm.runInContext(
-    fs.readFileSync(path.join(jsDir, "statistics_live_projection.js"), "utf8"),
+    fs.readFileSync(path.join(jsDir, "statistics.js"), "utf8"),
     context,
-    { filename: "statistics_live_projection.js" }
+    { filename: "statistics.js" }
   );
   return {
     App,
@@ -243,7 +239,8 @@ test("database replacement invalidates payload ownership without permanently loc
 test("freshness recovery contracts stay wired through the central coordinator", () => {
   const initSource = fs.readFileSync(path.join(jsDir, "init_fd_work_v5.js"), "utf8");
   const overviewSource = fs.readFileSync(path.join(jsDir, "overview.js"), "utf8");
-  const statisticsSource = fs.readFileSync(path.join(jsDir, "statistics_live_projection.js"), "utf8");
+  const statisticsSource = fs.readFileSync(path.join(jsDir, "statistics.js"), "utf8");
+  const compatibilitySource = fs.readFileSync(path.join(jsDir, "statistics_live_projection.js"), "utf8");
 
   assert.match(initSource, /function liveSampleRebaseDue\(/);
   assert.match(initSource, /authoritativeRebase:\s*true/);
@@ -253,4 +250,6 @@ test("freshness recovery contracts stay wired through the central coordinator", 
   assert.match(overviewSource, /suppressCollectionCommit/);
   assert.match(statisticsSource, /statistics_projection_blocked/);
   assert.match(statisticsSource, /statistics_live_target_rebase_due/);
+  assert.doesNotMatch(compatibilitySource, /App\.statistics\s*=/);
+  assert.doesNotMatch(compatibilitySource, /App\.handleResult\s*=/);
 });
