@@ -55,6 +55,10 @@
         return operationIs(viewState, "fd_work_write");
     }
 
+    function clipboardCaptureSupported(status) {
+        return !!(status && status.clipboard_capture_supported === true);
+    }
+
     function setSettingsBackupControlsDisabled(disabled) {
         [
             "settings-backup-export-btn",
@@ -90,7 +94,8 @@
 
         var captureToggle = element("settings-clipboard-toggle");
         if (captureToggle) {
-            captureToggle.disabled = blocked
+            captureToggle.disabled = !clipboardCaptureSupported(status)
+                || blocked
                 || operationIs(viewState, "clipboard_write")
                 || fdWorkMutationActive(viewState)
                 || !loaded;
@@ -140,13 +145,15 @@
     function renderCaptureToggle(status, viewState) {
         var toggle = element("settings-clipboard-toggle");
         if (!toggle) return;
-        var enabled = !!(status && status.clipboard_capture_enabled);
+        var supported = clipboardCaptureSupported(status);
+        var enabled = supported && !!(status && status.clipboard_capture_enabled);
         toggle.checked = enabled;
-        toggle.disabled = pageBlocked(viewState)
+        toggle.disabled = !supported
+            || pageBlocked(viewState)
             || operationIs(viewState, "clipboard_write")
             || fdWorkMutationActive(viewState)
             || !(viewState && viewState.loaded === true);
-        setCaptureToggleStatus(enabled ? "开启" : "关闭");
+        setCaptureToggleStatus(supported ? (enabled ? "开启" : "关闭") : "暂未开放");
     }
 
     function setLaunchAtLoginToggleStatus(text) {
