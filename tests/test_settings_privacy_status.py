@@ -94,6 +94,7 @@ def test_api_returns_success_payload_with_required_keys(temp_db) -> None:
         "page",
         "storage_model",
         "local_data_path",
+        "clipboard_capture_supported",
         "clipboard_capture_enabled",
         "export_path_configured",
         *sorted(MAINTENANCE_KEYS),
@@ -105,6 +106,7 @@ def test_api_returns_success_payload_with_required_keys(temp_db) -> None:
     assert status["page"] == "settings_privacy"
     assert status["storage_model"] == "local_only"
     assert status["local_data_path"] == str(resolve_paths().data_dir)
+    assert status["clipboard_capture_supported"] is False
 
 
 def test_api_clipboard_capture_enabled_reflects_setting(temp_db) -> None:
@@ -313,6 +315,7 @@ def test_bridge_returns_narrow_success_payload(temp_db) -> None:
         "page",
         "storage_model",
         "local_data_path",
+        "clipboard_capture_supported",
         "clipboard_capture_enabled",
         "export_path_configured",
         *MAINTENANCE_KEYS,
@@ -323,6 +326,7 @@ def test_bridge_returns_narrow_success_payload(temp_db) -> None:
         "fd_work",
     }
     assert result["status"]["local_data_path"] == str(resolve_paths().data_dir)
+    assert result["status"]["clipboard_capture_supported"] is False
     assert result["status"]["fd_work"] == _fd_status(False)
 
 
