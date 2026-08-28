@@ -56,7 +56,10 @@
     }
 
     function clipboardCaptureSupported(status) {
-        return !!(status && status.clipboard_capture_supported === true);
+        if (!status || !Object.prototype.hasOwnProperty.call(status, "clipboard_capture_supported")) {
+            return true;
+        }
+        return status.clipboard_capture_supported === true;
     }
 
     function setSettingsBackupControlsDisabled(disabled) {
