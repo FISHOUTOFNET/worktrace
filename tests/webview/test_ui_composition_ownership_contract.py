@@ -43,7 +43,7 @@ def test_rules_and_settings_own_refresh_state_and_requests():
     assert "App.settings.onDataChanged" in composition
 
 
-def test_timeline_owns_structural_pending_and_live_suppression():
+def test_timeline_owns_only_the_structural_edit_interlock():
     composition = source("ui_composition.js")
     timeline = source("timeline.js")
 
@@ -57,8 +57,10 @@ def test_timeline_owns_structural_pending_and_live_suppression():
     for private_name in forbidden_composition_knowledge:
         assert private_name not in composition
 
+    assert "App.suppressNextTimelineCollectionRefresh" not in timeline
     assert "onRuntimeTransition" in timeline
     assert "applyLocalTick" in timeline
+    assert "runtimeRefreshIdentity" in timeline
     assert "App.timeline.onRuntimeTransition" in composition
 
 
@@ -79,18 +81,22 @@ def test_timeline_refresh_coordinator_forwards_refresh_options():
     timeline = source("timeline.js")
 
     assert "method.call(capability, options" in init
-    assert "function onTimelineRefreshRequested(options, context)" in timeline
-    assert "options.automatic === true" in timeline
+    assert "function onTimelineRefreshRequested(options)" in timeline
+    assert "return refreshTimeline(options)" in timeline
 
 
-def test_overview_owns_live_collection_suppression():
+def test_overview_runtime_invalidation_is_coordinator_owned():
     composition = source("ui_composition.js")
     overview = source("overview.js")
+    init = source("init_fd_work_v5.js")
 
     assert "App.suppressNextOverviewCollectionRefresh" not in composition
+    assert "App.suppressNextOverviewCollectionRefresh" not in overview
     assert "App.showOverview =" not in composition
-    assert "onRuntimeTransition" in overview
-    assert "App.overview.onRuntimeTransition" in composition
+    assert "onRuntimeTransition" not in overview
+    assert "App.overview.onRuntimeTransition" not in composition
+    assert "runtimeRefreshIdentity" in overview
+    assert "markPagesDirtyForRuntimeChanges" in init
 
 
 def test_init_dispatches_the_existing_local_tick_to_the_active_page():
@@ -136,6 +142,8 @@ def test_statistics_owns_accepted_snapshot_ticker_and_numeric_dom_patch():
     assert "patchStatisticsLiveProjection" in statistics
     assert "applyStatisticsLocalTicker" in statistics
     assert "acceptStatisticsRuntimeSync(data.runtime_sync)" in statistics
+    assert "runtimeRefreshIdentity" in statistics
+    assert "statistics_runtime_identity_changed" in statistics
     assert "showStatistics(summary)" not in statistics.split(
         "function applyStatisticsLocalTicker()", 1
     )[1].split("function showStatisticsError", 1)[0]
