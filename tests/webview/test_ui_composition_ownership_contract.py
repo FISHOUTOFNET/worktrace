@@ -111,13 +111,14 @@ def test_init_dispatches_the_existing_local_tick_to_the_active_page():
 def test_statistics_owns_accepted_snapshot_ticker_and_numeric_dom_patch():
     composition = source("ui_composition.js")
     statistics = source("statistics.js")
+    compatibility = source("statistics_live_projection.js")
 
     for private_name in (
         "App.statisticsAcceptedPayload",
         "App.statisticsLiveTickerSuspended",
         "App.statisticsLastLiveRenderKey",
         "statisticsLiveSummaryAtNow",
-        "patchStatisticsLiveSummary",
+        "patchStatisticsLiveProjection",
         "applyStatisticsLocalTicker",
     ):
         assert private_name not in composition
@@ -132,11 +133,14 @@ def test_statistics_owns_accepted_snapshot_ticker_and_numeric_dom_patch():
         assert private_dom_id not in composition
 
     assert "statisticsLiveSummaryAtNow" in statistics
-    assert "patchStatisticsLiveSummary" in statistics
+    assert "patchStatisticsLiveProjection" in statistics
     assert "applyStatisticsLocalTicker" in statistics
+    assert "acceptStatisticsRuntimeSync(data.runtime_sync)" in statistics
     assert "showStatistics(summary)" not in statistics.split(
         "function applyStatisticsLocalTicker()", 1
-    )[1].split("function validateStatisticsDateRange", 1)[0]
+    )[1].split("function showStatisticsError", 1)[0]
+    assert "App.statistics =" not in compatibility
+    assert "App.handleResult =" not in compatibility
 
 
 def test_composition_has_no_page_data_reads_monkey_patches_or_private_dom_ids():
