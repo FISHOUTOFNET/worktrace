@@ -308,7 +308,7 @@ def _run_webview_ui(
             js_api=bridge.shipping_api,
             width=1080,
             height=720,
-            min_size=(800, 540),
+            min_size=(840, 560),
             hidden=False,
             focus=True,
         )
