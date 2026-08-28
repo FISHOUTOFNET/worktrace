@@ -12,10 +12,15 @@ logger = logging.getLogger(__name__)
 class OverviewBridgeMixin:
     def get_status(self) -> dict[str, Any]:
         try:
-            return self._app_control.get_collection_status()
+            status = dict(self._app_control.get_collection_status())
         except Exception:
             logger.exception("webview bridge get_status failed")
             return dict(_GENERIC_ERROR)
+        try:
+            status["application"] = self._services.metadata.get_application_metadata()
+        except Exception:
+            logger.exception("webview bridge application metadata projection failed")
+        return status
 
     def toggle_pause(self) -> dict[str, Any]:
         try:

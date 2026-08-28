@@ -1,6 +1,7 @@
 """Explicit process composition root for bridge-facing application services."""
 from __future__ import annotations
 
+from ..application_metadata import ApplicationMetadataService
 from ..api.app_api import ApplicationControlService
 from ..api.application_lifecycle import ApplicationDataLifecycle
 from ..api.application_capabilities import (
@@ -79,6 +80,7 @@ def build_application_services(
         timeline=TimelineApplicationService(),
         fd_work=fd_work,
         rules=RulesApplicationService(project_identity=project_identity),
+        metadata=ApplicationMetadataService(),
     )
 
 
