@@ -6,13 +6,13 @@ const vm = require("node:vm");
 
 function harness() {
   let runtime = { collector: { live_eligible: true } };
-  let loaded = true;
   const elements = {};
   const document = {
     getElementById(id) { return elements[id] || null; },
   };
   const App = {
     currentPage: "statistics",
+    statisticsLoaded: true,
     statisticsLiveTickerSuspended: false,
     statisticsAcceptedPayload: {
       summary: {
@@ -28,15 +28,8 @@ function harness() {
     formatDuration(value) { return String(value); },
     handleResult(result) { return result; },
     liveSampleFresh() { return true; },
+    liveSampleRebaseDue() { return false; },
     liveRuntimeStore: { get() { return runtime; } },
-    statistics: {
-      refreshPolicy: { deferred: true, preservePresentation: true },
-      hasLoadedData() { return loaded; },
-      refreshEvidence() { return App.statisticsAcceptedPayload; },
-      applyLocalTick() { return null; },
-      onRuntimeTransition() {},
-      resetGeneration() { loaded = false; },
-    },
   };
   const window = { WorkTraceApp: App, document };
   const context = {
@@ -54,11 +47,11 @@ function harness() {
   vm.createContext(context);
   vm.runInContext(
     fs.readFileSync(
-      path.join(__dirname, "../../worktrace/webview_ui/js/statistics_live_projection.js"),
+      path.join(__dirname, "../../worktrace/webview_ui/js/statistics.js"),
       "utf8"
     ),
     context,
-    { filename: "statistics_live_projection.js" }
+    { filename: "statistics.js" }
   );
   return {
     App,
@@ -77,11 +70,11 @@ function statisticsResult(runtimeSync) {
 test("degraded Statistics success remains provisional and requests self-heal", () => {
   const { App } = harness();
 
-  App.handleResult(statisticsResult({
+  App.acceptStatisticsRuntimeSync(statisticsResult({
     runtime_consistent: false,
     needs_full_refresh: true,
     collection_live_eligible: true,
-  }));
+  }).runtime_sync);
 
   assert.equal(App.statisticsLiveProjection.runtimeSyncPending(), true);
   assert.equal(App.statistics.hasLoadedData(), false);
@@ -91,11 +84,11 @@ test("degraded Statistics success remains provisional and requests self-heal", (
   assert.equal(tick && tick.refreshRequired, true);
   assert.equal(tick && tick.reason, "statistics_runtime_sync_pending");
 
-  App.handleResult(statisticsResult({
+  App.acceptStatisticsRuntimeSync(statisticsResult({
     runtime_consistent: true,
     needs_full_refresh: false,
     collection_live_eligible: true,
-  }));
+  }).runtime_sync);
   assert.equal(App.statisticsLiveProjection.runtimeSyncPending(), false);
   assert.equal(App.statistics.hasLoadedData(), true);
 });
@@ -103,11 +96,11 @@ test("degraded Statistics success remains provisional and requests self-heal", (
 test("collection liveness recovery rebases Statistics without report generation change", () => {
   const { App, setRuntime } = harness();
 
-  App.handleResult(statisticsResult({
+  App.acceptStatisticsRuntimeSync(statisticsResult({
     runtime_consistent: true,
     needs_full_refresh: false,
     collection_live_eligible: false,
-  }));
+  }).runtime_sync);
   App.statisticsLiveTickerSuspended = false;
   setRuntime({ collector: { live_eligible: true } });
 
