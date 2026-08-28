@@ -9,6 +9,7 @@
 
     var rowIndex = null;
     var runtimeSyncState = null;
+    var recoveryReason = "";
 
     function element(id) { return document.getElementById(id); }
 
@@ -36,6 +37,12 @@
         if (!target || target.enabled !== true || target.ticking !== true) return true;
         if (typeof App.liveSampleFresh !== "function") return false;
         return App.liveSampleFresh(nonNegativeInt(target.sampled_at_epoch_ms), nowMs);
+    }
+
+    function liveTargetRebaseDue(target, nowMs) {
+        if (!target || target.enabled !== true || target.ticking !== true) return false;
+        if (typeof App.liveSampleRebaseDue !== "function") return false;
+        return App.liveSampleRebaseDue(nonNegativeInt(target.sampled_at_epoch_ms), nowMs);
     }
 
     function runtimeLiveEligibility() {
@@ -69,14 +76,26 @@
         rowIndex = null;
     }
 
+    function recoveryRequest(reason) {
+        return {
+            refreshRequired: true,
+            reason: String(reason || recoveryReason || "statistics_live_projection_stale")
+        };
+    }
+
+    function suspendProjection(reason) {
+        recoveryReason = String(reason || recoveryReason || "statistics_live_projection_stale");
+        App.statisticsLiveTickerSuspended = true;
+        invalidateRowIndex();
+    }
+
     function observeStatisticsRuntimeSync(data) {
         if (!data || typeof data !== "object" || !data.summary || !data.export_ticket) return;
         var sync = normalizeRuntimeSync(data.runtime_sync);
         if (!sync) return;
         runtimeSyncState = sync;
         if (sync.needsFullRefresh) {
-            App.statisticsLiveTickerSuspended = true;
-            invalidateRowIndex();
+            suspendProjection("statistics_runtime_sync_pending");
         }
     }
 
@@ -197,12 +216,8 @@
     }
 
     function freezeStatisticsProjection(reason) {
-        App.statisticsLiveTickerSuspended = true;
-        invalidateRowIndex();
-        return {
-            refreshRequired: true,
-            reason: String(reason || "statistics_live_projection_stale")
-        };
+        suspendProjection(reason);
+        return recoveryRequest(reason);
     }
 
     function runtimeLivenessChanged() {
@@ -220,7 +235,9 @@
         if (runtimeLivenessChanged()) {
             return freezeStatisticsProjection("statistics_runtime_liveness_changed");
         }
-        if (App.statisticsLiveTickerSuspended === true) return null;
+        if (App.statisticsLiveTickerSuspended === true) {
+            return recoveryRequest("statistics_projection_blocked");
+        }
         var accepted = App.statisticsAcceptedPayload;
         if (!accepted || !accepted.summary || !accepted.filters) return null;
         var target = accepted.exportTicket && accepted.exportTicket.live_target;
@@ -234,6 +251,7 @@
             return freezeStatisticsProjection("statistics_live_target_stale");
         }
 
+        var rebaseDue = liveTargetRebaseDue(target, nowMs);
         var sampledSeconds = nonNegativeInt(target.elapsed_seconds_at_sample);
         var currentSeconds = liveTargetElapsedSeconds(target, nowMs);
         var delta = Math.max(0, currentSeconds - sampledSeconds);
@@ -242,28 +260,25 @@
                 || accepted.exportTicket && accepted.exportTicket.revision || ""),
             String(delta)
         ].join("|");
-        if (App.statisticsLastLiveRenderKey === renderKey) return null;
+        if (App.statisticsLastLiveRenderKey === renderKey) {
+            return rebaseDue ? recoveryRequest("statistics_live_target_rebase_due") : null;
+        }
 
         if (patchLiveProjection(accepted.summary, target, delta)) {
             App.statisticsLastLiveRenderKey = renderKey;
-            return null;
+            return rebaseDue ? recoveryRequest("statistics_live_target_rebase_due") : null;
         }
         invalidateRowIndex();
         if (delta > 0) {
-            return {
-                refreshRequired: true,
-                reason: "statistics_live_projection_mismatch"
-            };
+            return freezeStatisticsProjection("statistics_live_projection_mismatch");
         }
-        return null;
+        return rebaseDue ? recoveryRequest("statistics_live_target_rebase_due") : null;
     }
 
     function onStatisticsRuntimeTransition(change) {
         change = change || {};
         if (change.source !== "refresh-state" || change.reportStructureChanged !== true) return;
-        if (App.statisticsLiveTickerSuspended === true) return;
-        App.statisticsLiveTickerSuspended = true;
-        invalidateRowIndex();
+        suspendProjection("statistics_report_structure_changed");
     }
 
     var refreshPolicy = Object.assign({}, baseCapability.refreshPolicy || {}, {
@@ -287,6 +302,7 @@
     capability.refreshPolicy = Object.freeze(refreshPolicy);
     capability.resetGeneration = function () {
         runtimeSyncState = null;
+        recoveryReason = "";
         invalidateRowIndex();
         if (typeof baseResetGeneration === "function") {
             return baseResetGeneration.call(baseCapability);
@@ -298,6 +314,7 @@
     App.statisticsLiveProjection = Object.freeze({
         invalidateRowIndex: invalidateRowIndex,
         runtimeSyncPending: runtimeSyncPending,
-        runtimeSyncState: function () { return runtimeSyncState; }
+        runtimeSyncState: function () { return runtimeSyncState; },
+        recoveryReason: function () { return recoveryReason; }
     });
 })();

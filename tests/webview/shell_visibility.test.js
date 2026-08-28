@@ -28,6 +28,8 @@ function loadApp() {
       addEventListener: () => {},
       removeEventListener: () => {},
       pywebview: { api: {} },
+      setTimeout: () => 1,
+      clearTimeout: () => {},
     },
     document: {
       readyState: "loading",

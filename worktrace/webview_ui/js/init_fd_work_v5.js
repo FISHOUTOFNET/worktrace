@@ -78,6 +78,7 @@
     var runtimeState = null;
     var RUNTIME_FRESHNESS_LEASE_MS = 10000;
     var RUNTIME_SOURCE_FUTURE_SKEW_MS = 2000;
+    var RUNTIME_REBASE_LEAD_MS = 2500;
     var runtimeLeaseExpired = false;
     var runtimeRebasePending = false;
     var LIVE_PROJECTION_PAGES = Object.freeze(["overview", "timeline"]);
@@ -86,6 +87,7 @@
     var automaticPageRefreshTimer = null;
     var automaticPageRefreshKey = "";
     var automaticPageRefreshDueAtEpochMs = 0;
+    var refreshCheckFlight = null;
     var PAGE_NAMES = App.pageLifecycle ? App.pageLifecycle.names : Object.freeze([]);
     var pageRefreshDirty = {};
     var pageRefreshEpoch = {};
@@ -134,6 +136,14 @@
             && sourceAge <= RUNTIME_FRESHNESS_LEASE_MS;
     }
     App.liveSampleFresh = liveSampleFresh;
+
+    function liveSampleRebaseDue(sampledAtEpochMs, nowMs) {
+        var sampledAt = nonNegativeInt(sampledAtEpochMs, 0);
+        var now = nonNegativeInt(nowMs, Date.now());
+        if (!sampledAt || !liveSampleFresh(sampledAt, now)) return false;
+        return now - sampledAt >= RUNTIME_FRESHNESS_LEASE_MS - RUNTIME_REBASE_LEAD_MS;
+    }
+    App.liveSampleRebaseDue = liveSampleRebaseDue;
 
     function sourceClockFresh(clock, nowMs) {
         var acceptedClock = App.validateLiveClock(clock);
@@ -325,6 +335,19 @@
         }, delay);
     }
 
+    function ensureActivePageRecovery(delayMs) {
+        var page = App.currentPage || "overview";
+        if (App.shellVisible === false
+            || App.activePageRefreshInFlight === true
+            || !pageNeedsRefresh(page)
+            || !automaticRefreshAllowedForPage(page)) {
+            return false;
+        }
+        scheduleAutomaticPageRefresh(delayMs);
+        return true;
+    }
+    App.ensureActivePageRecovery = ensureActivePageRecovery;
+
     function pageRefreshOptions(page, options) {
         var result = Object.assign({}, options || {});
         var policy = pageRefreshPolicy(page);
@@ -505,9 +528,15 @@
         if (App.pageLifecycle) App.pageLifecycle.resetGeneration();
         if (App.fdWork && App.fdWork.resetGeneration) App.fdWork.resetGeneration();
         App.lastRefreshState = null;
-        App.activePageRefreshInFlight = false;
-        App.activePageRefreshPromise = null;
-        App.activePageRefreshPending = null;
+        // Transport ownership is not generation ownership. An already-running
+        // page request must release its own single-flight when it settles; only
+        // sanitize queued state so an old database epoch cannot be replayed.
+        if (App.activePageRefreshPending) {
+            App.activePageRefreshPending = {
+                state: null,
+                options: App.activePageRefreshPending.options
+            };
+        }
         App.liveClockContractRefreshRequested = false;
         App.liveClockContractViolation = null;
         App.liveClockViolationKeys = {};
@@ -624,8 +653,7 @@
         if (!result || result.refreshRequired !== true) return;
         if (App.currentPage !== page) return;
         if (!pageNeedsRefresh(page)) markPageDirty(page);
-        if (!automaticRefreshAllowedForPage(page)) return;
-        scheduleAutomaticPageRefresh();
+        ensureActivePageRecovery();
     }
 
     App.applyLocalTicker = function () {
@@ -910,17 +938,20 @@
         updateCurrentActivityFromRuntime(runtime, { render: options.forceRender === true });
     }
     App.refreshCurrentActivityFromState = refreshCurrentActivityFromState;
+
     function runRevisionCheck() {
-        if (App.refreshCheckInFlight) {
-            return App.activePageRefreshPromise || Promise.resolve();
+        if (refreshCheckFlight) {
+            return refreshCheckFlight.promise || Promise.resolve();
         }
+        var flight = { promise: null };
+        refreshCheckFlight = flight;
         App.refreshCheckInFlight = true;
         var reportDate = pageReportDate(App.currentPage);
         var token = App.requestCoordinator.beginLatest(
             "heartbeat",
             App.currentPage + "|" + (reportDate || "")
         );
-        return App.bridge.getRefreshState(reportDate).then(function (result) {
+        var promise = App.bridge.getRefreshState(reportDate).then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return;
             var state = App.handleResult(result, function () { return null; });
             if (!state) return;
@@ -945,13 +976,24 @@
                 App.liveClockContractRefreshRequested = false;
                 clearScheduledAutomaticPageRefresh();
                 markPageDirty(App.currentPage);
-                refreshCurrentPageData(state, { automatic: true });
+                refreshCurrentPageData(state, {
+                    automatic: true,
+                    authoritativeRebase: true
+                });
                 return;
             }
             dispatchAutomaticRefresh(changedGenerations, previousRuntime, acceptedRuntime);
+            ensureActivePageRecovery();
         }).finally(function () {
-            if (App.requestCoordinator.isCurrent(token)) App.refreshCheckInFlight = false;
+            // The flight that acquired the single-flight owns its release even
+            // if accepting the response invalidated its data token/epoch.
+            if (refreshCheckFlight === flight) {
+                refreshCheckFlight = null;
+                App.refreshCheckInFlight = false;
+            }
         });
+        flight.promise = promise;
+        return promise;
     }
     App.runRevisionCheck = runRevisionCheck;
 
@@ -983,6 +1025,7 @@
         visible = visible === true;
         if (App.shellVisible === visible) {
             if (visible && App.heartbeatTimer === null) startHeartbeat();
+            if (visible) ensureActivePageRecovery();
             return Promise.resolve();
         }
         App.shellVisible = visible;
@@ -1001,7 +1044,10 @@
         return Promise.resolve(revisionPromise)
             .catch(function () {})
             .then(function () {
-                if (App.shellVisible === true) startHeartbeat();
+                if (App.shellVisible === true) {
+                    startHeartbeat();
+                    ensureActivePageRecovery();
+                }
             });
     }
     App.setShellVisibility = setShellVisibility;

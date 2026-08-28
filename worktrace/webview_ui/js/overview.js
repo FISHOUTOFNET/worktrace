@@ -219,7 +219,9 @@
         renderRecent((payload && payload.recent) || []);
     };
 
-    function refreshOverview() {
+    function refreshOverview(options) {
+        options = options || {};
+        var suppressCollectionCommit = options.suppressCollectionCommit === true;
         var token = App.requestCoordinator.beginLatest("overview", "today");
         return App.bridge.getOverview().then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return;
@@ -245,6 +247,7 @@
             if (overview.uncategorized_seconds === undefined) {
                 overview.uncategorized_seconds = bundle.uncategorized_seconds || 0;
             }
+            if (suppressCollectionCommit && App.currentPage === "overview") return;
             showOverview(overview);
         }).catch(function () {
             if (App.requestCoordinator.isCurrent(token)) App.showError("刷新失败");
@@ -268,8 +271,15 @@
 
     function onOverviewRefreshRequested(options) {
         options = options || {};
-        if (options.automatic !== true) App.suppressNextOverviewCollectionRefresh = false;
-        return refreshOverview();
+        var suppressCollectionCommit = options.automatic === true
+            && options.authoritativeRebase !== true
+            && App.suppressNextOverviewCollectionRefresh === true;
+        if (suppressCollectionCommit
+            || options.authoritativeRebase === true
+            || options.automatic !== true) {
+            App.suppressNextOverviewCollectionRefresh = false;
+        }
+        return refreshOverview({ suppressCollectionCommit: suppressCollectionCommit });
     }
 
     App.overview = Object.freeze({
