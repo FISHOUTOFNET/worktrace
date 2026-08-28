@@ -437,61 +437,14 @@ th,
     overflow: auto;
 }
 
-@media (max-width: 959px) {
-    .timeline-inspector { display: none; }
-    .timeline-inspector.drawer-open { display: flex; }
-    #settings-status:not([hidden]) { grid-template-rows: auto minmax(0, 1fr); }
-    .settings-categories { overflow-y: hidden; }
-}
-
 @media (min-width: 960px) {
     .statistics-date-range { min-width: 310px; }
 }
 
-/* Compact desktop layout is deterministic: related labels and controls move
-   together instead of relying on generic flex wrapping or grid auto-placement. */
-@media (max-width: 959px) {
-    .statistics-toolbar {
-        grid-template-columns: auto minmax(0, 1fr);
-        column-gap: 6px;
-        row-gap: 6px;
-    }
-    .statistics-toolbar > .statistics-date-range {
-        grid-column: 1 / -1;
-        grid-row: 1;
-    }
-    .statistics-toolbar > label[for="statistics-project-filter"] {
-        grid-column: 1;
-        grid-row: 2;
-        align-self: center;
-    }
-    .statistics-toolbar > #statistics-project-filter {
-        grid-column: 2;
-        grid-row: 2;
-        justify-self: start;
-        min-width: 0;
-        max-width: 100%;
-    }
-    .statistics-toolbar > .project-autocomplete-shell.project-autocomplete-filter {
-        grid-column: 2;
-        grid-row: 2;
-        justify-self: start;
-        min-width: 0;
-        max-width: 100%;
-    }
-    .statistics-toolbar > .toolbar-spacer { display: none; }
-    .statistics-toolbar > .quick-ranges {
-        grid-column: 1 / -1;
-        grid-row: 3;
-    }
-    .statistics-date-editor,
-    .statistics-date-inputs {
-        min-width: 0;
-        max-width: 100%;
-    }
-}
-
 @media (max-width: 767px) {
+    #settings-status:not([hidden]) { grid-template-rows: auto minmax(0, 1fr); }
+    .settings-categories { overflow-y: hidden; }
+
     .timeline-toolbar {
         display: grid;
         grid-template-columns: auto minmax(0, 1fr);
