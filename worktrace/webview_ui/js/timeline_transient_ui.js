@@ -13,7 +13,7 @@
     }
 
     function openTimelineDrawer(focusTarget) {
-        if (!window.matchMedia || !window.matchMedia("(max-width: 959px)").matches) return;
+        if (!window.matchMedia || !window.matchMedia("(max-width: 767px)").matches) return;
         var pane = document.getElementById("timeline-details-pane");
         var backdrop = document.getElementById("timeline-drawer-backdrop");
         if (!pane) return;
