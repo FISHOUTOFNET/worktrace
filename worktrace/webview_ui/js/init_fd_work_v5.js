@@ -1149,13 +1149,22 @@
     App.init = init;
 
     var initStarted = false;
-    function isBridgeReady() { return !!(window.pywebview && window.pywebview.api); }
+    function bridgeApiReady(api) {
+        return !!api
+            && typeof api.get_application_metadata === "function"
+            && typeof api.get_first_run_notice === "function"
+            && typeof api.get_refresh_state === "function";
+    }
+    function isBridgeReady() {
+        return bridgeApiReady(window.pywebview && window.pywebview.api);
+    }
     function bootstrap() {
         if (initStarted) return;
         initStarted = true;
         init();
     }
     function onBridgeReady() {
+        if (!isBridgeReady()) return;
         window.removeEventListener("pywebviewready", onBridgeReady);
         bootstrap();
     }
