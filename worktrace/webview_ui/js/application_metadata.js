@@ -16,7 +16,7 @@
         metadata = metadata || {};
         var version = String(metadata.version || "").trim();
         if (!version) return "";
-        var parts = ["v" + version];
+        var parts = [version];
         var channel = releaseLabel(metadata.release_channel);
         if (channel) parts.push(channel);
         return parts.join(" · ");
@@ -35,7 +35,7 @@
         if (settingsVersion) settingsVersion.textContent = label;
         if (settingsCreator) {
             var creator = String(metadata.creator || "").trim();
-            settingsCreator.textContent = creator ? "Created By " + creator : "";
+            settingsCreator.textContent = creator ? "Created by " + creator : "";
             settingsCreator.hidden = !creator;
         }
         loaded = true;
