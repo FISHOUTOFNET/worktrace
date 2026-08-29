@@ -60,9 +60,9 @@ test("immutable application metadata loads once and renders all static targets",
     assert.equal(await first, true);
     assert.equal(await second, true);
     assert.equal(view.calls(), 1);
-    assert.equal(view.elements["application-version-label"].textContent, "v0.0.1 · 测试版");
-    assert.equal(view.elements["settings-application-version"].textContent, "v0.0.1 · 测试版");
-    assert.equal(view.elements["settings-application-creator"].textContent, "Created By Sun Yi");
+    assert.equal(view.elements["application-version-label"].textContent, "0.0.1 · 测试版");
+    assert.equal(view.elements["settings-application-version"].textContent, "0.0.1 · 测试版");
+    assert.equal(view.elements["settings-application-creator"].textContent, "Created by Sun Yi");
     assert.equal(view.elements["settings-application-creator"].hidden, false);
 
     assert.equal(await view.app.applicationMetadata.load(), true);
@@ -78,8 +78,8 @@ test("stable metadata omits release label and hides an absent creator", () => {
     });
 
     assert.equal(rendered, true);
-    assert.equal(view.elements["application-version-label"].textContent, "v1.2.3");
-    assert.equal(view.elements["settings-application-version"].textContent, "v1.2.3");
+    assert.equal(view.elements["application-version-label"].textContent, "1.2.3");
+    assert.equal(view.elements["settings-application-version"].textContent, "1.2.3");
     assert.equal(view.elements["settings-application-creator"].textContent, "");
     assert.equal(view.elements["settings-application-creator"].hidden, true);
 });
