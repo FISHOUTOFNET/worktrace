@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="styles.css?v=4f045161ba1811a0">
     <link rel="stylesheet" href="ui_components.css?v=d2f4f2f68e2760fc">
     <link rel="stylesheet" href="project_autocomplete.css?v=40b59ac328b8b1d4">
-    <link rel="stylesheet" href="application_metadata.css?v=f10509776af78cf5">
+    <link rel="stylesheet" href="application_metadata.css?v=2aa0986e6ba884cf">
 </head>
 <body>
     <svg class="icon-sprite" aria-hidden="true">
@@ -57,7 +57,6 @@
             <div class="nav-footer">
                 <button id="toggle-pause-btn" type="button" class="toggle-btn" aria-label="开始记录" data-tooltip="开始记录"><svg class="icon" aria-hidden="true"><use href="#icon-play"/></svg><span class="nav-label">开始记录</span></button>
                 <div id="application-version-label" class="application-version-label" aria-label="应用版本"></div>
-                <div class="application-version-label" aria-label="作者署名">Created By Sun Yi</div>
             </div>
         </aside>
         <main class="app-main">
@@ -177,12 +176,10 @@
                             <h2>高级</h2><label class="setting-row" for="settings-fd-work-toggle"><span><strong>FD Work 插件</strong></span><span class="toggle-wrap"><span id="settings-fd-work-toggle-status" class="toggle-status">未加载</span><input id="settings-fd-work-toggle" type="checkbox" disabled></span></label><button id="settings-fd-work-reconnect" type="button" class="button" hidden>登录 FD Work</button>
                             <article id="settings-recovery-card" class="setting-row" hidden><span><strong>数据库维护未完成</strong><small id="settings-recovery-reason">阻断原因：未加载</small></span><button id="settings-recovery-btn" type="button" class="button primary" disabled>尝试恢复</button></article><p id="settings-recovery-status" class="inline-status" role="status" aria-live="polite" hidden></p>
                         </section>
-                        <section id="settings-about-application" class="settings-about" aria-labelledby="settings-about-application-title">
-                            <h2 id="settings-about-application-title">关于有迹</h2>
-                            <span class="settings-about-product">有迹 · Trace</span>
-                            <span id="settings-application-version" class="settings-about-meta"></span>
-                            <span id="settings-application-creator" class="settings-about-creator">Created By Sun Yi</span>
-                        </section>
+                        <footer id="settings-application-footer" class="settings-application-footer" aria-label="应用信息">
+                            <span id="settings-application-version" class="settings-application-footer-version"></span>
+                            <span id="settings-application-creator" class="settings-application-footer-creator">Created by Sun Yi</span>
+                        </footer>
                     </div>
                 </div>
             </section>
@@ -192,7 +189,7 @@
         <div id="global-alert" class="inline-alert error global-alert" role="alert" hidden></div><div id="app-toast" class="toast" role="status" aria-live="polite" hidden></div><div id="app-tooltip" role="tooltip" hidden></div>
     </div>
     <script src="js/core.js?v=10cac8add53ab362"></script>
-    <script src="js/application_metadata.js?v=e1479503374da2b9"></script>
+    <script src="js/application_metadata.js?v=cddfc9082bdc8daa"></script>
     <script src="js/privacy_notice.js?v=efaedf2701fe731a"></script>
     <script src="js/fd_work_v5.js?v=5018c3a6a32bbc55"></script>
     <script src="js/ui_components.js?v=5426e5326fe24bb8"></script>
