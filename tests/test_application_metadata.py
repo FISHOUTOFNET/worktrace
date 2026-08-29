@@ -65,7 +65,7 @@ def test_frontend_metadata_projection_uses_static_bootstrap_boundary() -> None:
     assert "App.bridge.getApplicationMetadata()" in metadata_source
     assert "App.bridge.getStatus()" not in metadata_source
     assert "window.pywebview.api" not in metadata_source
-    assert '"Created By " + creator' in metadata_source
+    assert '"Created by " + creator' in metadata_source
     assert "statusResult.application" not in composition_source
     assert 'document.createElement("style")' not in composition_source
 
@@ -84,19 +84,24 @@ def test_frontend_metadata_projection_uses_static_bootstrap_boundary() -> None:
 
     for dom_id in (
         "application-version-label",
-        "settings-about-application",
+        "settings-application-footer",
         "settings-application-version",
         "settings-application-creator",
     ):
         assert f'id="{dom_id}"' in index_source
 
-    # Creator attribution is branding copy and remains visible even if the
-    # optional metadata projection fails; canonical version data stays dynamic.
-    assert index_source.count("Created By Sun Yi") >= 2
+    # The sidebar carries only the release label. Creator attribution lives in
+    # the shared settings footer and remains visible if metadata loading fails.
+    assert index_source.count("Created by Sun Yi") == 1
+    assert "Created By Sun Yi" not in index_source
+    assert "settings-about-application" not in index_source
+    assert "关于有迹" not in index_source
     assert (
-        'id="settings-application-creator" class="settings-about-creator" hidden'
+        'id="settings-application-creator" class="settings-application-footer-creator" hidden'
         not in index_source
     )
 
     assert ".application-version-label" in css_source
+    assert ".settings-application-footer" in css_source
+    assert "margin: 18px 8px 0;" in css_source
     assert "@media (max-width: 959px)" in css_source
