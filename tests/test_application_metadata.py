@@ -69,6 +69,19 @@ def test_frontend_metadata_projection_uses_static_bootstrap_boundary() -> None:
     assert "statusResult.application" not in composition_source
     assert 'document.createElement("style")' not in composition_source
 
+    # pywebview 6.2.1 creates window.pywebview.api as an empty object before
+    # populating exposed methods and firing pywebviewready. Bootstrap must gate
+    # on callable shipping methods rather than on the empty API shell.
+    assert "function bridgeApiReady(api)" in init_source
+    for method in (
+        "get_application_metadata",
+        "get_first_run_notice",
+        "get_refresh_state",
+    ):
+        assert f'typeof api.{method} === "function"' in init_source
+    assert "return !!(window.pywebview && window.pywebview.api);" not in init_source
+    assert "if (!isBridgeReady()) return;" in init_source
+
     for dom_id in (
         "application-version-label",
         "settings-about-application",
@@ -76,6 +89,14 @@ def test_frontend_metadata_projection_uses_static_bootstrap_boundary() -> None:
         "settings-application-creator",
     ):
         assert f'id="{dom_id}"' in index_source
+
+    # Creator attribution is branding copy and remains visible even if the
+    # optional metadata projection fails; canonical version data stays dynamic.
+    assert index_source.count("Created By Sun Yi") >= 2
+    assert (
+        'id="settings-application-creator" class="settings-about-creator" hidden'
+        not in index_source
+    )
 
     assert ".application-version-label" in css_source
     assert "@media (max-width: 959px)" in css_source
