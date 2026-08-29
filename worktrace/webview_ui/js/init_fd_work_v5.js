@@ -77,6 +77,7 @@
     });
 
     var runtimeState = null;
+    var runtimeAuthorityScopeKey = "";
     var RUNTIME_FRESHNESS_LEASE_MS = 10000;
     var RUNTIME_SOURCE_FUTURE_SKEW_MS = 2000;
     var RUNTIME_REBASE_LEAD_MS = 2500;
@@ -105,6 +106,10 @@
 
     function objectValue(value) {
         return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    }
+
+    function runtimeScopeKey(page, reportDate) {
+        return String(page || "") + "|" + String(reportDate || "");
     }
 
     function pageUsesLiveProjection(page) {
@@ -269,8 +274,6 @@
     function markPageFresh(page, expectedEpoch) {
         if (!Object.prototype.hasOwnProperty.call(pageRefreshDirty, page)) return false;
         if (expectedEpoch === undefined || expectedEpoch === null) {
-            // Page-local helpers may confirm an already-fresh view, but only the
-            // coordinator that captured the dirty epoch may clear a dirty page.
             if (pageRefreshDirty[page] !== false) return false;
         } else if (nonNegativeInt(pageRefreshEpoch[page], 0) !== expectedEpoch) {
             return false;
@@ -359,12 +362,24 @@
         return result;
     }
 
-    function pageRuntimeRefreshChanged(page, previous, accepted) {
+    function runtimeRefreshIdentityForPage(page, runtime) {
+        if (!runtime) return "";
+        if (pageUsesLiveProjection(page)) {
+            var expectedDate = String(pageReportDate(page) || App.localTodayStr() || "");
+            var runtimeDate = String(runtime.reportDate || "");
+            if (expectedDate && runtimeDate && expectedDate !== runtimeDate) return "";
+            return String(runtime.pageRevision || "");
+        }
         var capability = pageCapability(page);
-        if (!capability || typeof capability.runtimeRefreshIdentity !== "function") return false;
-        return !!previous
-            && capability.runtimeRefreshIdentity(previous)
-                !== capability.runtimeRefreshIdentity(accepted);
+        if (!capability || typeof capability.runtimeRefreshIdentity !== "function") return "";
+        return String(capability.runtimeRefreshIdentity(runtime) || "");
+    }
+    App.runtimeRefreshIdentityForPage = runtimeRefreshIdentityForPage;
+
+    function pageRuntimeRefreshChanged(page, previous, accepted) {
+        if (!previous) return false;
+        return runtimeRefreshIdentityForPage(page, previous)
+            !== runtimeRefreshIdentityForPage(page, accepted);
     }
 
     function markPagesDirtyForRuntimeChanges(previous, accepted) {
@@ -485,17 +500,21 @@
         },
         reset: function () {
             runtimeState = null;
+            runtimeAuthorityScopeKey = "";
             return null;
         },
         setScope: function (page, reportDate) {
             var existing = runtimeState;
             if (!existing) return null;
+            var nextPage = String(page || App.currentPage || "overview");
+            var nextDate = App.runtimeReportDateForPage(nextPage, reportDate);
+            var nextScopeKey = runtimeScopeKey(nextPage, nextDate);
+            if (runtimeAuthorityScopeKey && runtimeAuthorityScopeKey !== nextScopeKey) {
+                runtimeAuthorityScopeKey = "";
+            }
             runtimeState = frozenRuntime(Object.assign({}, existing, {
-                page: String(page || App.currentPage || "overview"),
-                reportDate: App.runtimeReportDateForPage(
-                    page || App.currentPage || "overview",
-                    reportDate
-                )
+                page: nextPage,
+                reportDate: nextDate
             }));
             return runtimeState;
         }
@@ -539,9 +558,6 @@
         if (App.pageLifecycle) App.pageLifecycle.resetGeneration();
         if (App.fdWork && App.fdWork.resetGeneration) App.fdWork.resetGeneration();
         App.lastRefreshState = null;
-        // Transport ownership is not generation ownership. An already-running
-        // page request must release its own single-flight when it settles; only
-        // sanitize queued state so an old database epoch cannot be replayed.
         if (App.activePageRefreshPending) {
             App.activePageRefreshPending = {
                 state: null,
@@ -553,6 +569,7 @@
         App.liveClockViolationKeys = {};
         runtimeLeaseExpired = false;
         runtimeRebasePending = false;
+        runtimeAuthorityScopeKey = "";
         clearScheduledAutomaticPageRefresh();
         Object.keys(pageRefreshDirty).forEach(function (page) {
             markPageDirty(page);
@@ -584,24 +601,100 @@
     }
     App.isPagePayloadCompatibleWithRuntime = incomingRuntimeCompatible;
 
-    function noteRejectedPagePayload(payload, page, reportDate) {
+    function noteRejectedPagePayload(payload, page, reportDate, reason) {
         var envelope = rawRuntimeEnvelope(payload) || {};
         var clock = envelope.clock && typeof envelope.clock === "object" ? envelope.clock : {};
         App.recordLiveClockContractViolation(
             typeof clock.display_span_id === "string" ? clock.display_span_id : "",
             String(page || App.currentPage || "overview"),
-            "page_payload_runtime_v2_mismatch",
+            String(reason || "page_payload_runtime_v2_mismatch"),
             envelope.schema_version || 2
         );
         App.liveClockContractViolation.reportDate = reportDate || envelope.scope_report_date || "";
     }
     App.noteRejectedPagePayload = noteRejectedPagePayload;
 
+    function scopedRuntimePayloadCoherence(payload, page, reportDate) {
+        var expectedPage = String(page || App.currentPage || "overview");
+        var expectedDate = payloadReportDate(payload, expectedPage, reportDate);
+        var candidate = normalizeRuntimeEnvelope(payload, expectedPage, expectedDate);
+        if (!candidate) {
+            return { ok: false, reason: "runtime_payload_invalid" };
+        }
+        var canonical = liveRuntimeStore.get();
+        var expectedScopeKey = runtimeScopeKey(expectedPage, expectedDate);
+        if (!canonical || runtimeAuthorityScopeKey !== expectedScopeKey) {
+            return { ok: true, bootstrap: true, candidate: candidate, canonical: null };
+        }
+        if (candidate.databaseReplacementEpoch !== canonical.databaseReplacementEpoch) {
+            return { ok: false, reason: "runtime_database_epoch_mismatch" };
+        }
+        if (!candidate.pageRevision || candidate.pageRevision !== canonical.pageRevision) {
+            return { ok: false, reason: "runtime_page_revision_mismatch" };
+        }
+        if (candidate.runtimeConsistent !== true || candidate.needsFullRefresh === true) {
+            return { ok: false, reason: "runtime_page_snapshot_inconsistent" };
+        }
+        return { ok: true, bootstrap: false, candidate: candidate, canonical: canonical };
+    }
+    App.scopedRuntimePayloadCoherence = scopedRuntimePayloadCoherence;
+
+    function rejectScopedRuntimePayload(payload, page, reportDate, source, reason) {
+        noteRejectedPagePayload(payload, page, reportDate, reason);
+        if (source === "page_model") {
+            runtimeRebasePending = true;
+            App.liveClockContractRefreshRequested = true;
+            markPageDirty(String(page || App.currentPage || "overview"));
+        }
+        return false;
+    }
+
     function acceptLiveRuntimePayload(payload, page, reportDate, options) {
         if (!payload || payload.ok !== true) return false;
         options = options || {};
+        var source = String(options.source || "");
         var envelope = rawRuntimeEnvelope(payload);
         if (!envelope || Number(envelope.schema_version) !== 2) return false;
+        var runtimePage = String(page || App.currentPage || "overview");
+        var runtimeDate = payloadReportDate(payload, runtimePage, reportDate);
+
+        if (source === "page_model" || source === "details_model") {
+            var coherence = scopedRuntimePayloadCoherence(payload, runtimePage, runtimeDate);
+            if (!coherence.ok) {
+                return rejectScopedRuntimePayload(
+                    payload,
+                    runtimePage,
+                    runtimeDate,
+                    source,
+                    coherence.reason
+                );
+            }
+            if (!coherence.bootstrap) {
+                if (source === "page_model") {
+                    var now = Date.now();
+                    if (runtimeLiveEligible(coherence.canonical)
+                        && (!runtimeFresh(coherence.canonical, now)
+                            || !sourceClockFresh(coherence.candidate.liveClock, now))) {
+                        runtimeRebasePending = true;
+                        App.liveClockContractRefreshRequested = true;
+                        return false;
+                    }
+                    runtimeLeaseExpired = false;
+                    runtimeRebasePending = false;
+                }
+                return true;
+            }
+            if (source === "details_model") {
+                return rejectScopedRuntimePayload(
+                    payload,
+                    runtimePage,
+                    runtimeDate,
+                    source,
+                    "runtime_authority_not_established"
+                );
+            }
+        }
+
         var previous = liveRuntimeStore.get();
         var incomingEpoch = nonNegativeInt(envelope.database_replacement_epoch, 0);
         if (previous && incomingEpoch !== previous.databaseReplacementEpoch) {
@@ -609,24 +702,18 @@
             previous = null;
         }
         var previousKey = runtimeVisualContinuityKey(previous);
-        var accepted = liveRuntimeStore.acceptEnvelope(
-            payload,
-            String(page || App.currentPage || "overview"),
-            payloadReportDate(payload, page, reportDate)
-        );
+        var accepted = liveRuntimeStore.acceptEnvelope(payload, runtimePage, runtimeDate);
         if (!accepted) return false;
         App.liveDisplayModel = null;
         if (previousKey && previousKey !== runtimeVisualContinuityKey(accepted)) {
             App._monotonicRenderState = {};
         }
-        reconcileRuntimeFreshness(
-            previous,
-            accepted,
-            String(options.source || ""),
-            String(page || App.currentPage || "overview")
-        );
+        reconcileRuntimeFreshness(previous, accepted, source, runtimePage);
         if (accepted.needsFullRefresh) App.liveClockContractRefreshRequested = true;
-        if (options.source === "refresh_state") App.lastRefreshState = payload;
+        if (source === "refresh_state") {
+            runtimeAuthorityScopeKey = runtimeScopeKey(accepted.page, accepted.reportDate);
+            App.lastRefreshState = payload;
+        }
         return true;
     }
     App.acceptLiveRuntimePayload = acceptLiveRuntimePayload;
@@ -871,10 +958,7 @@
         }
         if (pageTarget) pageTarget.classList.add("active");
         App.currentPage = pageId;
-        liveRuntimeStore.setScope(
-            pageId,
-            pageReportDate(pageId)
-        );
+        liveRuntimeStore.setScope(pageId, pageReportDate(pageId));
         refreshCurrentActivityFromState(App.lastRefreshState, { forceRender: true });
         if (!pageNeedsRefresh(pageId)) return;
         refreshActivePage(
@@ -981,10 +1065,7 @@
                 || previousIdentity !== currentActivityRenderIdentity(acceptedRuntime)
                 || App.liveClockContractRefreshRequested;
             markPagesDirtyForGenerationChanges(changedGenerations);
-            var runtimeChangedPages = markPagesDirtyForRuntimeChanges(
-                previousRuntime,
-                acceptedRuntime
-            );
+            var runtimeChangedPages = markPagesDirtyForRuntimeChanges(previousRuntime, acceptedRuntime);
             refreshCurrentActivityFromState(state, { forceRender: renderCurrent });
             refreshStatusFromRuntime(acceptedRuntime);
             if (App.liveClockContractRefreshRequested) {
@@ -1000,8 +1081,6 @@
             dispatchAutomaticRefresh(changedGenerations, runtimeChangedPages);
             ensureActivePageRecovery();
         }).finally(function () {
-            // The flight that acquired the single-flight owns its release even
-            // if accepting the response invalidated its data token/epoch.
             if (refreshCheckFlight === flight) {
                 refreshCheckFlight = null;
                 App.refreshCheckInFlight = false;
@@ -1013,10 +1092,6 @@
     App.runRevisionCheck = runRevisionCheck;
 
     function startHeartbeat() {
-        // Idempotent: the single startup entry (continueStartupAfterPrivacyGate)
-        // is the only path that creates the heartbeat interval. Repeated calls
-        // are no-ops so concurrent or duplicate startup requests never spawn a
-        // second timer. Use restartHeartbeat() for an explicit teardown+rebuild.
         if (App.shellVisible === false || App.heartbeatTimer !== null) return;
         App.heartbeatTimer = setInterval(function () {
             try { App.applyLocalTicker(); } catch (error) {}
@@ -1072,8 +1147,6 @@
         startHeartbeat();
     };
 
-    // Single idempotent post-privacy-gate startup entry: only this function
-    // may run refresh state -> active-page refresh -> heartbeat.
     App.startupAfterPrivacyState = "idle";
     App.startupAfterPrivacyPromise = null;
 

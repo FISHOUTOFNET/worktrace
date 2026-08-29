@@ -173,7 +173,10 @@
     function currentRuntimeIdentity() {
         var store = App.liveRuntimeStore;
         var runtime = store && typeof store.get === "function" ? store.get() : null;
-        return String(runtime && runtime.liveRevision || "");
+        if (typeof App.runtimeRefreshIdentityForPage === "function") {
+            return String(App.runtimeRefreshIdentityForPage("overview", runtime) || "");
+        }
+        return String(runtime && (runtime.pageRevision || runtime.liveRevision) || "");
     }
 
     function showOverview(bundle) {
@@ -278,7 +281,7 @@
         onPageEntered: onOverviewRefreshRequested,
         onRefreshRequested: onOverviewRefreshRequested,
         runtimeRefreshIdentity: function (runtime) {
-            return String(runtime && runtime.liveRevision || "");
+            return String(runtime && runtime.pageRevision || "");
         },
         updateCurrentActivity: updateCurrentActivity,
         resetGeneration: function () {

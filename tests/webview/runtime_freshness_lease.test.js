@@ -293,22 +293,29 @@ test("shared live sample freshness uses the runtime lease and future-skew bounda
   assert.equal(App.liveSampleFresh(now + 2001, now), false);
 });
 
-test("a live response stale before arrival never receives a fresh projection lease", () => {
+test("a live response stale before arrival cannot become or refresh runtime authority", () => {
   const { App, acceptRefresh, acceptPage, nowValue } = harness("overview");
 
   assert.equal(acceptRefresh(true, "delayed", nowValue() - 30000), true);
   assert.equal(App.getActiveLiveClock(), null);
   assert.equal(App.liveClockContractRefreshRequested, true);
 
-  assert.equal(acceptPage(true, "delayed-page", REPORT_DATE, nowValue() - 30000), true);
+  assert.equal(acceptPage(true, "delayed-page", REPORT_DATE, nowValue() - 30000), false);
   assert.equal(
     App.getActiveLiveClock(),
     null,
-    "even a page-model response must remain fail-closed when its source sample is stale"
+    "a stale page-model response must remain fail-closed"
   );
 
+  assert.equal(
+    acceptPage(true, "fresh-page"),
+    false,
+    "a page model cannot replace a stale canonical heartbeat on its own"
+  );
+  assert.equal(acceptRefresh(true, "fresh-heartbeat"), true);
   assert.equal(acceptPage(true, "fresh-page"), true);
   assert.ok(App.getActiveLiveClock());
+  assert.equal(App.liveRuntimeStore.get().liveRevision, "fresh-heartbeat");
 });
 
 test("a materially future-dated live source clock fails closed", () => {

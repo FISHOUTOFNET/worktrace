@@ -5,7 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 function harness() {
-  let runtime = { liveRevision: "A" };
+  let runtime = { liveRevision: "A", pageRevision: "page-A" };
   const elements = {
     "kpi-total": {},
     "current-activity": { disabled: false, onclick: null },
@@ -114,11 +114,11 @@ test("Overview authoritative snapshots are never suppressed", async () => {
 test("Overview heartbeat overlay does not mutate the authoritative snapshot", () => {
   const { App, elements, setRuntime } = harness();
   App.showOverview(bundle("A"));
-  assert.equal(App.overviewCommittedRuntimeIdentity, "A");
+  assert.equal(App.overviewCommittedRuntimeIdentity, "page-A");
   assert.equal(elements["current-activity"].disabled, false);
   assert.equal(typeof elements["current-activity"].onclick, "function");
 
-  setRuntime({ liveRevision: "B" });
+  setRuntime({ liveRevision: "B", pageRevision: "page-B" });
   App.overview.updateCurrentActivity(
     { marker: "B", active: true, status: "normal" },
     { render: true }
@@ -130,8 +130,8 @@ test("Overview heartbeat overlay does not mutate the authoritative snapshot", ()
   assert.equal(elements["current-activity"].onclick, null);
 });
 
-test("Overview runtime refresh identity follows semantic live revision", () => {
+test("Overview runtime refresh identity follows authoritative page revision", () => {
   const { App } = harness();
-  assert.equal(App.overview.runtimeRefreshIdentity({ liveRevision: "rev-a" }), "rev-a");
-  assert.equal(App.overview.runtimeRefreshIdentity({ liveRevision: "rev-b" }), "rev-b");
+  assert.equal(App.overview.runtimeRefreshIdentity({ pageRevision: "page-a" }), "page-a");
+  assert.equal(App.overview.runtimeRefreshIdentity({ pageRevision: "page-b" }), "page-b");
 });
