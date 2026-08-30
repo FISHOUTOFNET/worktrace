@@ -156,7 +156,7 @@ def test_build_script_keeps_versioned_trace_output_contract() -> None:
     assert '$compatTarget' not in source
     assert "Copy-Item -Force -LiteralPath $target -Destination" not in source
     assert "#ifndef MyAppVersion" in installer
-    assert '#define MyAppVersion "0.1"' in installer
+    assert '#define MyAppVersion "0.0.1"' in installer
     assert "/DMyAppExe=$exe" in source
     assert "/DMyAppVersion=$version" in source
     assert "/DMyBrandIcon=$brandIcon" in source

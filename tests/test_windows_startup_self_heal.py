@@ -196,9 +196,19 @@ class FakeTaskDefinition:
 class FakeTaskRoot:
     def __init__(self) -> None:
         self.task: SimpleNamespace | None = None
+        self.registration_args: tuple[object, ...] | None = None
 
-    def RegisterTaskDefinition(self, name, definition, *_args) -> None:
+    def RegisterTaskDefinition(
+        self,
+        name,
+        definition,
+        flags,
+        user_id,
+        password,
+        logon_type,
+    ) -> None:
         assert name == TASK_NAME
+        self.registration_args = (flags, user_id, password, logon_type)
         self.task = SimpleNamespace(Enabled=True, Definition=definition)
 
     def GetTask(self, name: str) -> SimpleNamespace:
@@ -214,6 +224,37 @@ class FakeTaskService:
     def NewTask(self, flags: int) -> FakeTaskDefinition:
         assert flags == 0
         return self.definition
+
+
+class FakeComError(Exception):
+    def __init__(self, inner_hresult: int) -> None:
+        self.hresult = -2147352567
+        super().__init__(
+            self.hresult,
+            "Exception occurred.",
+            (0, None, None, None, 0, inner_hresult),
+            None,
+        )
+
+
+class FakeMissingTaskRoot:
+    def GetTask(self, name: str) -> None:
+        assert name == TASK_NAME
+        raise FakeComError(-2147024894)
+
+    def DeleteTask(self, name: str, flags: int) -> None:
+        assert name == TASK_NAME
+        assert flags == 0
+        raise FakeComError(-2147024894)
+
+
+def test_nested_task_not_found_hresult_is_treated_as_absent(monkeypatch) -> None:
+    scheduler = WindowsTaskScheduler()
+    root = FakeMissingTaskRoot()
+    monkeypatch.setattr(scheduler, "_root_folder", lambda: (object(), root))
+
+    assert scheduler.exists(TASK_NAME) is False
+    scheduler.delete(TASK_NAME)
 
 
 def test_canonical_task_requires_zero_delay_and_normal_priority(
@@ -234,8 +275,12 @@ def test_canonical_task_requires_zero_delay_and_normal_priority(
     scheduler.register(TASK_NAME, spec)
 
     trigger = definition.Triggers.Item(1)
+    assert root.registration_args == (6, "S-1-5-21-test", None, 3)
     assert trigger.Delay == "PT0S"
     assert definition.Settings.Priority == 6
+    assert scheduler.is_configured(TASK_NAME, spec) is True
+
+    trigger.Delay = ""
     assert scheduler.is_configured(TASK_NAME, spec) is True
 
     definition.Settings.Priority = 7

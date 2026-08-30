@@ -20,6 +20,7 @@ _TASK_RUNLEVEL_LUA = 0
 _TASK_INSTANCES_IGNORE_NEW = 2
 _TASK_PRIORITY_NORMAL = 6
 _TASK_TRIGGER_DELAY = "PT0S"
+_TASK_NOT_FOUND_HRESULTS = {-2147024894, -2147024893}
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,17 @@ def _normalized_windows_path(value: object) -> str:
     return ntpath.normcase(ntpath.normpath(str(value or "").strip().strip('"')))
 
 
+def _exception_contains_hresult(exc: BaseException, expected: set[int]) -> bool:
+    pending: list[object] = [getattr(exc, "hresult", None), getattr(exc, "args", ())]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, int) and value in expected:
+            return True
+        if isinstance(value, (tuple, list)):
+            pending.extend(value)
+    return False
+
+
 def _current_user_sid() -> str:
     import win32api
     import win32con
@@ -108,12 +120,7 @@ class WindowsTaskScheduler:
         try:
             return root.GetTask(name)
         except Exception as exc:
-            hresult = getattr(exc, "hresult", None)
-            if hresult in (-2147024894, -2147024893):
-                return None
-            # Dynamic COM errors also expose the HRESULT in args[0].
-            args = getattr(exc, "args", ())
-            if args and args[0] in (-2147024894, -2147024893):
+            if _exception_contains_hresult(exc, _TASK_NOT_FOUND_HRESULTS):
                 return None
             raise
 
@@ -144,7 +151,7 @@ class WindowsTaskScheduler:
                 == _normalized_windows_path(spec.working_directory),
                 int(trigger.Type) == _TASK_TRIGGER_LOGON,
                 bool(trigger.Enabled),
-                str(trigger.Delay or "").upper() == _TASK_TRIGGER_DELAY,
+                str(trigger.Delay or "").upper() in ("", _TASK_TRIGGER_DELAY),
                 int(principal.LogonType) == _TASK_LOGON_INTERACTIVE_TOKEN,
                 int(principal.RunLevel) == _TASK_RUNLEVEL_LUA,
                 bool(settings.Enabled),
@@ -195,7 +202,7 @@ class WindowsTaskScheduler:
             definition,
             _TASK_CREATE_OR_UPDATE,
             user_sid,
-            "",
+            None,
             _TASK_LOGON_INTERACTIVE_TOKEN,
         )
 
@@ -204,11 +211,7 @@ class WindowsTaskScheduler:
         try:
             root.DeleteTask(name, 0)
         except Exception as exc:
-            hresult = getattr(exc, "hresult", None)
-            args = getattr(exc, "args", ())
-            if hresult in (-2147024894, -2147024893) or (
-                args and args[0] in (-2147024894, -2147024893)
-            ):
+            if _exception_contains_hresult(exc, _TASK_NOT_FOUND_HRESULTS):
                 return
             raise
 
