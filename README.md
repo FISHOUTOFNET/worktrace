@@ -10,6 +10,48 @@
 
 > 面向用户的产品名称为“有迹（Trace）”。
 
+## 安装
+
+### 系统要求
+
+- Windows 10 / Windows 11（64 位环境）；
+- Microsoft Edge WebView2 Runtime；
+- 普通用户权限即可，无需管理员权限。
+
+安装程序会检查 WebView2 Runtime；如果系统中缺少运行时，会引导完成必要安装。
+
+### 推荐：安装版
+
+从 [GitHub Releases](https://github.com/FISHOUTOFNET/worktrace/releases) 下载：
+
+```text
+Trace-Setup-<version>.exe
+```
+
+安装版是普通用户的推荐方式。它按当前 Windows 用户安装到：
+
+```text
+%LOCALAPPDATA%\Programs\Trace
+```
+
+安装过程中可以选择：
+
+- 登录 Windows 时自动启动有迹；
+- 创建桌面快捷方式；
+- 是否启用 FD Work 插件。
+
+安装程序会展示当前《有迹隐私政策》。应用首次正常启动时也会再次检查隐私确认状态，未确认前不会开始记录。
+
+### 便携版
+
+Release 同时提供单文件版本：
+
+```text
+Trace-<version>.exe
+```
+
+便携版适合临时试用或无需安装的场景。长期日常使用更推荐安装版，因为安装版使用为正常启动优化的目录式运行包，并提供开始菜单、自动启动和完整安装/升级生命周期。
+
 ## 主要功能
 
 ### 自动记录与首页概览
@@ -115,48 +157,6 @@ FD Work 属于第三方服务；只有在你主动使用相应功能时，有迹
 安装和首次运行流程都具有隐私确认保护：在当前隐私政策尚未被确认时，自动采集和相关敏感后台能力不会启动。
 
 完整规则请参阅 [`worktrace/privacy_policy_zh-CN.txt`](worktrace/privacy_policy_zh-CN.txt)。
-
-## 安装
-
-### 系统要求
-
-- Windows 10 / Windows 11（64 位环境）；
-- Microsoft Edge WebView2 Runtime；
-- 普通用户权限即可，无需管理员权限。
-
-安装程序会检查 WebView2 Runtime；如果系统中缺少运行时，会引导完成必要安装。
-
-### 推荐：安装版
-
-从 [GitHub Releases](https://github.com/FISHOUTOFNET/worktrace/releases) 下载：
-
-```text
-Trace-Setup-<version>.exe
-```
-
-安装版是普通用户的推荐方式。它按当前 Windows 用户安装到：
-
-```text
-%LOCALAPPDATA%\Programs\Trace
-```
-
-安装过程中可以选择：
-
-- 登录 Windows 时自动启动有迹；
-- 创建桌面快捷方式；
-- 是否启用 FD Work 插件。
-
-安装程序会展示当前《有迹隐私政策》。应用首次正常启动时也会再次检查隐私确认状态，未确认前不会开始记录。
-
-### 便携版
-
-Release 同时提供单文件版本：
-
-```text
-Trace-<version>.exe
-```
-
-便携版适合临时试用或无需安装的场景。长期日常使用更推荐安装版，因为安装版使用为正常启动优化的目录式运行包，并提供开始菜单、自动启动和完整安装/升级生命周期。
 
 ## 第一次使用
 
