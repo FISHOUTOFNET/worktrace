@@ -39,7 +39,7 @@ def test_windows_builds_stamp_and_name_artifacts_from_canonical_version() -> Non
     assert version_import in action
     assert 'dist\\Trace-Setup-$version.exe' in installer
     assert "#ifndef MyAppVersion" in installer_source
-    assert '#define MyAppVersion "0.1"' in installer_source
+    assert f'#define MyAppVersion "{canonical_version}"' in installer_source
     assert '"/DMyAppVersion=$version"' in installer
     assert "[regex]::Replace" not in installer
     assert "WorkTrace.generated." not in installer
