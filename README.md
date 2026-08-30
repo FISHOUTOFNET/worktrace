@@ -1,235 +1,281 @@
-# WorkTrace v0.1 Lite
+# 有迹（Trace）
 
-WorkTrace is a lightweight Windows local work-trace and CSV export helper. It
-runs as a portable desktop app, records active-window metadata locally,
-helps classify time into projects, and exports display-safe CSV activity
-records.
+有迹是一款面向 Windows 的**本地优先工作轨迹记录与时间回顾工具**。
 
-> **Current state**: WebView (`pywebview` + Microsoft Edge WebView2 Runtime)
-> is the only shipping UI — no Tkinter fallback, and the legacy
-> `worktrace/ui` package has been deleted. Shipped behavior includes the
-> fail-closed first-run privacy notice gate (collector and folder-index
-> worker never start before acceptance), project rules with automatic
-> application of enabled rules to eligible activities, encrypted `.wtbackup`
-> backup export / manifest preview / import (replace-only), CSV export,
-> and Timeline editing (project reclassification, time correction / split /
-> merge, hide / soft delete / restore, batch project + note edits). The
-> canonical one-screen snapshot of what ships today is
-> [`docs/current-state.md`](docs/current-state.md); the full per-phase
-> history is [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
-> AI assistants: read [`docs/ai-context-guide.md`](docs/ai-context-guide.md)
-> before touching the repo.
+它不要求你在每次工作前手动点击“开始计时”。有迹会在后台记录当前前台应用、窗口以及能够从窗口信息中识别出的工作上下文，并把这些零散活动整理成可回顾、可归类、可修正的时间线，帮助你回答一个很实际的问题：**今天的时间都花到哪里去了？**
 
-## Core Capabilities
+**当前版本：v0.0.1 · 公开测试版**
 
-- WebView desktop UI (`pywebview` + Microsoft Edge WebView2 Runtime) is the
-  default and only shipping UI; no Tkinter fallback.
-- SQLite local storage at `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`.
-- Background collector thread using pywin32/psutil on Windows; idle, paused,
-  excluded, normal, and error activity states.
-- First-run privacy notice before any collection starts.
-- Project creation, manual assignment, notes, soft delete; file / folder /
-  keyword project rules including the special local `排除规则`.
-- Overview page (KPIs, current activity, recent activities, pause toggle).
-- Timeline / Time Details page with editing: project reclassification,
-  session-note editing, single-activity time correction / split / merge /
-  hide / soft delete / restore, batch project + batch note editing, and a
-  read-only correction shell.
-- Statistics / Export page: read-only summary cards and grouped tables, plus
-  CSV export (display-safe, UTF-8 BOM, no raw window title / file path /
-  note). Excel / PDF / timesheet export are not supported.
-- Project Rules page: project-grouped folder / keyword rule list with
-  project / rule enabled state and the special local `排除规则`. Current
-  capabilities: enable / disable existing folder / keyword rules; keyword
-  rule create / edit / delete; folder rule create / edit / delete; user
-  project create / edit / enable-disable / archive; single-rule impact
-  preview (folder + keyword, display-safe counts + ≤ 20 sample rows);
-  safe single-rule backfill (folder + keyword, capped at 100 updates per
-  call, manual records preserved); automatic application of enabled rules
-  to newly produced / just-closed eligible activities; selected-rule batch
-  preview / apply / enable / disable (≤ 20 rules, batch apply capped at
-  100 total updates, all-or-nothing). The special `排除规则` boundary is
-  enforced. Unsupported: hard delete project, raw folder-rule conflict
-  preview, raw / unbounded batch backfill, and the automatic-rule on/off
-  UI toggle. Phase-by-phase chronology is archived in
-  [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
-- Collector heartbeat and startup recovery for unclosed records; single-
-  instance collector protection.
+> 核心工作轨迹默认在本机处理和保存。无需注册，也没有云同步。需要联网或第三方服务的功能（例如 FD Work）只有在你主动启用或使用时才会发生相应交互。
 
-## Privacy And Permissions
+> 面向用户的产品名称为“有迹（Trace）”。仓库名、本地数据目录和少量兼容标识仍保留 `WorkTrace` 名称，用于兼容此前的开发版本。
 
-无需注册。无需联网。无需管理员权限。不截屏。不录屏。不记录键盘。不主动读取
-正文。不上传数据。命中排除规则的窗口只保存匿名时间块。复制文字记录默认关
-闭；开启后仅本地保存复制到剪贴板的文本，并自动清理 30 天前的复制文字。
-自动记录需由用户整理归类后再作为正式工时依据。
+## 主要功能
 
-WorkTrace records the current application name, process name, window title,
-identifiable local file path, local folder-rule file-name/path indexes,
-start time, end time, duration, status, project, and notes. It does not
-actively read Word/PDF/webpage/email body content, browser history, cookies,
-passwords, camera, or microphone data.
+### 自动记录与首页概览
 
-## Portable Usage
+- 自动记录当前活动应用、进程和窗口标题。
+- 在窗口信息能够识别时，记录本地文件名/路径、浏览器标签页标题与可见域名、邮件标题或文件名、IDE 文件/工作区等上下文。
+- 首页展示今日累计时长、当前活动、项目/未归类时间分布和最近活动。
+- 支持随时暂停或恢复自动记录。
+- 支持 Windows 登录后自动启动，并可直接以后台模式运行而不弹出主窗口。
+- 主窗口关闭后可继续驻留通知区域；通过托盘可重新打开或完整退出。
+- 托盘和窗口图标会反映当前是否正在采集。
 
-Install dependencies in a Python 3.11+ environment:
+### 时间线
 
-```powershell
-pip install -r requirements.txt
+时间线是有迹最主要的历史整理界面。
+
+- 按时间倒序查看已经整理出的工作会话。
+- 按日期和项目筛选，也可以单独查看未归类记录。
+- 从首页的当前活动或最近记录直接跳转到对应时间线位置。
+- 对已经结束的会话修改项目、描述和时长。
+- 对记录进行删除等整理操作，并通过确认流程避免误操作。
+- 正在进行中的会话保持只读，避免在活动尚未结束时产生冲突修改。
+- 项目选择支持最近使用项目和搜索，减少频繁切换项目时的操作成本。
+
+### 项目与自动归类规则
+
+有迹可以把活动归入不同项目，也可以逐步建立自己的自动分类规则。
+
+- 创建、编辑、停用、归档或删除项目。
+- 使用**关键词规则**匹配应用名称、进程名称、窗口标题等上下文。
+- 使用**文件夹规则**根据本地文件路径归类活动，并可选择是否包含子文件夹。
+- 将规则应用到历史记录，对已有活动重新归类。
+- 支持规则预览、批量处理等安全的历史整理流程。
+- 手工指定的项目优先保留，不会被普通自动规则随意覆盖。
+- 支持专门的**排除规则**，用于不希望保存真实工作上下文的窗口或路径。
+
+### 统计与 CSV 导出
+
+- 默认查看本月统计，也可以查看全部时间或自定义日期范围。
+- 按全部项目、单个项目或未归类范围统计。
+- 查看总时长、项目分布等汇总信息。
+- 导出当前已接受统计范围对应的 CSV 文件。
+- CSV 采用面向分享的安全输出，不导出原始窗口标题、本地文件路径或会话备注等敏感原始字段。
+
+当前公开版本只提供 CSV 导出，不提供 Excel、PDF 或工时模板导出。
+
+### 本地数据、备份与恢复
+
+- 核心工作轨迹保存在本地 SQLite 数据库中。
+- 可以在设置中查看本地数据位置。
+- 支持导出加密的 `.wtbackup` 备份文件。
+- 备份密码由用户自行设置；有迹无法替你找回遗忘的备份密码。
+- 支持预览并恢复有效备份；恢复采用替换式流程，并在写入当前数据库前完成必要校验。
+- 支持清空本地数据。
+- 与备份等操作有关的秘密输入只用于当前操作，不作为普通设置长期展示。
+
+公开测试阶段仍可能调整内部数据结构。升级测试版本前，建议先导出一份加密备份。
+
+### 可选的剪贴板记录
+
+“记录复制文字”默认关闭。
+
+只有在你主动开启后，有迹才会在本机保存复制到剪贴板的文本；这类记录最长保留 30 天，超过期限后自动清理。设置页面可以随时关闭这项能力，并且不会显示已有剪贴板正文。
+
+### 可选的 FD Work 集成
+
+FD Work 集成仅面向需要该功能的方达律师事务所用户，其他用户可以完全不启用。
+
+启用后：
+
+- 可以通过 FD Work 原生案件选择器，把有迹中的项目与 FD Work 案件建立绑定。
+- 普通本地项目仍然可以照常创建和使用，不要求所有项目都绑定 FD Work。
+- 在时间线中，可以把已绑定项目的日期、案件、时长和工作描述填入 FD Work 工时录入界面。
+- 有迹不会读取或导出 FD Work 登录凭据。
+- 当提交结果无法被可靠确认时，有迹不会自动重复提交，以降低产生重复工时的风险。
+
+FD Work 属于第三方服务；只有在你主动使用相应功能时，有迹才会与该服务发生必要交互。
+
+## 隐私与数据边界
+
+有迹处理的是工作活动元数据，因此隐私边界是产品的一部分，而不是附加说明。
+
+### 默认不会主动记录
+
+- 屏幕截图或屏幕录像；
+- 键盘输入内容；
+- 鼠标点击的具体内容；
+- Word、PDF、Excel、PPT、代码等文件正文；
+- 网页正文或邮件正文；
+- 浏览器历史、Cookie 或保存的密码；
+- 摄像头或麦克风内容。
+
+### 可能在本机处理
+
+为了生成时间线和执行项目归类，有迹可能处理：
+
+- 应用名称、进程名称和窗口标题；
+- 能够从活动窗口识别出的本地文件名和文件路径；
+- 浏览器标签页标题和可见域名；
+- 能够从窗口标题或文件名识别出的邮件标题；
+- IDE 中能够识别的文件名、文件路径或工作区名称；
+- 文件夹规则生成的文件名和完整路径索引；
+- 活动开始时间、结束时间和持续时间；
+- 仅在你主动开启后处理的剪贴板文字。
+
+这些信息可能包含客户、案件、项目或用户名等敏感内容。对于不希望记录真实上下文的工作场景，建议使用排除规则。
+
+当活动命中排除规则时，有迹只保存用于表示该时间段被排除的匿名占位信息，不保存该活动真实的窗口标题、文件路径、邮件标题、浏览器域名或 IDE 上下文。
+
+安装和首次运行流程都具有隐私确认保护：在当前隐私政策尚未被确认时，自动采集和相关敏感后台能力不会启动。
+
+完整规则请参阅 [`worktrace/privacy_policy_zh-CN.txt`](worktrace/privacy_policy_zh-CN.txt)。
+
+## 安装
+
+### 系统要求
+
+- Windows 10 / Windows 11（64 位环境）；
+- Microsoft Edge WebView2 Runtime；
+- 普通用户权限即可，无需管理员权限。
+
+安装程序会检查 WebView2 Runtime；如果系统中缺少运行时，会引导完成必要安装。
+
+### 推荐：安装版
+
+从 [GitHub Releases](https://github.com/FISHOUTOFNET/worktrace/releases) 下载：
+
+```text
+Trace-Setup-<version>.exe
 ```
 
-Start the app:
+安装版是普通用户的推荐方式。它按当前 Windows 用户安装到：
+
+```text
+%LOCALAPPDATA%\Programs\Trace
+```
+
+安装过程中可以选择：
+
+- 登录 Windows 时自动启动有迹；
+- 创建桌面快捷方式；
+- 是否启用 FD Work 插件。
+
+安装程序会展示当前《有迹隐私政策》。应用首次正常启动时也会再次检查隐私确认状态，未确认前不会开始记录。
+
+### 便携版
+
+Release 同时提供单文件版本：
+
+```text
+Trace-<version>.exe
+```
+
+便携版适合临时试用或无需安装的场景。长期日常使用更推荐安装版，因为安装版使用为正常启动优化的目录式运行包，并提供开始菜单、自动启动和完整安装/升级生命周期。
+
+## 第一次使用
+
+1. 安装并阅读、确认隐私政策。
+2. 让有迹在后台运行一段时间，首页会逐渐出现当前活动和最近记录。
+3. 在“项目规则”中创建项目，并按需要添加关键词或文件夹规则。
+4. 在“时间线”中检查自动记录结果，修正项目、描述或时长。
+5. 在“统计与导出”中查看投入分布并按需要导出 CSV。
+6. 在“设置”中配置自动启动、剪贴板记录、备份和可选集成功能。
+
+有迹的目标不是替你决定什么算“正式工时”，而是尽可能降低回忆和整理成本。自动记录得到的活动仍建议由用户检查、归类后再作为正式工作记录的依据。
+
+## 本地数据位置
+
+默认数据库：
+
+```text
+%LOCALAPPDATA%\WorkTrace\data\worktrace.db
+```
+
+默认日志：
+
+```text
+%LOCALAPPDATA%\WorkTrace\logs\worktrace.log
+```
+
+`WorkTrace` 路径名称属于历史兼容标识，不影响面向用户的“有迹（Trace）”品牌名称。
+
+用户主动导出的 `.wtbackup` 备份由用户自行选择和管理保存位置。
+
+## 当前版本边界
+
+v0.0.1 是有迹的首个公开测试版本，目前明确的产品边界包括：
+
+- 生产平台为 Windows；
+- 不提供账户系统或云同步；
+- 不提供截图、录屏、OCR、键盘记录或 AI 内容分析；
+- 对外导出目前仅支持 CSV；
+- 剪贴板文字记录默认关闭；
+- FD Work 为可选集成，只有对应用户需要启用；
+- 测试版本仍可能存在未发现的问题，重要数据建议定期备份。
+
+## 从源码运行
+
+开发环境建议使用 Python 3.11。
 
 ```powershell
+git clone https://github.com/FISHOUTOFNET/worktrace.git
+cd worktrace
+
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-dev.txt -c constraints-release.txt
 python -m worktrace.main
 ```
 
-The first launch shows the privacy notice. The collector starts only after
-the notice is accepted. Closing the WebView window hides it to the Windows
-notification area while collection continues. Use **退出 WorkTrace** from the
-tray menu for a complete graceful shutdown.
+WebView 是当前唯一发布 UI，不再提供 Tkinter fallback。
 
-## Windows Packaging
+## 测试
 
-Local Windows packaging supports Python 3.11+ and Inno Setup 6.3.0+.
-Install the normal build dependencies without forcing the CI baseline:
+完整的非 benchmark Python 回归：
 
 ```powershell
-python -m pip install -r requirements-dev.txt
+python -m pytest -m "not benchmark"
 ```
 
-Then run the canonical release build entry point:
+WebView 前端行为测试：
+
+```powershell
+node --test tests/webview/*.test.js
+```
+
+GitHub Standard CI 还会执行 Windows 可执行文件/安装包构建验证，以及当前发布所需的其他静态和集成检查。安装、升级和卸载生命周期另有独立的 Installer Validation workflow。
+
+## Windows Release 构建
+
+本地 release 构建需要 Python 3.11+ 和 Inno Setup 6.3.0+：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_release.ps1
 ```
 
-The release script checks only the supported Python minimum, builds the
-single-file executable with PyInstaller in an isolated temporary
-`build\release-staging\...` directory, publishes the versioned portable
-executable to `dist\`, and builds the versioned installer from that staged
-binary. `dist\` is therefore a publication boundary rather than a PyInstaller
-work directory. The installer build verifies that the discovered `ISCC.exe`
-is Inno Setup 6.3.0 or newer before compiling the original
-`installer\WorkTrace.iss`; it does not rewrite a generated copy of the
-installer source. The compiled installer is also checked directly to confirm
-that it embeds the canonical 有迹 icon resource.
+规范发布产物只有两个：
 
-CI deliberately remains stricter for reproducibility: its verified baseline
-uses Python 3.11.9, the checked-in `constraints-release.txt`, and Inno Setup
-6.7.3. Those versions define the CI reference environment, not the only
-supported local build environment.
-
-Canonical release outputs are exactly `dist\Trace-<version>.exe` and
-`dist\Trace-Setup-<version>.exe`. Unversioned release aliases such as
-`dist\Trace.exe` and `dist\Trace-Setup.exe`, plus historical `WorkTrace*.exe`
-release artifacts, are retired and removed by canonical release builds. The
-installed application is still named `Trace.exe`; Inno Setup applies that
-installed filename independently of the versioned release package filename.
-Fresh installs go to `%LOCALAPPDATA%\Programs\Trace`, create the current-user
-Start Menu shortcut `有迹`, install per-user only, and do not request
-administrator privileges. Build artifacts under `build/` and `dist/` must not
-be committed to Git.
-
-If the portable release already exists and only the installer must be rebuilt,
-pass that versioned executable explicitly:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1 -ExePath "dist\Trace-<version>.exe"
+```text
+dist\Trace-<version>.exe
+dist\Trace-Setup-<version>.exe
 ```
 
-## Release Validation
+GitHub CI 使用固定的发布依赖和 Inno Setup 版本，以确保正式构建具有可重复性。发布前还应按照 [`docs/release-validation.md`](docs/release-validation.md) 完成候选版本验证。
 
-Before a Windows release, use
-[`docs/release-validation.md`](docs/release-validation.md) as the release-candidate baseline. Require the full non-benchmark Python suite and GitHub Actions CI to pass, and validate both the PyInstaller executable and the per-user installer lifecycle.
+## 开发文档
 
-## v0.2 Boundary And Local Security
+面向开发者和维护者的当前实现契约放在文档目录中，README 不再承担内部架构历史记录的职责：
 
-The next-version boundary is documented in
-[`docs/v0.2-boundary.md`](docs/v0.2-boundary.md). The Phase 1A / 1B local
-security design (independent crypto foundation, DPAPI keyring, encrypted
-`.wtbackup` export/import) is documented in
-[`docs/v0.2-local-security-design.md`](docs/v0.2-local-security-design.md).
-A `.wtbackup` file is a local encrypted file created on the user's request;
-WorkTrace never uploads it. The backup passphrase is chosen by the user and
-is not recoverable if forgotten. Import is replace-only and never damages
-the current database on a wrong passphrase or corrupted backup.
+- [`docs/current-state.md`](docs/current-state.md)：当前 shipping 行为与产品契约；
+- [`architecture.md`](architecture.md)：架构与 ownership 边界；
+- [`docs/release-validation.md`](docs/release-validation.md)：发布候选验证基线；
+- [`docs/ai-context-guide.md`](docs/ai-context-guide.md)：AI / 自动化工具修改仓库前的上下文入口。
 
-## Tests
+历史迁移和阶段性设计记录仅用于维护参考，不代表当前产品能力。
 
-Tests run without requiring a real Windows foreground window and use
-`worktrace.platforms.fake_adapter.FakeAdapter`.
+## 反馈
 
-### Local Test Strategy
+v0.0.1 仍处于公开测试阶段。如果遇到崩溃、记录异常、分类错误、安装/升级问题或其他可复现问题，欢迎通过 [GitHub Issues](https://github.com/FISHOUTOFNET/worktrace/issues) 提交反馈。
 
-Local test selection is explicit. There is no changed-file/affected-test dependency map and no separate machine-readable test policy or inventory gate. Pytest owns collection and marker validation; `pytest.ini` enables strict markers. Standard CI remains the regression backstop and always runs the complete non-benchmark Python suite.
+提交问题时，如果方便，请说明：
 
-```powershell
-# Known failure or owner
-python -m pytest --lf
-python -m pytest tests/test_timeline_service.py
-python -m pytest tests/test_timeline_service.py::TestClassName::test_case
+- Windows 版本；
+- 有迹版本号；
+- 问题发生前后的操作步骤；
+- 是否能够稳定复现；
+- 与问题相关、且已经移除敏感内容的日志片段。
 
-# Fast marker-covered feedback
-python -m pytest -m "unit and not slow"
-
-# Cross-layer/static contract feedback
-python -m pytest -m contract
-python -m pytest -m "webview_static and contract"
-python -m pytest -m "live_display and contract"
-python -m pytest -m "collector_runtime and integration"
-python -m pytest -m "security_privacy"
-
-# Full Standard-CI Python correctness surface
-python -m pytest -m "not benchmark"
-```
-
-Use the narrowest explicit target that gives useful feedback during iteration. Use the full non-benchmark suite for DB/schema, collector/runtime, live display, privacy/security, recovery/concurrency, broad architecture changes, pre-push confidence, and release validation. Performance benchmarks and installer lifecycle acceptance stay in their dedicated workflows.
-
-Test maintenance rules live in [`docs/testing/test-governance.md`](docs/testing/test-governance.md). Shared helpers live under `tests/support/`: use small domain factories for repeated setup, keep scenarios readable, and avoid large fixtures that hide behavior.
-
-This project does **not** currently enable parallel pytest. The `parallel_safe` and `serial` markers remain planning labels only.
-
-## Local Paths
-
-- Database: `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`.
-- Logs: `%LOCALAPPDATA%\WorkTrace\logs\worktrace.log`.
-- Optional COM path catalog: `%LOCALAPPDATA%\WorkTrace\com_path_catalog.json`.
-- Default exports: `Documents\WorkTrace Exports`.
-
-`schema.sql` is the single source of truth for the local database structure.
-The project is in pre-release development, so old databases are not
-guaranteed to be compatible; if the schema changes, delete the local
-database file or use the Settings page to clear and rebuild all data.
-
-## Current Limitations
-
-- Windows is the intended production platform; non-Windows runs use the fake
-  adapter.
-- No service, driver, cloud sync, login, AI, OCR, screenshots, screen
-  recording, or automatic startup.
-- Settings / Privacy page exposes a read-only safety-status snapshot
-  (storage model, clipboard capture on/off, export directory configured
-  yes/no, encrypted-backup import-in-progress flag, first-run notice
-  accepted state), a clipboard capture toggle write, encrypted backup
-  export + manifest preview through native file dialogs, encrypted backup
-  import (replace-only via native `.wtbackup` open dialog) +
-  clear-all-local-data (explicit Chinese confirmation literal), and the
-  first-run privacy notice gate (blocking overlay; user must accept before
-  the collector starts) plus a read-only "view privacy notice" entry.
-  The first-run gate is fail-closed: `webview_main` and `toggle_pause`
-  never start the collector while the notice is unaccepted. The clipboard
-  toggle only controls whether local clipboard recording is enabled; the
-  page never reads or displays clipboard content. Encrypted backup import
-  and clear-all-local-data both leave WorkTrace paused so the user can
-  verify the post-replacement state before manually resuming recording;
-  clear-all-local-data runs inside a destructive reset guard that blocks
-  collector writes during the DB replacement. Save settings,
-  `set_setting_value`, arbitrary file/folder dialogs, and export path
-  setting are intentionally unsupported for v0.2 (not deferred).
-- Hard delete project; raw folder-rule conflict preview; raw / unbounded
-  batch backfill; automatic-rule enable / disable toggle in the UI; Excel /
-  PDF / timesheet export; folder opening; and auto-submit are not
-  supported. (Automatic rules application + selected-rule batch preview /
-  apply / enable / disable and the single-rule impact preview + safe
-  single-rule backfill foundation already ship; the items above remain
-  backlog.)
+请不要在公开 Issue 中上传包含客户名称、案件名称、本地路径、窗口标题、剪贴板正文或其他敏感工作信息的原始数据。
