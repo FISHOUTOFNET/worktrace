@@ -267,8 +267,8 @@ def test_ci_exercises_running_app_upgrade_and_uninstall_paths() -> None:
     assert "/NOFORCECLOSEAPPLICATIONS" in runtime
     assert runtime.count("-KeepRunning") >= 2
     assert "unins000.exe" in runtime
-    assert "Get-ItemPropertyValue" in runtime
     assert "Get-ItemProperty" in runtime
+    assert "Get-ItemPropertyValue" not in runtime
 
 
 def test_installed_launch_smoke_targets_trace_but_keeps_legacy_state_root() -> None:

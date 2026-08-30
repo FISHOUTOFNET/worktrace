@@ -76,10 +76,12 @@ function Remove-StartupTask {
 }
 
 function Assert-NoLegacyRunValue {
-    $remaining = Get-ItemPropertyValue `
-        -Path $runKey `
-        -Name "WorkTrace" `
-        -ErrorAction SilentlyContinue
+    $remaining = (
+        Get-ItemProperty `
+            -Path $runKey `
+            -Name "WorkTrace" `
+            -ErrorAction SilentlyContinue
+    ).WorkTrace
     if ($null -ne $remaining) {
         throw "Legacy HKCU Run startup value remained after scheduled-task migration: $remaining"
     }
