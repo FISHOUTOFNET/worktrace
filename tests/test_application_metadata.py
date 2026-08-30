@@ -103,5 +103,6 @@ def test_frontend_metadata_projection_uses_static_bootstrap_boundary() -> None:
 
     assert ".application-version-label" in css_source
     assert ".settings-application-footer" in css_source
-    assert "margin: 18px 8px 0;" in css_source
+    assert ".settings-section:not([hidden])" in css_source
+    assert "margin: 18px 8px 0;" not in css_source
     assert "@media (max-width: 959px)" in css_source
