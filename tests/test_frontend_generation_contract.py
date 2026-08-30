@@ -35,11 +35,19 @@ def test_client_generation_reset_delegates_page_state_to_fixed_owners():
         "App.pageLifecycle.resetGeneration()",
         "App.fdWork.resetGeneration()",
         "lastRefreshState = null",
-        "activePageRefreshPending = null",
+        "if (App.activePageRefreshPending)",
+        "state: null",
+        "options: App.activePageRefreshPending.options",
         "liveRuntimeStore.reset()",
         "_monotonicRenderState = {}",
     ):
         assert required in body
+    for transport_owner_reset in (
+        "activePageRefreshInFlight = false",
+        "activePageRefreshPromise = null",
+        "activePageRefreshPending = null",
+    ):
+        assert transport_owner_reset not in body
     for retired_direct_hook in (
         "App.overview.resetGeneration()",
         "App.timeline.resetGeneration()",

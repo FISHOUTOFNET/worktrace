@@ -47,7 +47,8 @@ def _install_blocking_test_specs(runtime: AppRuntime, *, failing: str | None = N
     def target_for(name):
         def target(stop_event, *, health):
             if name == failing:
-                health.failed("startup_failed")
+                health.failed("iteration_failed")
+                stop_event.wait()
                 return
             health.succeeded()
             stop_event.wait()
@@ -120,7 +121,7 @@ def test_start_background_workers_starts_each_owned_worker_once(
         runtime.shutdown()
 
 
-def test_background_worker_failure_identifies_exact_worker(
+def test_background_worker_iteration_failure_does_not_poison_startup_readiness(
     temp_db,
     tmp_path,
     monkeypatch,
@@ -129,15 +130,38 @@ def test_background_worker_failure_identifies_exact_worker(
     _install_blocking_test_specs(runtime, failing="folder_index")
     try:
         result = runtime.start_background_workers()
-        assert result.ready is False
-        assert result.failed_workers == ("folder_index",)
-        assert result.error_code == "worker_start_failed"
-        assert result.workers["folder_index"].state is WorkerStartupState.FAILED
-        assert all(
-            result.workers[name].ready
-            for name in result.workers
-            if name != "folder_index"
-        )
+        assert result.ready is True
+        assert result.failed_workers == ()
+        assert result.error_code is None
+        assert result.workers["folder_index"].state is WorkerStartupState.READY
+        assert all(status.ready for status in result.workers.values())
+        health = runtime.worker_health_snapshot()["workers"]["folder_index"]
+        assert health["running"] is True
+        assert health["last_failure_code"] == "iteration_failed"
+    finally:
+        runtime.shutdown()
+
+
+def test_worker_thread_start_failure_remains_a_startup_failure(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
+    runtime = _owned_runtime(temp_db, tmp_path, monkeypatch)
+    spec = next(iter(runtime._worker_specs.values()))
+
+    def fail_start(_thread):
+        raise RuntimeError("synthetic thread start failure")
+
+    monkeypatch.setattr(runtime_module.threading.Thread, "start", fail_start)
+    try:
+        handle, started, status = runtime._start_worker(spec)
+        assert handle is None
+        assert started is False
+        assert status is not None
+        assert status.ready is False
+        assert status.state is WorkerStartupState.FAILED
+        assert status.error_code == "worker_thread_start_failed"
     finally:
         runtime.shutdown()
 
@@ -301,7 +325,9 @@ def test_worker_lifecycle_owner_remains_app_runtime() -> None:
     assert '"collector_supervisor": WorkerSpec(' in runtime_source
     assert "target=self.collector_supervisor.run_worker" in runtime_source
     assert "threading.Thread(" not in supervisor_source
-    assert "activity_lifecycle_service.close_all_open_activities" in runtime_source
+    assert "recovery_service.recover_unclosed_activity_facts(" in runtime_source
+    assert "allow_legacy_heartbeat=False" in runtime_source
+    assert "activity_lifecycle_service.close_all_open_activities" not in runtime_source
     for legacy_member in (
         "_index_thread",
         "_history_thread",

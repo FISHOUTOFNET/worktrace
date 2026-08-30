@@ -11,6 +11,7 @@ from typing import Any
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
+from ..retry_state import RetryEpisode
 from ..worker_health import WorkerHealthReporter
 from ..write_gate import DATABASE_WRITE_GATE
 from . import activity_inference_job_repository as jobs
@@ -109,6 +110,7 @@ def run_inference_worker(
 
     size = max(1, int(batch_size))
     interval = max(0.1, float(poll_seconds))
+    retry_episode = RetryEpisode()
     logging.info("activity inference worker loop enter")
     while not stop_event.is_set():
         if DATABASE_WRITE_GATE.writes_blocked():
@@ -121,12 +123,34 @@ def run_inference_worker(
                 infer_activity,
                 limit=size,
             )
-        except Exception:
-            logging.exception("activity inference worker iteration failed")
+        except Exception as exc:
+            code = _classify_failure(exc)
+            retry = retry_episode.failed(code.value)
             health.failed("inference_iteration_failed")
-            processed = 0
-        else:
-            health.succeeded()
+            if retry.detail_log_due:
+                logging.warning(
+                    "activity inference worker iteration failed code=%s",
+                    code.value,
+                    exc_info=True,
+                )
+            elif retry.summary_log_due:
+                logging.warning(
+                    "activity inference worker failure continues code=%s consecutive=%s elapsed_seconds=%.1f",
+                    code.value,
+                    retry.attempt,
+                    retry.elapsed_seconds,
+                )
+            stop_event.wait(max(interval, retry.delay_seconds))
+            continue
+        recovery = retry_episode.succeeded()
+        health.succeeded()
+        if recovery.recovered:
+            logging.info(
+                "activity inference worker recovered code=%s attempts=%s elapsed_seconds=%.1f",
+                recovery.code,
+                recovery.attempts,
+                recovery.elapsed_seconds,
+            )
         if processed >= size:
             continue
         stop_event.wait(interval)

@@ -42,11 +42,138 @@ function harness() {
   return { App, element };
 }
 
+function fdWorkStatus(sessionState, overrides = {}) {
+  return {
+    supported: true,
+    enabled: true,
+    session_state: sessionState,
+    operation: "none",
+    ready: sessionState === "ready",
+    login_required: sessionState === "login_required",
+    error_code: null,
+    navigation_generation: 7,
+    ...overrides,
+  };
+}
+
 test("FD Work settings status renders disabled by default", () => {
   const { App, element } = harness();
   App.renderSettingsStatus({ fd_work: { supported: true, enabled: false } });
   assert.equal(element("settings-fd-work-toggle").checked, false);
   assert.equal(element("settings-fd-work-toggle-status").textContent, "关闭");
+});
+
+test("first Settings load recomputes reconnect after loading settles", async () => {
+  const { App, element } = harness();
+  App.bridge = {
+    getSettingsPrivacyStatus: () => Promise.resolve({
+      ok: true,
+      status: {
+        fd_work: fdWorkStatus("login_required"),
+        launch_at_login: { supported: true, enabled: false },
+      },
+    }),
+  };
+
+  await App.settings.onPageEntered();
+
+  assert.equal(element("settings-fd-work-reconnect").hidden, false);
+  assert.equal(element("settings-fd-work-reconnect").disabled, false);
+  assert.equal(element("settings-fd-work-reconnect").textContent, "登录 FD Work");
+});
+
+test("idle Settings state offers an explicit connect action", () => {
+  const { App, element } = harness();
+  App.receiveFDWorkStatus(fdWorkStatus("idle"));
+  App.renderSettingsStatus(
+    { fd_work: App.fdWorkStatus },
+    { loaded: true, fdWorkStatus: App.fdWorkStatus, operations: [] },
+  );
+
+  assert.equal(element("settings-fd-work-toggle-status").textContent, "尚未连接");
+  assert.equal(element("settings-fd-work-reconnect").hidden, false);
+  assert.equal(element("settings-fd-work-reconnect").disabled, false);
+  assert.equal(element("settings-fd-work-reconnect").textContent, "连接 FD Work");
+});
+
+test("probing Settings state does not expose a duplicate login action", () => {
+  const { App, element } = harness();
+  App.receiveFDWorkStatus(fdWorkStatus("probing"));
+  App.renderSettingsStatus(
+    { fd_work: App.fdWorkStatus },
+    { loaded: true, fdWorkStatus: App.fdWorkStatus, operations: [] },
+  );
+
+  assert.equal(element("settings-fd-work-toggle-status").textContent, "正在检查登录状态");
+  assert.equal(element("settings-fd-work-reconnect").hidden, true);
+});
+
+test("renderer unavailable Settings state does not offer a futile reconnect", () => {
+  const { App, element } = harness();
+  App.receiveFDWorkStatus(fdWorkStatus("error", { error_code: "renderer_unavailable" }));
+  App.renderSettingsStatus(
+    { fd_work: App.fdWorkStatus },
+    { loaded: true, fdWorkStatus: App.fdWorkStatus, operations: [] },
+  );
+
+  assert.equal(element("settings-fd-work-toggle-status").textContent, "WebView2 不可用");
+  assert.equal(element("settings-fd-work-reconnect").hidden, true);
+});
+
+test("recoverable Settings error offers reconnect", () => {
+  const { App, element } = harness();
+  App.receiveFDWorkStatus(fdWorkStatus("error", { error_code: "session_start_timeout" }));
+  App.renderSettingsStatus(
+    { fd_work: App.fdWorkStatus },
+    { loaded: true, fdWorkStatus: App.fdWorkStatus, operations: [] },
+  );
+
+  assert.equal(element("settings-fd-work-toggle-status").textContent, "连接超时");
+  assert.equal(element("settings-fd-work-reconnect").hidden, false);
+  assert.equal(element("settings-fd-work-reconnect").textContent, "重新连接");
+});
+
+test("live ready status replaces login-required Settings presentation", () => {
+  const { App, element } = harness();
+  App.receiveFDWorkStatus(fdWorkStatus("login_required"));
+  App.settings.onFDWorkStatusChanged(App.fdWorkStatus);
+  assert.equal(element("settings-fd-work-reconnect").hidden, false);
+
+  App.receiveFDWorkStatus(fdWorkStatus("ready", { navigation_generation: 8 }));
+  App.settings.onFDWorkStatusChanged(App.fdWorkStatus);
+
+  assert.equal(element("settings-fd-work-toggle-status").textContent, "已连接");
+  assert.equal(element("settings-fd-work-reconnect").hidden, true);
+});
+
+test("FD Work reconnect error clears on later authoritative recovery", async () => {
+  const { App, element } = harness();
+  App.bridge = {
+    showFDWorkLogin: () => Promise.resolve({ ok: false, message: "临时连接失败" }),
+  };
+
+  assert.equal(await App.reconnectFDWork(), false);
+  assert.equal(element("settings-error").textContent, "临时连接失败");
+
+  App.receiveFDWorkStatus(fdWorkStatus("ready", { navigation_generation: 8 }));
+  App.settings.onFDWorkStatusChanged(App.fdWorkStatus);
+
+  assert.equal(element("settings-error").hidden, true);
+});
+
+test("FD Work recovery never clears a newer unrelated Settings error", async () => {
+  const { App, element } = harness();
+  App.bridge = {
+    showFDWorkLogin: () => Promise.resolve({ ok: false, message: "临时连接失败" }),
+  };
+
+  assert.equal(await App.reconnectFDWork(), false);
+  App.showSettingsError("备份失败");
+  App.receiveFDWorkStatus(fdWorkStatus("ready", { navigation_generation: 8 }));
+  App.settings.onFDWorkStatusChanged(App.fdWorkStatus);
+
+  assert.equal(element("settings-error").hidden, false);
+  assert.equal(element("settings-error").textContent, "备份失败");
 });
 
 test("FD Work settings write failure restores authoritative backend state", async () => {

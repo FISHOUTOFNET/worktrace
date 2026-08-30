@@ -8,7 +8,6 @@ unattributed statuses outside reportable totals.
 from __future__ import annotations
 
 from datetime import date
-from typing import Mapping
 
 from ..constants import (
     STATUS_EXCLUDED,
@@ -78,14 +77,14 @@ def _build_summary_snapshot_and_projection(
     end_date: str,
     project_id=None,
 ):
-    from .report_projection_snapshot_service import build_visible_snapshot
-    from .statistics_snapshot_provider import get_statistics_summary_projection
+    from .statistics_snapshot_provider import get_statistics_durable_summary
 
-    snapshot = build_visible_snapshot(start_date, end_date)
-    return snapshot, get_statistics_summary_projection(
-        snapshot,
+    projection = get_statistics_durable_summary(
+        start_date,
+        end_date,
         project_id=project_id,
     )
+    return None, projection
 
 
 def _scoped_live_target(
@@ -189,35 +188,28 @@ def get_statistics_realtime_export_summary(
     date_from, date_to = resolve_statistics_date_range(date_from, date_to)
     validate_statistics_project_scope(project_id)
 
-    from .page_read_context import current_page_read_context, page_read_scope
-    from .report_as_of_snapshot_service import build_statistics_as_of_snapshot
-    from .statistics_snapshot_provider import (
-        get_statistics_base_snapshot,
-        get_statistics_summary_projection,
-    )
+    from .page_read_context import page_read_scope
+    from .statistics_realtime_summary import build_statistics_realtime_summary
+    from .statistics_snapshot_provider import get_statistics_durable_read
 
     with page_read_scope(allow_unpersisted_runtime=True):
-        base_snapshot = get_statistics_base_snapshot(date_from, date_to)
-        as_of = build_statistics_as_of_snapshot(
+        durable_read = get_statistics_durable_read(
             date_from,
             date_to,
-            base_snapshot=base_snapshot,
-        )
-        context = current_page_read_context()
-        runtime_snapshot = (
-            context.runtime_sample.snapshot
-            if context is not None
-            and context.runtime_consistent
-            and isinstance(context.runtime_sample.snapshot, Mapping)
-            else None
-        )
-        projection = get_statistics_summary_projection(
-            as_of.snapshot,
             project_id=project_id,
-            live_runtime_snapshot=runtime_snapshot,
         )
+        realtime = build_statistics_realtime_summary(
+            durable_read.summary,
+            date_from,
+            date_to,
+            project_id=project_id,
+            range_projection=durable_read.range_projection,
+        )
+        projection = realtime.projection
         live_target = _scoped_live_target(
-            dict(as_of.live_target) if as_of.live_target is not None else None,
+            dict(realtime.live_target)
+            if realtime.live_target is not None
+            else None,
             projection,
             file_key=projection.live_file_key,
         )

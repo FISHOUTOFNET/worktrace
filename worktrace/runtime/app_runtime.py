@@ -19,12 +19,12 @@ from ..platforms.windows_adapter import WindowsAdapter
 from ..services import (
     activity_fact_repair_service,
     activity_inference_job_service,
-    activity_lifecycle_service,
     database_maintenance_service,
     folder_index_service,
     history_mutation_job_service,
     project_inference_service,
     recovery_service,
+    runtime_activity_state_service,
 )
 from ..services.settings_service import set_setting
 from ..worker_health import WorkerHealthRegistry, WorkerHealthReporter
@@ -39,6 +39,15 @@ if TYPE_CHECKING:
         log_path: str
 
     _Paths = _Paths  # noqa: F811
+
+
+_WORKER_RESTART_INITIAL_SECONDS = 1.0
+_WORKER_RESTART_MAX_SECONDS = 30.0
+_WORKER_STABLE_RUN_SECONDS = 30.0
+_WORKER_PROGRESS_WATCHDOG_SECONDS = 5.0
+_COLLECTOR_LIVE_FRESHNESS_SECONDS = 8.0
+_COLLECTOR_STALL_SECONDS = 180.0
+_COLLECTOR_STALL_LOG_INTERVAL_SECONDS = 60.0
 
 
 class RuntimePhase(str, Enum):
@@ -61,6 +70,7 @@ class WorkerSpec:
     args_factory: Callable[[threading.Event], tuple[object, ...]]
     startup_timeout_seconds: float = 5.0
     critical: bool = False
+    progress_timeout_seconds: float = 0.0
 
 
 @dataclass
@@ -70,6 +80,7 @@ class WorkerHandle:
     stop_event: threading.Event
     ready_event: threading.Event = field(default_factory=threading.Event)
     failed_event: threading.Event = field(default_factory=threading.Event)
+    serving_event: threading.Event = field(default_factory=threading.Event)
     error_code: str | None = None
 
 
@@ -102,27 +113,34 @@ class WorkerStartupReporter:
 
 
 class _OwnedWorkerReporter:
-    """Worker-facing health capability carrying the startup handshake."""
+    """Worker-facing iteration health capability, separate from startup readiness."""
 
     def __init__(
         self,
         health: WorkerHealthReporter,
-        startup: WorkerStartupReporter,
+        handle: WorkerHandle,
+        on_health_change: Callable[[], None],
     ) -> None:
         self._health = health
-        self._startup = startup
+        self._handle = handle
+        self._on_health_change = on_health_change
         self.name = health.name
 
     def succeeded(self) -> None:
-        self._startup.ready()
+        self._handle.serving_event.set()
         self._health.succeeded()
+        self._on_health_change()
 
     def failed(self, code: str) -> None:
-        self._startup.failed(code)
         self._health.failed(code)
+        self._on_health_change()
 
     def maintenance_paused(self, paused: bool) -> None:
+        paused = bool(paused)
         self._health.maintenance_paused(paused)
+        if paused:
+            self._handle.serving_event.set()
+            self._on_health_change()
 
 
 @dataclass(frozen=True)
@@ -150,10 +168,6 @@ def _choose_adapter() -> RuntimePlatformAdapter:
 
 
 def _thread_is_alive(thread: threading.Thread | None) -> bool:
-    # WorkerHandle.is_alive and this helper hide raw thread introspection so the
-    # worker registry stays declarative; threading.enumerate() is the canonical
-    # snapshot of alive Thread objects and is functionally equivalent to
-    # Thread.is_alive() for lifecycle checks in the runtime owner.
     return thread is not None and thread in threading.enumerate()
 
 
@@ -176,7 +190,13 @@ class AppRuntime:
         self._collector_thread: threading.Thread | None = None
         self._collector_stop_event: threading.Event | None = None
         self._collector_generation = 0
+        self._collector_ready_generation = 0
+        self._collector_terminal_generation = 0
+        self._collector_terminal_reason = ""
+        self._collector_recovery_required_reason = ""
+        self._last_collector_stall_log_monotonic = 0.0
         self._worker_handles: dict[str, WorkerHandle] = {}
+        self._worker_progress_watchdog_thread: threading.Thread | None = None
         self.collector_supervisor = CollectorSupervisor(self)
         self._worker_specs = self._build_worker_specs()
         self._initialized = False
@@ -189,18 +209,21 @@ class AppRuntime:
                 thread_name="WorkTraceClipboardCapture",
                 target=self._adapter.run_clipboard_capture,
                 args_factory=lambda stop: (stop,),
+                progress_timeout_seconds=30.0,
             ),
             "folder_index": WorkerSpec(
                 name="folder_index",
                 thread_name="WorkTraceFolderIndex",
                 target=folder_index_service.run_folder_index_worker,
                 args_factory=lambda stop: (stop,),
+                progress_timeout_seconds=300.0,
             ),
             "history": WorkerSpec(
                 name="history",
                 thread_name="WorkTraceHistoryMutation",
                 target=history_mutation_job_service.run_history_worker,
                 args_factory=lambda stop: (stop,),
+                progress_timeout_seconds=120.0,
             ),
             "inference": WorkerSpec(
                 name="inference",
@@ -210,24 +233,28 @@ class AppRuntime:
                     stop,
                     project_inference_service.assign_project_for_activity_in_transaction,
                 ),
+                progress_timeout_seconds=120.0,
             ),
             "activity_resource_repair": WorkerSpec(
                 name="activity_resource_repair",
                 thread_name="WorkTraceActivityResourceRepair",
                 target=activity_fact_repair_service.run_activity_resource_repair_worker,
                 args_factory=lambda stop: (stop,),
+                progress_timeout_seconds=300.0,
             ),
             "startup_recovery": WorkerSpec(
                 name="startup_recovery",
                 thread_name="WorkTraceStartupRecovery",
                 target=recovery_service.run_startup_recovery_worker,
                 args_factory=lambda stop: (stop,),
+                progress_timeout_seconds=300.0,
             ),
             "collector_supervisor": WorkerSpec(
                 name="collector_supervisor",
                 thread_name="WorkTraceCollectorSupervisor",
                 target=self.collector_supervisor.run_worker,
                 args_factory=lambda stop: (stop,),
+                progress_timeout_seconds=30.0,
             ),
         }
 
@@ -266,35 +293,169 @@ class AppRuntime:
         spec = handle.spec
         health = self._worker_health.reporter(spec.name)
         startup = WorkerStartupReporter(handle)
-        worker_reporter = _OwnedWorkerReporter(health, startup)
+        worker_reporter = _OwnedWorkerReporter(
+            health,
+            handle,
+            self._reconcile_worker_health_phase,
+        )
         health.started()
+        startup.ready()
+        restart_delay = _WORKER_RESTART_INITIAL_SECONDS
         try:
-            spec.target(
-                *spec.args_factory(handle.stop_event),
-                health=worker_reporter,
-            )
-            if not startup.ready_reported and not startup.failed_reported:
-                startup.failed("worker_returned_before_ready")
-            if not handle.stop_event.is_set() and not self.stop_event.is_set():
-                handle.error_code = "worker_unexpected_exit"
-                handle.failed_event.set()
-                health.failed(handle.error_code)
-                logging.error("owned worker returned unexpectedly worker=%s", spec.name)
-        except Exception:
-            if not startup.ready_reported:
-                startup.failed("worker_startup_failed")
-            else:
-                handle.error_code = "worker_unhandled_exception"
-                handle.failed_event.set()
-            health.failed(handle.error_code or "worker_unhandled_exception")
-            logging.exception("owned worker failed worker=%s", spec.name)
+            while not handle.stop_event.is_set() and not self.stop_event.is_set():
+                handle.serving_event.clear()
+                invocation_started_at = time.monotonic()
+                lifecycle_error: str | None = None
+                try:
+                    spec.target(
+                        *spec.args_factory(handle.stop_event),
+                        health=worker_reporter,
+                    )
+                    if not handle.stop_event.is_set() and not self.stop_event.is_set():
+                        lifecycle_error = "worker_unexpected_exit"
+                        logging.error(
+                            "owned worker returned unexpectedly worker=%s",
+                            spec.name,
+                        )
+                except Exception:
+                    if not handle.stop_event.is_set() and not self.stop_event.is_set():
+                        lifecycle_error = "worker_unhandled_exception"
+                        logging.exception("owned worker failed worker=%s", spec.name)
+
+                if lifecycle_error is None:
+                    break
+
+                handle.serving_event.clear()
+                health.failed(lifecycle_error)
+                self._mark_worker_runtime_degraded()
+                if not self._owned_worker_restart_allowed(handle):
+                    break
+
+                ran_for = time.monotonic() - invocation_started_at
+                if ran_for >= _WORKER_STABLE_RUN_SECONDS:
+                    restart_delay = _WORKER_RESTART_INITIAL_SECONDS
+                logging.warning(
+                    "owned worker restart scheduled worker=%s delay_seconds=%.1f",
+                    spec.name,
+                    restart_delay,
+                )
+                if handle.stop_event.wait(restart_delay) or self.stop_event.is_set():
+                    break
+                restart_delay = min(
+                    restart_delay * 2.0,
+                    _WORKER_RESTART_MAX_SECONDS,
+                )
+                logging.info("owned worker restarting worker=%s", spec.name)
         finally:
+            handle.serving_event.clear()
             health.stopped()
             if self.phase in {RuntimePhase.RUNNING, RuntimePhase.STARTING}:
                 self.phase = RuntimePhase.DEGRADED
 
-    @staticmethod
+    def _owned_worker_restart_allowed(self, handle: WorkerHandle) -> bool:
+        if handle.spec.critical:
+            return False
+        with self._lifecycle_lock:
+            return bool(
+                not self._shutdown
+                and not self.stop_event.is_set()
+                and not handle.stop_event.is_set()
+                and handle.thread is threading.current_thread()
+                and self._worker_handles.get(handle.spec.name) is handle
+            )
+
+    def _mark_worker_runtime_degraded(self) -> None:
+        with self._lifecycle_lock:
+            if self.phase in {RuntimePhase.RUNNING, RuntimePhase.STARTING}:
+                self.phase = RuntimePhase.DEGRADED
+
+    def _worker_progress_timeouts(self) -> dict[str, float]:
+        return {
+            name: max(0.0, float(spec.progress_timeout_seconds or 0.0))
+            for name, spec in self._worker_specs.items()
+            if float(spec.progress_timeout_seconds or 0.0) > 0.0
+        }
+
+    def _degraded_workers(self) -> tuple[str, ...]:
+        degraded = set(self._worker_health.degraded_workers())
+        degraded.update(
+            self._worker_health.stalled_workers(self._worker_progress_timeouts())
+        )
+        return tuple(sorted(degraded))
+
+    def _run_worker_progress_watchdog(self) -> None:
+        logging.info("worker progress watchdog loop enter")
+        while not self.stop_event.wait(_WORKER_PROGRESS_WATCHDOG_SECONDS):
+            try:
+                self._reconcile_worker_health_phase()
+            except Exception:
+                logging.exception("worker progress watchdog reconciliation failed")
+        logging.info("worker progress watchdog loop exit")
+
+    def _ensure_worker_progress_watchdog(self) -> None:
+        with self._lifecycle_lock:
+            if self._shutdown or self.stop_event.is_set():
+                return
+            if _thread_is_alive(self._worker_progress_watchdog_thread):
+                return
+            thread = threading.Thread(
+                target=self._run_worker_progress_watchdog,
+                name="WorkTraceWorkerProgressWatchdog",
+                daemon=True,
+            )
+            self._worker_progress_watchdog_thread = thread
+            thread.start()
+
+    def _reconcile_worker_health_phase(self) -> None:
+        with self._lifecycle_lock:
+            if self.phase not in {
+                RuntimePhase.STARTING,
+                RuntimePhase.RUNNING,
+                RuntimePhase.DEGRADED,
+            }:
+                return
+            if self._shutdown or self.stop_event.is_set():
+                return
+            if not _thread_is_alive(self._collector_thread):
+                return
+
+            handles = tuple(self._worker_handles.values())
+            if any(not _thread_is_alive(handle.thread) for handle in handles):
+                self.phase = RuntimePhase.DEGRADED
+                return
+            if any(not handle.ready_event.is_set() for handle in handles):
+                if self.phase is not RuntimePhase.STARTING:
+                    self.phase = RuntimePhase.DEGRADED
+                return
+            if self._degraded_workers():
+                self.phase = RuntimePhase.DEGRADED
+                return
+
+            health_states = self._worker_health.snapshots()
+            unserved = [
+                handle
+                for handle in handles
+                if not handle.serving_event.is_set()
+            ]
+            if unserved:
+                failed_before_serving = any(
+                    (
+                        state := health_states.get(handle.spec.name)
+                    ) is not None
+                    and state.consecutive_failures > 0
+                    for handle in unserved
+                )
+                if failed_before_serving or self.phase is RuntimePhase.DEGRADED:
+                    self.phase = RuntimePhase.DEGRADED
+                else:
+                    self.phase = RuntimePhase.STARTING
+                return
+
+            self.phase = RuntimePhase.RUNNING
+
     def _run_owned_collector(
+        self,
+        generation: int,
         adapter: RuntimePlatformAdapter,
         stop_event: threading.Event,
         control: RuntimeCollectorControl,
@@ -303,18 +464,166 @@ class AppRuntime:
     ) -> None:
         try:
             run_collector(adapter, stop_event, control, ready_event, failed_event)
+        except BaseException:
+            try:
+                collector_health.record_unhandled_runtime_failure(db.now_str())
+            except Exception as health_exc:
+                logging.error(
+                    "collector unhandled failure health persistence failed exception=%s",
+                    type(health_exc).__name__,
+                )
+            try:
+                collector_health.record_collector_stopped(db.now_str())
+            except Exception as stop_exc:
+                logging.error(
+                    "collector stopped-state persistence failed exception=%s",
+                    type(stop_exc).__name__,
+                )
+            raise
         finally:
             reason = (
                 "collector_fatal_exit"
                 if failed_event.is_set() or not stop_event.is_set()
                 else "collector_shutdown"
             )
+            try:
+                runtime_activity_state_service.clear_runtime_activity_state(
+                    "collector_invocation_terminated"
+                )
+            except Exception as clear_exc:
+                logging.error(
+                    "collector runtime state clear failed exception=%s",
+                    type(clear_exc).__name__,
+                )
+            collector_health.terminalize_runtime_invocation(generation, reason)
+            with self._lifecycle_lock:
+                if generation == self._collector_generation:
+                    self._collector_terminal_generation = generation
+                    self._collector_terminal_reason = reason
+                    self._collector_ready_generation = 0
             control.terminalize_unfinished(reason)
 
+    def collection_liveness_snapshot(self) -> dict[str, object]:
+        """Return the sole process-authoritative Collector live eligibility."""
+
+        with self._lifecycle_lock:
+            generation = int(self._collector_generation)
+            ready_generation = int(self._collector_ready_generation)
+            terminal_generation = int(self._collector_terminal_generation)
+            terminal_reason = str(self._collector_terminal_reason or "")
+            recovery_reason = str(self._collector_recovery_required_reason or "")
+            thread = self._collector_thread
+            stop_event = self._collector_stop_event
+            control = self.collector_control
+            owned = bool(self.owns_application_instance and not self._shutdown)
+        thread_alive = _thread_is_alive(thread)
+        hold_state = getattr(control, "hold_state", None)
+        hold_value = str(getattr(hold_state, "value", hold_state) or "")
+        progress = collector_health.runtime_progress_snapshot()
+        progress_generation = int(progress.get("generation") or 0)
+        runtime_status = str(progress.get("runtime_status") or "")
+        last_success = str(progress.get("last_successful_observation_at") or "")
+        started_monotonic = float(progress.get("started_monotonic") or 0.0)
+        last_monotonic = float(progress.get("last_success_monotonic") or 0.0)
+        progress_anchor = (
+            last_monotonic if last_monotonic > 0.0 else started_monotonic
+        )
+        age = (
+            max(0.0, time.monotonic() - progress_anchor)
+            if progress_anchor > 0.0
+            else None
+        )
+        first_observation_pending = last_monotonic <= 0.0
+
+        state = "stopped"
+        live_eligible = False
+        reason = terminal_reason
+        if recovery_reason:
+            state = "recovery_required"
+            reason = recovery_reason
+        elif not owned or not thread_alive:
+            state = "stopped"
+        elif stop_event is None or stop_event.is_set() or terminal_generation == generation:
+            state = "stopped"
+        elif hold_value and hold_value != "operational":
+            state = "held"
+            reason = hold_value
+        elif ready_generation != generation or progress_generation != generation:
+            state = "starting"
+        elif runtime_status == "paused":
+            state = "paused"
+        elif runtime_status == "stopped":
+            state = "stopped"
+        elif age is None:
+            state = "starting"
+        elif age > _COLLECTOR_STALL_SECONDS:
+            state = "stale"
+            reason = "collector_progress_stale"
+        elif age > _COLLECTOR_LIVE_FRESHNESS_SECONDS:
+            state = "degraded"
+            reason = "collector_progress_delayed"
+        elif first_observation_pending:
+            state = "starting"
+        elif runtime_status == "running":
+            state = "active"
+            live_eligible = True
+        else:
+            state = "starting"
+
+        return {
+            "generation": generation,
+            "state": state,
+            "live_eligible": live_eligible,
+            "thread_alive": thread_alive,
+            "last_successful_observation_at": last_success,
+            "last_progress_age_seconds": age,
+            "reason": reason,
+        }
+
+    def mark_collector_recovery_required(self, reason: str) -> None:
+        value = str(reason or "collector_recovery_required").strip().lower()
+        value = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in value)
+        value = value.strip("_")[:64] or "collector_recovery_required"
+        with self._lifecycle_lock:
+            self._collector_recovery_required_reason = value
+            if self.phase not in {RuntimePhase.STOPPING, RuntimePhase.STOPPED}:
+                self.phase = RuntimePhase.RECOVERABLE_FAILURE
+        collector_health.record_health_code("collector_recovery_required")
+
+    def diagnose_stalled_collector(self) -> None:
+        """Log safe source locations for an alive-but-stalled Collector."""
+
+        now = time.monotonic()
+        with self._lifecycle_lock:
+            thread = self._collector_thread
+            if (
+                not _thread_is_alive(thread)
+                or now - self._last_collector_stall_log_monotonic
+                < _COLLECTOR_STALL_LOG_INTERVAL_SECONDS
+            ):
+                return
+            self._last_collector_stall_log_monotonic = now
+            ident = thread.ident if thread is not None else None
+        frame = sys._current_frames().get(ident) if ident is not None else None
+        locations: list[str] = []
+        while frame is not None:
+            normalized = str(frame.f_code.co_filename or "").replace("\\", "/")
+            parts = [part for part in normalized.split("/") if part]
+            safe_path = "/".join(parts[-3:]) or "unknown"
+            locations.append(
+                f"{safe_path}:{frame.f_lineno}:{frame.f_code.co_name}"
+            )
+            frame = frame.f_back
+        logging.error(
+            "collector stalled thread_alive=true stack=%s",
+            ">".join(locations[-6:]) or "none",
+        )
+
     def worker_health_snapshot(self) -> dict[str, object]:
+        self._reconcile_worker_health_phase()
         return {
             "workers": self._worker_health.public_snapshot(),
-            "degraded_workers": list(self._worker_health.degraded_workers()),
+            "degraded_workers": list(self._degraded_workers()),
         }
 
     def worker_registry_snapshot(self) -> dict[str, _WorkerStartupStatus]:
@@ -566,6 +875,7 @@ class AppRuntime:
             report.ready,
             list(report.failed_workers),
         )
+        self._ensure_worker_progress_watchdog()
         return report
 
     def start_authorized_collection(self) -> _RuntimeStartResult:
@@ -578,6 +888,15 @@ class AppRuntime:
                     workers={},
                     degraded=True,
                     error_code="database_maintenance_recovery_required",
+                )
+            if self._collector_recovery_required_reason:
+                self.phase = RuntimePhase.RECOVERABLE_FAILURE
+                return _RuntimeStartResult(
+                    ok=False,
+                    collector_ready=False,
+                    workers={},
+                    degraded=True,
+                    error_code="collector_recovery_required",
                 )
             if not self._initialized or not self.owns_application_instance:
                 return _RuntimeStartResult(
@@ -641,12 +960,16 @@ class AppRuntime:
                 "worker_start_failed",
             )
 
-        degraded = not report.ready
-        self.phase = RuntimePhase.DEGRADED if degraded else RuntimePhase.RUNNING
+        if not report.ready:
+            self.phase = RuntimePhase.DEGRADED
+        else:
+            self._reconcile_worker_health_phase()
+        degraded = self.phase is RuntimePhase.DEGRADED
         logging.info(
-            "authorized runtime startup complete elapsed_ms=%s degraded=%s",
+            "authorized runtime startup complete elapsed_ms=%s degraded=%s phase=%s",
             int((time.monotonic() - startup_started_at) * 1000),
             degraded,
+            self.phase.value,
         )
         return _RuntimeStartResult(
             ok=True,
@@ -669,6 +992,9 @@ class AppRuntime:
                     "ok": False,
                     "error": "database_maintenance_recovery_required",
                 }
+            if self._collector_recovery_required_reason:
+                self.phase = RuntimePhase.RECOVERABLE_FAILURE
+                return {"ok": False, "error": "collector_recovery_required"}
             if self._shutdown or self.stop_event.is_set():
                 return {"ok": False, "error": "runtime_stopping"}
             if not self.owns_application_instance:
@@ -679,9 +1005,39 @@ class AppRuntime:
                 database_maintenance_service.register_runtime_control(self)
                 return {"ok": True, "started": False, "already_running": True}
             if self._collector_thread is not None:
-                collector_health.record_health_code("thread_dead_replaced")
+                try:
+                    collector_health.record_health_code("thread_dead_replaced")
+                except Exception as health_exc:
+                    logging.error(
+                        "collector dead-thread health persistence failed exception=%s",
+                        type(health_exc).__name__,
+                    )
+                progress = collector_health.runtime_progress_snapshot()
+                safe_end_time = (
+                    str(progress.get("last_successful_observation_at") or "")
+                    if int(progress.get("generation") or 0)
+                    == int(self._collector_generation)
+                    else ""
+                )
+                recovery = recovery_service.recover_after_collector_crash(
+                    safe_end_time or None
+                )
+                if not bool(recovery.get("ok")):
+                    self.phase = RuntimePhase.RECOVERABLE_FAILURE
+                    if not bool(recovery.get("retryable")):
+                        self.mark_collector_recovery_required(
+                            "crash_reconciliation_failed"
+                        )
+                    return {
+                        "ok": False,
+                        "error": str(
+                            recovery.get("error") or "collector_recovery_failed"
+                        ),
+                        "retryable": bool(recovery.get("retryable")),
+                    }
                 self._collector_thread = None
                 self._collector_stop_event = None
+                self.collector_control = RuntimeCollectorControl()
 
             ready_event = threading.Event()
             failed_event = threading.Event()
@@ -689,12 +1045,17 @@ class AppRuntime:
             attempt_control = RuntimeCollectorControl()
             self._collector_generation += 1
             attempt_generation = self._collector_generation
+            self._collector_ready_generation = 0
+            self._collector_terminal_generation = 0
+            self._collector_terminal_reason = ""
+            collector_health.begin_runtime_invocation(attempt_generation)
             self._collector_stop_event = attempt_stop_event
             self.collector_control = attempt_control
             try:
                 thread = threading.Thread(
                     target=self._run_owned_collector,
                     args=(
+                        attempt_generation,
                         self._adapter,
                         attempt_stop_event,
                         attempt_control,
@@ -708,6 +1069,10 @@ class AppRuntime:
                 thread.start()
             except Exception:
                 logging.exception("collector thread start failed")
+                collector_health.terminalize_runtime_invocation(
+                    attempt_generation,
+                    "collector_thread_start_failed",
+                )
                 attempt_control.terminalize_unfinished("collector_thread_start_failed")
                 self._collector_thread = None
                 self._collector_stop_event = None
@@ -729,10 +1094,12 @@ class AppRuntime:
                 if (
                     attempt_generation != self._collector_generation
                     or self._collector_thread is not thread
+                    or not _thread_is_alive(thread)
                 ):
                     attempt_stop_event.set()
                     attempt_control.terminalize_unfinished("collector_attempt_superseded")
                     return {"ok": False, "error": "collector_attempt_superseded"}
+                self._collector_ready_generation = attempt_generation
                 database_maintenance_service.register_runtime_control(self)
                 return {"ok": True, "started": True, "already_running": False}
 
@@ -887,6 +1254,7 @@ class AppRuntime:
             self.stop_event.set()
             collector_thread = self._collector_thread
             collector_control = self.collector_control
+            watchdog_thread = self._worker_progress_watchdog_thread
             if self._collector_stop_event is not None:
                 self._collector_stop_event.set()
 
@@ -904,6 +1272,8 @@ class AppRuntime:
         for handle in handles:
             if handle.thread is not None:
                 handle.thread.join(timeout=5)
+        if watchdog_thread is not None:
+            watchdog_thread.join(timeout=1.0)
 
         self._adapter.shutdown()
 
@@ -917,13 +1287,27 @@ class AppRuntime:
             self._worker_handles = {
                 handle.spec.name: handle for handle in surviving_workers
             }
+            if not _thread_is_alive(watchdog_thread):
+                self._worker_progress_watchdog_thread = None
             if self.owns_application_instance and writers_stopped:
                 if (
                     self._initialized
                     and not database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked()
                 ):
-                    activity_lifecycle_service.close_all_open_activities()
+                    shutdown_at = db.now_str()
+                    progress = collector_health.runtime_progress_snapshot()
+                    safe_end_time = (
+                        str(progress.get("last_successful_observation_at") or "")
+                        if int(progress.get("generation") or 0)
+                        == int(self._collector_generation)
+                        else ""
+                    )
+                    recovery_service.recover_unclosed_activity_facts(
+                        safe_end_time=safe_end_time or None,
+                        allow_legacy_heartbeat=False,
+                    )
                     set_setting("collector_status", "stopped")
+                    set_setting("last_shutdown_at", shutdown_at)
                 release_single_instance()
                 self.owns_application_instance = False
                 self.phase = RuntimePhase.STOPPED

@@ -5,10 +5,52 @@
 
     var fdWorkFillTransactionSequence = 0;
     var activeFDWorkFillTransaction = null;
+    var fdWorkStatusOverrides = {};
 
     function fdWorkOperationGeneration() {
         var value = App.fdWorkStatus && App.fdWorkStatus.operation_generation;
         return Number.isInteger(value) ? value : null;
+    }
+
+    function fdWorkScope(session) {
+        if (!session) return null;
+        var key = String(session.projection_instance_key || "");
+        var revision = String(session.projection_revision || "");
+        if (!key || !revision) return null;
+        return Object.freeze({ key: key, revision: revision });
+    }
+
+    function currentFDWorkScope() {
+        return fdWorkScope(App.timelineEditorState.currentSession());
+    }
+
+    function fdWorkScopeId(scope) {
+        return scope ? scope.key + "|" + scope.revision : "";
+    }
+
+    function sameFDWorkScope(left, right) {
+        return !!left && !!right
+            && left.key === right.key
+            && left.revision === right.revision;
+    }
+
+    function getFDWorkStatusOverride(session) {
+        var scope = fdWorkScope(session);
+        var id = fdWorkScopeId(scope);
+        return id ? fdWorkStatusOverrides[id] || null : null;
+    }
+
+    function clearFDWorkStatusOverride(scope) {
+        var id = fdWorkScopeId(scope);
+        if (id) delete fdWorkStatusOverrides[id];
+    }
+
+    function clearFDWorkSessionOverrides() {
+        Object.keys(fdWorkStatusOverrides).forEach(function (id) {
+            if (fdWorkStatusOverrides[id].kind === "session") {
+                delete fdWorkStatusOverrides[id];
+            }
+        });
     }
 
     function beginFDWorkFillTransaction() {
@@ -16,7 +58,8 @@
             id: ++fdWorkFillTransactionSequence,
             state: "pending",
             terminalKind: null,
-            baselineOperationGeneration: fdWorkOperationGeneration()
+            baselineOperationGeneration: fdWorkOperationGeneration(),
+            scope: currentFDWorkScope()
         };
         activeFDWorkFillTransaction = transaction;
         return transaction;
@@ -84,21 +127,39 @@
             return { enabled: false, state: "hidden", reason: "" };
         }
         var capability = App.fdWorkStatus || {};
-        if (capability.session_state === "probing") {
-            return { enabled: true, state: "busy", reason: "正在连接 FD Work…" };
-        }
-        if (capability.session_state === "error") {
-            return { enabled: true, state: "error", reason: App.fdWorkStatusText(capability) };
-        }
-        if (capability.interaction_owner && capability.interaction_owner !== "none") {
-            return { enabled: true, state: "busy", reason: App.fdWorkStatusText(capability) };
-        }
-        if (
-            capability.ready !== true
-            && capability.session_state !== "idle"
-            && capability.session_state !== "login_required"
-        ) {
-            return { enabled: true, state: "disabled", reason: "FD Work 尚未准备完成" };
+        var sessionView = typeof App.fdWorkSessionPresentation === "function"
+            ? App.fdWorkSessionPresentation(capability)
+            : null;
+        if (sessionView) {
+            if (sessionView.state === "busy") {
+                return { enabled: true, state: "busy", reason: sessionView.statusText };
+            }
+            if (sessionView.state === "unavailable") {
+                return { enabled: true, state: "error", reason: sessionView.statusText };
+            }
+            if (sessionView.state === "blocked") {
+                return { enabled: true, state: "disabled", reason: sessionView.statusText };
+            }
+            if (sessionView.state !== "ready" && sessionView.canStartSession !== true) {
+                return { enabled: true, state: "disabled", reason: "FD Work 尚未准备完成" };
+            }
+        } else {
+            if (capability.session_state === "probing") {
+                return { enabled: true, state: "busy", reason: "正在连接 FD Work…" };
+            }
+            if (capability.session_state === "error") {
+                return { enabled: true, state: "error", reason: App.fdWorkStatusText(capability) };
+            }
+            if (capability.interaction_owner && capability.interaction_owner !== "none") {
+                return { enabled: true, state: "busy", reason: App.fdWorkStatusText(capability) };
+            }
+            if (
+                capability.ready !== true
+                && capability.session_state !== "idle"
+                && capability.session_state !== "login_required"
+            ) {
+                return { enabled: true, state: "disabled", reason: "FD Work 尚未准备完成" };
+            }
         }
         if (!session) {
             return { enabled: true, state: "disabled", reason: "请选择一个已结束的时间段" };
@@ -158,27 +219,67 @@
         if (!options.ignoreBusy && App.fdWorkOpenPromise) {
             return { enabled: true, state: "busy", reason: "正在打开 FD Work…" };
         }
-        if (!options.ignoreTransient && App.fdWorkStatusOverride) return App.fdWorkStatusOverride;
+        var transientOverride = !options.ignoreTransient
+            ? getFDWorkStatusOverride(session)
+            : null;
+        if (transientOverride) return transientOverride;
+        var connectionReason = "填入前将先打开 FD Work。";
+        if (sessionView && sessionView.state === "auth_required") {
+            connectionReason = "填入前将先登录 FD Work。";
+        } else if (sessionView && sessionView.state === "retryable") {
+            connectionReason = sessionView.statusText + "；填入前将先重新连接 FD Work。";
+        }
         return {
             enabled: true,
             state: "ready",
             reason: capability.ready === true
                 ? "将项目、日期、时长和描述填入并保存到 FD Work。"
-                : "填入前将先打开 FD Work。"
+                : connectionReason
         };
     }
     App.getFDWorkAvailability = getFDWorkAvailability;
 
-    function showFDWorkStatus(message, isError) {
+    function showFDWorkStatus(message, isError, options) {
+        options = options || {};
         syncFDWorkFillTransactionFromStatus(activeFDWorkFillTransaction);
-        App.fdWorkStatusOverride = message ? {
-            enabled: true,
-            state: isError ? "error" : "ready",
-            reason: message
-        } : null;
+        var currentScope = currentFDWorkScope();
+        var scope = options.scope || (
+            activeFDWorkFillTransaction && activeFDWorkFillTransaction.state === "pending"
+                ? activeFDWorkFillTransaction.scope
+                : currentScope
+        );
+        if (activeFDWorkFillTransaction
+            && activeFDWorkFillTransaction.state === "terminal"
+            && currentFDWorkTerminalKind(activeFDWorkFillTransaction)) {
+            scope = activeFDWorkFillTransaction.scope || scope;
+        }
+        if (!scope) {
+            updateFDWorkEntryButton();
+            return;
+        }
+        if (!message) {
+            clearFDWorkStatusOverride(scope);
+        } else {
+            fdWorkStatusOverrides[fdWorkScopeId(scope)] = Object.freeze({
+                enabled: true,
+                state: isError ? "error" : "ready",
+                reason: message,
+                kind: String(options.kind || "selection")
+            });
+        }
         updateFDWorkEntryButton();
     }
     App.showFDWorkStatus = showFDWorkStatus;
+
+    function onFDWorkStatusChanged(status) {
+        if (!status || status.operation !== "none") return;
+        var sessionView = typeof App.fdWorkSessionPresentation === "function"
+            ? App.fdWorkSessionPresentation(status)
+            : null;
+        if (!sessionView || ["ready", "connectable", "retryable", "disabled", "unavailable"]
+            .indexOf(sessionView.state) < 0) return;
+        clearFDWorkSessionOverrides();
+    }
 
     function updateFDWorkEntryButton() {
         var button = document.getElementById("fd-work-entry-btn");
@@ -225,7 +326,14 @@
 
     function openFDWorkEntryForSelection() {
         if (App.fdWorkOpenPromise) return App.fdWorkOpenPromise;
-        App.fdWorkStatusOverride = null;
+        var currentScope = currentFDWorkScope();
+        if (activeFDWorkFillTransaction
+            && activeFDWorkFillTransaction.state === "terminal"
+            && currentScope
+            && !sameFDWorkScope(activeFDWorkFillTransaction.scope, currentScope)) {
+            activeFDWorkFillTransaction = null;
+        }
+        clearFDWorkStatusOverride(currentScope);
         var availability = getFDWorkAvailability(App.timelineEditorState.currentSession());
         if (availability.state !== "ready") {
             updateFDWorkEntryButton();
@@ -236,30 +344,44 @@
         var capability = App.fdWorkStatus || {};
         if (capability.ready !== true) {
             if (!App.fdWork || typeof App.fdWork.ensureSession !== "function") {
-                showFDWorkStatus("打开 FD Work 失败", true);
+                showFDWorkStatus("打开 FD Work 失败", true, { kind: "session" });
                 return Promise.resolve(false);
             }
-            showFDWorkStatus(
-                capability.login_required === true ? "请登录 FD Work" : "正在连接 FD Work…",
-                false
-            );
+            var sessionView = typeof App.fdWorkSessionPresentation === "function"
+                ? App.fdWorkSessionPresentation(capability)
+                : null;
+            var connectingMessage = sessionView && sessionView.state === "auth_required"
+                ? "请登录 FD Work"
+                : (sessionView && sessionView.state === "retryable"
+                    ? "正在重新连接 FD Work…"
+                    : "正在连接 FD Work…");
+            showFDWorkStatus(connectingMessage, false, { kind: "session" });
             var sessionOperation = App.fdWork.ensureSession().then(function (result) {
                 if (!result || result.ok !== true) {
-                    showFDWorkStatus(result && result.message || "打开 FD Work 失败", true);
+                    showFDWorkStatus(
+                        result && result.message || "打开 FD Work 失败",
+                        true,
+                        { kind: "session" }
+                    );
                     return false;
                 }
                 var latest = App.fdWorkStatus || {};
                 if (latest.ready === true) {
-                    showFDWorkStatus("FD Work 已连接，请再次点击填入", false);
+                    showFDWorkStatus(
+                        "FD Work 已连接，请再次点击填入",
+                        false,
+                        { kind: "session" }
+                    );
                 } else if (latest.operation === "user_auth") {
                     showFDWorkStatus(
                         latest.page_phase === "login_confirmation"
                             ? "请确认登录"
                             : "请登录 FD Work",
-                        false
+                        false,
+                        { kind: "session" }
                     );
                 } else {
-                    showFDWorkStatus("正在连接 FD Work…", false);
+                    showFDWorkStatus("正在连接 FD Work…", false, { kind: "session" });
                 }
                 return false;
             }).finally(function () {
@@ -383,7 +505,10 @@
 
     App.resetTimelineFDWorkState = function () {
         activeFDWorkFillTransaction = null;
+        fdWorkStatusOverrides = {};
         App.fdWorkOpenPromise = null;
-        App.fdWorkStatusOverride = null;
     };
+    App.timelineFDWork = Object.freeze({
+        onStatusChanged: onFDWorkStatusChanged
+    });
 })();

@@ -85,10 +85,16 @@ class DeferredUIGate:
             if self._shell is not None:
                 raise RuntimeError("deferred_ui_shell_already_bound")
             self._shell = shell
+            activate_after_bind = self._bootstrap_in_progress
             self._bootstrap_in_progress = False
             exit_requested = self._exit_requested
         if exit_requested:
             shell.exit_application()
+        elif activate_after_bind:
+            # The renderer exists only because an explicit open request claimed
+            # the deferred bootstrap. Preserve that activation intent across the
+            # renderer-creation boundary instead of degrading it to visibility.
+            shell.show_window()
         return True
 
     def mark_initial_open_failed(self) -> None:

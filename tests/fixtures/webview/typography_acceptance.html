@@ -18,9 +18,14 @@
         .acceptance-rules { display: grid; gap: 5px; }
         .acceptance-rules .rules-row { grid-template-columns: auto minmax(0, 1fr); }
         .acceptance-timeline { width: 100%; }
+        .acceptance-toolbar { margin-bottom: 0; }
         .acceptance-settings { width: 180px; padding: 5px; }
         .acceptance-settings button { width: 100%; justify-content: flex-start; }
         .acceptance-autocomplete { position: static; display: block; width: 100%; max-height: none; }
+        .acceptance-settings-content { width: 100%; padding: 0; overflow: visible; }
+        .responsive-sample-stack { display: grid; gap: 8px; }
+        .responsive-sample-stack .toolbar { margin-bottom: 0; }
+        #responsive-autocomplete-menu { display: block; }
         #typography-report { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
         @media (max-width: 760px) {
             .acceptance-grid { grid-template-columns: 1fr; }
@@ -51,6 +56,60 @@
                 </div>
             </section>
         </div>
+
+        <section class="surface acceptance-card">
+            <h2>工具栏混排</h2>
+            <div class="toolbar acceptance-toolbar" id="sample-toolbar">
+                <input id="sample-toolbar-date" class="date-control" type="date" value="2026-08-25" aria-label="日期">
+                <button id="sample-toolbar-today" type="button">今日</button>
+                <label id="sample-toolbar-label" for="sample-toolbar-project">项目</label>
+                <select id="sample-toolbar-project" class="project-filter-control"><option>全部项目</option></select>
+            </div>
+        </section>
+
+        <section class="surface acceptance-card">
+            <h2>窄窗口布局</h2>
+            <div class="responsive-sample-stack">
+                <div id="responsive-statistics-toolbar" class="toolbar statistics-toolbar">
+                    <div id="responsive-statistics-date-range" class="statistics-date-range" aria-label="统计日期范围">
+                        <div class="statistics-date-editor"><div class="statistics-date-inputs">
+                            <span class="statistics-date-control-shell"><input class="date-control statistics-date-control" type="date" value="2026-08-24" data-empty="false" aria-label="开始日期"></span>
+                            <span aria-hidden="true">至</span>
+                            <span class="statistics-date-control-shell"><input class="date-control statistics-date-control" type="date" value="2026-08-27" data-empty="false" aria-label="结束日期"></span>
+                            <button type="button">应用</button>
+                        </div></div>
+                    </div>
+                    <label id="responsive-statistics-project-label" for="statistics-project-filter">项目</label>
+                    <select id="statistics-project-filter" class="project-filter-control" hidden><option>全部项目</option></select>
+                    <span id="responsive-statistics-filter" class="project-autocomplete-shell project-autocomplete-filter">
+                        <input id="statistics-project-filter-input" class="project-autocomplete-input" value="全部项目" aria-label="项目">
+                        <div id="responsive-autocomplete-menu" class="project-autocomplete-menu"><button class="project-autocomplete-option" type="button"><span class="project-autocomplete-name">26IP0165 Miragene项目</span><span class="project-autocomplete-description">IP Litigation 中文描述</span></button></div>
+                    </span>
+                    <span class="toolbar-spacer"></span>
+                    <div id="responsive-quick-ranges" class="quick-ranges"><button type="button">今日</button><button type="button">本周</button><button type="button">本月</button><button type="button">全部</button></div>
+                </div>
+
+                <div id="responsive-timeline-toolbar" class="toolbar timeline-toolbar">
+                    <div id="responsive-timeline-date-controls" class="control-group timeline-date-controls"><button type="button">‹</button><input class="date-control" type="date" value="2026-08-27" aria-label="日期"><button type="button">›</button></div>
+                    <button id="timeline-today-btn" type="button">今日</button>
+                    <label id="responsive-timeline-project-label" for="timeline-project-filter">项目</label>
+                    <select id="timeline-project-filter" class="project-filter-control" hidden><option>全部项目</option></select>
+                    <span id="responsive-timeline-filter" class="project-autocomplete-shell project-autocomplete-filter"><input id="timeline-project-filter-input" class="project-autocomplete-input" value="全部项目" aria-label="项目"></span>
+                </div>
+
+                <div id="responsive-rules-toolbar" class="toolbar rules-toolbar">
+                    <input id="rules-search-input" type="search" value="项目" aria-label="搜索项目或规则">
+                    <span class="toolbar-spacer"></span>
+                    <label id="responsive-rules-sort-label" for="rules-sort-select">排序</label>
+                    <select id="rules-sort-select"><option>最近使用</option></select>
+                </div>
+
+                <div class="settings-content acceptance-settings-content">
+                    <label id="responsive-setting-row" class="setting-row"><span id="responsive-setting-copy"><strong>开机自启动</strong></span><span id="responsive-setting-toggle" class="toggle-wrap"><span class="toggle-status">开启</span><input type="checkbox" checked aria-label="开机自启动"></span></label>
+                    <article id="settings-storage-card" class="setting-row"><span><strong>本地数据</strong></span><span id="responsive-storage-path" class="settings-local-data-path">C:\Users\yi.sun\AppData\Local\WorkTrace\data\very-long-folder-name</span></article>
+                </div>
+            </div>
+        </section>
 
         <section class="surface acceptance-card">
             <h2>时间详情</h2>
@@ -86,11 +145,47 @@
                 fontWeight: style.fontWeight,
                 fontSize: style.fontSize,
                 lineHeight: style.lineHeight,
+                color: style.color,
                 width: node.getBoundingClientRect().width,
                 height: node.getBoundingClientRect().height,
                 overflowX: node.scrollWidth > node.clientWidth + 1,
                 overflowY: node.scrollHeight > node.clientHeight + 1
             };
+        }
+
+        function rect(id) {
+            return document.getElementById(id).getBoundingClientRect();
+        }
+
+        function sameRow(leftId, rightId) {
+            var left = rect(leftId);
+            var right = rect(rightId);
+            var leftCenter = left.top + left.height / 2;
+            var rightCenter = right.top + right.height / 2;
+            return Math.abs(leftCenter - rightCenter) <= 3;
+        }
+
+        function contained(childId, parentId) {
+            var child = rect(childId);
+            var parent = rect(parentId);
+            return child.left >= parent.left - 1
+                && child.right <= parent.right + 1
+                && child.top >= parent.top - 1
+                && child.bottom <= parent.bottom + 1;
+        }
+
+        function below(upperId, lowerId) {
+            return rect(lowerId).top >= rect(upperId).bottom - 1;
+        }
+
+        function horizontallyInsideViewport(id) {
+            var box = rect(id);
+            return box.left >= -1 && box.right <= window.innerWidth + 1;
+        }
+
+        function noHorizontalOverflow(id) {
+            var node = document.getElementById(id);
+            return node.scrollWidth <= node.clientWidth + 1;
         }
 
         Promise.resolve(document.fonts && document.fonts.ready).then(function () {
@@ -104,25 +199,62 @@
                 "sample-timeline-project",
                 "sample-settings"
             ];
+            var toolbarIds = [
+                "sample-toolbar-date",
+                "sample-toolbar-today",
+                "sample-toolbar-label",
+                "sample-toolbar-project"
+            ];
             var samples = {};
-            ids.forEach(function (id) { samples[id] = snapshot(id); });
+            ids.concat(toolbarIds).forEach(function (id) { samples[id] = snapshot(id); });
             var bodyStyle = getComputedStyle(document.body);
             var fontAvailable = !document.fonts || document.fonts.check('13px "Microsoft YaHei UI"', "中文ABC123");
             var expectedFamily = bodyStyle.fontFamily.indexOf("Microsoft YaHei UI") !== -1;
             var expectedBold = ["sample-heading", "sample-project-title", "sample-timeline-project", "sample-settings"].every(function (id) {
                 return samples[id].fontWeight === "700";
             });
+            var toolbarBaseline = samples["sample-toolbar-label"];
+            var toolbarTypographyConsistent = toolbarIds.every(function (id) {
+                var sample = samples[id];
+                return sample.fontFamily === toolbarBaseline.fontFamily
+                    && sample.fontSize === toolbarBaseline.fontSize
+                    && sample.fontWeight === toolbarBaseline.fontWeight
+                    && sample.color === toolbarBaseline.color;
+            }) && toolbarBaseline.color === bodyStyle.color;
             var noUnexpectedOverflow = ids.every(function (id) {
                 return !samples[id].overflowY;
             });
+            var compactLayoutExpected = window.matchMedia("(max-width: 767px)").matches;
+            var responsiveLayoutConsistent = !compactLayoutExpected || [
+                sameRow("responsive-statistics-project-label", "responsive-statistics-filter"),
+                below("responsive-statistics-date-range", "responsive-statistics-project-label"),
+                below("responsive-statistics-filter", "responsive-quick-ranges"),
+                contained("responsive-statistics-filter", "responsive-statistics-toolbar"),
+                noHorizontalOverflow("responsive-statistics-toolbar"),
+                sameRow("responsive-timeline-project-label", "responsive-timeline-filter"),
+                below("responsive-timeline-date-controls", "responsive-timeline-project-label"),
+                contained("responsive-timeline-filter", "responsive-timeline-toolbar"),
+                noHorizontalOverflow("responsive-timeline-toolbar"),
+                sameRow("responsive-rules-sort-label", "rules-sort-select"),
+                below("rules-search-input", "responsive-rules-sort-label"),
+                contained("rules-sort-select", "responsive-rules-toolbar"),
+                noHorizontalOverflow("responsive-rules-toolbar"),
+                sameRow("responsive-setting-copy", "responsive-setting-toggle"),
+                contained("responsive-setting-toggle", "responsive-setting-row"),
+                contained("responsive-storage-path", "settings-storage-card"),
+                horizontallyInsideViewport("responsive-autocomplete-menu")
+            ].every(Boolean);
             var report = {
-                pass: Boolean(fontAvailable && expectedFamily && expectedBold && noUnexpectedOverflow),
+                pass: Boolean(fontAvailable && expectedFamily && expectedBold && toolbarTypographyConsistent && noUnexpectedOverflow && responsiveLayoutConsistent),
                 fontAvailable: fontAvailable,
                 bodyFontFamily: bodyStyle.fontFamily,
                 fontSynthesis: bodyStyle.fontSynthesis,
                 expectedFamily: expectedFamily,
                 expectedBold: expectedBold,
+                toolbarTypographyConsistent: toolbarTypographyConsistent,
                 noUnexpectedOverflow: noUnexpectedOverflow,
+                compactLayoutExpected: compactLayoutExpected,
+                responsiveLayoutConsistent: responsiveLayoutConsistent,
                 devicePixelRatio: window.devicePixelRatio,
                 viewport: { width: window.innerWidth, height: window.innerHeight },
                 samples: samples

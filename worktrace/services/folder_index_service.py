@@ -15,6 +15,7 @@ from ..data_generation_repository import (
 from ..db import dict_rows, get_connection, get_db_path, now_str
 from ..path_utils import normalize_path_key
 from ..resources.title_parsing import normalize_file_name
+from ..retry_state import RetryEpisode
 from ..write_gate import DATABASE_WRITE_GATE
 from . import (
     folder_index_maintenance_service,
@@ -317,36 +318,48 @@ def run_folder_index_worker(
 ) -> None:
     """Run iterations only; AppRuntime owns thread started/stopped state."""
 
+    retry_episode = RetryEpisode(
+        initial_delay_seconds=_WORKER_IDLE_SECONDS,
+        max_delay_seconds=30.0,
+    )
     logging.info("folder index worker loop enter")
     next_hot_refresh_at = 0.0
-    try:
-        ensure_index_states_for_folder_rules()
-        recover_interrupted_indexes()
-        # Path existence validation is sensitive filesystem observation. Defer
-        # validate_ready_indexes until the privacy gate allows sensitive
-        # runtime. Database-internal state recovery above is not sensitive.
-        if privacy_gate_service.is_sensitive_runtime_allowed():
-            validate_ready_indexes(stop_event)
-    except Exception:
-        logging.exception("folder index startup validation failed")
-        health.failed("folder_index_startup_failed")
-    else:
-        health.succeeded()
+    startup_reconciliation_pending = True
     while not stop_event.is_set():
+        if DATABASE_WRITE_GATE.writes_blocked():
+            health.maintenance_paused(True)
+            _wait_for_worker()
+            continue
+        health.maintenance_paused(False)
+
+        # Sensitive filesystem observation requires the privacy gate to be
+        # allowed. Database reconciliation is intentionally kept behind the
+        # same gate so startup work cannot race maintenance and then proceed to
+        # validation in a different lifecycle phase.
+        if not privacy_gate_service.is_sensitive_runtime_allowed():
+            health.maintenance_paused(True)
+            _wait_for_worker()
+            continue
+        health.maintenance_paused(False)
+
         try:
-            if DATABASE_WRITE_GATE.writes_blocked():
-                health.maintenance_paused(True)
+            if startup_reconciliation_pending:
+                ensure_index_states_for_folder_rules()
+                recover_interrupted_indexes()
+                validate_ready_indexes(stop_event)
+                startup_reconciliation_pending = False
+                recovery = retry_episode.succeeded()
+                health.succeeded()
+                if recovery.recovered:
+                    logging.info(
+                        "folder index worker recovered code=%s attempts=%s elapsed_seconds=%.1f",
+                        recovery.code,
+                        recovery.attempts,
+                        recovery.elapsed_seconds,
+                    )
                 _wait_for_worker()
                 continue
-            health.maintenance_paused(False)
-            # Sensitive filesystem observation requires the privacy gate to be
-            # allowed. When it is not, skip directory scanning entirely and
-            # report a paused state without surfacing a build error.
-            if not privacy_gate_service.is_sensitive_runtime_allowed():
-                health.maintenance_paused(True)
-                _wait_for_worker()
-                continue
-            health.maintenance_paused(False)
+
             ensure_index_states_for_folder_rules()
             _retry_pending_gc()
 
@@ -368,12 +381,38 @@ def run_folder_index_worker(
                     # A ready index remains authoritative even if post-refresh
                     # project convergence fails; retry on a later rebuild.
                     logging.exception("folder index post-refresh reconciliation failed")
+            recovery = retry_episode.succeeded()
             health.succeeded()
+            if recovery.recovered:
+                logging.info(
+                    "folder index worker recovered code=%s attempts=%s elapsed_seconds=%.1f",
+                    recovery.code,
+                    recovery.attempts,
+                    recovery.elapsed_seconds,
+                )
             _wait_for_worker()
         except Exception:
-            logging.exception("folder index worker error")
-            health.failed("folder_index_iteration_failed")
-            _wait_for_worker()
+            code = (
+                "folder_index_startup_failed"
+                if startup_reconciliation_pending
+                else "folder_index_iteration_failed"
+            )
+            retry = retry_episode.failed(code)
+            health.failed(code)
+            if retry.detail_log_due:
+                logging.warning(
+                    "folder index worker failure code=%s",
+                    code,
+                    exc_info=True,
+                )
+            elif retry.summary_log_due:
+                logging.warning(
+                    "folder index worker failure continues code=%s consecutive=%s elapsed_seconds=%.1f",
+                    code,
+                    retry.attempt,
+                    retry.elapsed_seconds,
+                )
+            _wait_for_worker(max(_WORKER_IDLE_SECONDS, retry.delay_seconds))
     logging.info("folder index worker loop exit")
 
 
@@ -381,8 +420,13 @@ def wake_folder_index_worker() -> None:
     _WORKER_WAKE_EVENT.set()
 
 
-def _wait_for_worker() -> None:
-    _WORKER_WAKE_EVENT.wait(_WORKER_IDLE_SECONDS)
+def _wait_for_worker(timeout_seconds: float | None = None) -> None:
+    timeout = (
+        _WORKER_IDLE_SECONDS
+        if timeout_seconds is None
+        else max(0.0, float(timeout_seconds))
+    )
+    _WORKER_WAKE_EVENT.wait(timeout)
     _WORKER_WAKE_EVENT.clear()
 
 

@@ -9,6 +9,7 @@ from collections import deque
 from typing import TYPE_CHECKING, Callable, Protocol
 
 from ..services import database_maintenance_service, privacy_gate_service
+from ..retry_state import RetryEpisode
 from ..services.settings_service import get_bool_setting
 
 if TYPE_CHECKING:
@@ -25,6 +26,12 @@ class CollectorRuntimeCapability(Protocol):
     owns_application_instance: bool
 
     def is_collection_running_for_maintenance(self) -> bool: ...
+
+    def collection_liveness_snapshot(self) -> dict[str, object]: ...
+
+    def mark_collector_recovery_required(self, reason: str) -> None: ...
+
+    def diagnose_stalled_collector(self) -> None: ...
 
     def start_collector(
         self,
@@ -78,8 +85,6 @@ class CollectorSupervisor:
             self._privacy_authorized = bool(authorized)
 
     def prepare_after_privacy(self, *, pre_start: bool) -> None:
-        """Privacy participant hook; AppRuntime already owns and runs the worker."""
-
         del pre_start
 
     def run_worker(
@@ -88,28 +93,67 @@ class CollectorSupervisor:
         *,
         health: "WorkerHealthReporter",
     ) -> None:
-        """Run the supervision loop inside AppRuntime's worker registry."""
-
         logging.info("collector supervisor worker loop enter")
+        retry_episode = RetryEpisode(
+            initial_delay_seconds=self._poll_seconds,
+            max_delay_seconds=30.0,
+            monotonic_func=self._monotonic,
+        )
         health.succeeded()
-        while not stop_event.wait(self._poll_seconds):
+        delay = self._poll_seconds
+        while not stop_event.wait(delay):
+            delay = self._poll_seconds
             if self._runtime.stop_event.is_set():
                 break
             try:
                 self.check_once()
             except Exception:
+                retry = retry_episode.failed("collector_supervisor_iteration_failed")
                 health.failed("collector_supervisor_iteration_failed")
-                logging.exception("collector supervisor check failed")
+                if retry.detail_log_due:
+                    logging.warning("collector supervisor check failed", exc_info=True)
+                elif retry.summary_log_due:
+                    logging.warning(
+                        "collector supervisor failure continues consecutive=%s elapsed_seconds=%.1f",
+                        retry.attempt,
+                        retry.elapsed_seconds,
+                    )
+                delay = max(self._poll_seconds, retry.delay_seconds)
             else:
+                recovery = retry_episode.succeeded()
                 health.succeeded()
+                if recovery.recovered:
+                    logging.info(
+                        "collector supervisor recovered attempts=%s elapsed_seconds=%.1f",
+                        recovery.attempts,
+                        recovery.elapsed_seconds,
+                    )
         logging.info("collector supervisor worker loop exit")
+
+    def _liveness(self) -> dict[str, object]:
+        reader = getattr(self._runtime, "collection_liveness_snapshot", None)
+        if not callable(reader):
+            return {}
+        return dict(reader())
 
     def check_once(self) -> bool:
         """Run one bounded liveness check; return True only when restart is attempted."""
 
         if not self._restart_allowed():
             return False
+
+        liveness = self._liveness()
+        state = str(liveness.get("state") or "")
+        if state == "recovery_required":
+            return False
+        if state == "stale":
+            diagnose = getattr(self._runtime, "diagnose_stalled_collector", None)
+            if callable(diagnose):
+                diagnose()
+            return False
         if self._runtime.is_collection_running_for_maintenance():
+            # The thread still owns the Collector writer even when its progress
+            # lease is degraded/stale. Never spawn a second writer around it.
             return False
 
         now = self._monotonic()
@@ -124,6 +168,13 @@ class CollectorSupervisor:
                         int(self._restart_window_seconds),
                     )
                     self._rate_limit_logged_until = limit_until
+                breaker = getattr(
+                    self._runtime,
+                    "mark_collector_recovery_required",
+                    None,
+                )
+                if callable(breaker):
+                    breaker("restart_rate_limited")
                 return False
             self._restart_attempts.append(now)
 
@@ -133,6 +184,12 @@ class CollectorSupervisor:
         if bool(result.get("ok")):
             logging.warning("collector supervisor restored stopped collector")
         else:
+            if bool(result.get("retryable")):
+                # A transient crash-reconciliation lock should not consume the
+                # fatal restart budget. The next supervisor turn may retry it.
+                with self._lock:
+                    if self._restart_attempts:
+                        self._restart_attempts.pop()
             logging.error(
                 "collector supervisor restart failed error=%s",
                 str(result.get("error") or "collector_start_failed"),

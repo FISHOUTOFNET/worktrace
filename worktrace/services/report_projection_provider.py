@@ -428,8 +428,8 @@ def get_day_projection(report_date: str) -> DayProjection:
     return _get_via_standalone(report_date)
 
 
-def _get_via_page_context(context, report_date: str) -> DayProjection:
-    """Read path inside a page_read_scope — uses context's connection."""
+def _get_durable_via_page_context(context, report_date: str) -> DayProjection:
+    """Durable read path inside a page_read_scope — uses context's connection."""
     source_version = ProjectionSourceVersion(
         database_key=context.database_key,
         report_date=report_date,
@@ -468,6 +468,43 @@ def _get_via_page_context(context, report_date: str) -> DayProjection:
     )
     context.day_projection_cache[report_date] = projection
     return projection
+
+
+def _get_via_page_context(context, report_date: str) -> DayProjection:
+    """Return request-local effective topology over a cached durable day."""
+
+    cached = context.effective_day_projection_cache.get(report_date)
+    if cached is not None:
+        record_cache_hit(True)
+        return cached
+
+    durable = _get_durable_via_page_context(context, report_date)
+    from .report_effective_projection_service import build_effective_read_computation
+
+    computation = build_effective_read_computation(
+        context,
+        report_date,
+        durable.entries,
+    )
+    if computation is None:
+        effective = durable
+    else:
+        effective = materialize_day_projection(
+            computation,
+            durable.source_version,
+            report_date=report_date,
+        )
+    context.effective_day_projection_cache[report_date] = effective
+    return effective
+
+
+def get_durable_day_projection(report_date: str) -> DayProjection:
+    """Return canonical durable structure without request-local live compaction."""
+
+    context = current_page_read_context()
+    if context is not None:
+        return _get_durable_via_page_context(context, report_date)
+    return _get_via_standalone(report_date)
 
 
 def _get_via_standalone(report_date: str) -> DayProjection:
@@ -679,6 +716,7 @@ __all__ = [
     "cache_size",
     "clear_cache",
     "get_day_projection",
+    "get_durable_day_projection",
     "get_wait_timeout",
     "get_waiter_count",
     "in_flight_count",

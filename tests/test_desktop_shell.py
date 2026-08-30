@@ -9,9 +9,16 @@ from worktrace.desktop.shell import DesktopShellController, ShellState
 
 
 class FakeWindow:
-    def __init__(self, *, fail_hide: bool = False, focus: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        fail_hide: bool = False,
+        fail_destroy: bool = False,
+        focus: bool = True,
+    ) -> None:
         self.calls: list[str] = []
         self.fail_hide = fail_hide
+        self.fail_destroy = fail_destroy
         self.focus = focus
         self.native = None
 
@@ -28,6 +35,8 @@ class FakeWindow:
 
     def destroy(self) -> None:
         self.calls.append("destroy")
+        if self.fail_destroy:
+            raise RuntimeError("destroy failed")
 
     def evaluate_js(self, source: str) -> None:
         self.calls.append(source)
@@ -69,9 +78,11 @@ def _shell(
     initial_hidden: bool = False,
     tray_starts: bool = True,
     fail_hide: bool = False,
+    fail_destroy: bool = False,
 ) -> tuple[DesktopShellController, FakeWindow, FakeTray, ManualWindowActions]:
     window = FakeWindow(
         fail_hide=fail_hide,
+        fail_destroy=fail_destroy,
         focus=not initial_hidden,
     )
     tray = FakeTray(starts=tray_starts)
@@ -141,7 +152,7 @@ def test_show_request_cancels_pending_hide() -> None:
     assert tray.notifications == 0
 
 
-def test_exit_request_cancels_pending_hide() -> None:
+def test_exit_request_cancels_pending_hide_and_terminalizes_shell() -> None:
     shell, window, tray, actions = _shell()
     shell.start()
     shell.handle_window_closing()
@@ -152,6 +163,52 @@ def test_exit_request_cancels_pending_hide() -> None:
     assert "hide" not in window.calls
     assert window.calls.count("destroy") == 1
     assert shell.state is ShellState.EXITING
+    assert tray.stop_calls == 1
+
+    shell.stop()
+    assert tray.stop_calls == 1
+
+
+def test_exit_stops_tray_only_after_main_window_destroy_returns() -> None:
+    shell, window, tray, _actions = _shell()
+    operations: list[str] = []
+
+    def destroy() -> None:
+        operations.append("destroy")
+
+    def stop() -> None:
+        operations.append("tray_stop")
+        tray.stop_calls += 1
+
+    window.destroy = destroy
+    tray.stop = stop
+    shell.start()
+
+    assert shell.exit_application() is True
+
+    assert operations == ["destroy", "tray_stop"]
+    assert tray.stop_calls == 1
+
+
+def test_failed_exit_destroy_keeps_tray_and_allows_retry() -> None:
+    shell, window, tray, actions = _shell(fail_destroy=True)
+    shell.start()
+
+    assert shell.exit_application() is False
+    actions.run_all()
+
+    assert window.calls.count("destroy") == 1
+    assert tray.stop_calls == 0
+    assert shell.state is ShellState.EXITING
+
+    window.fail_destroy = False
+    assert shell.exit_application() is True
+    actions.run_all()
+
+    assert window.calls.count("destroy") == 2
+    assert tray.stop_calls == 1
+
+    shell.stop()
     assert tray.stop_calls == 1
 
 
@@ -261,10 +318,13 @@ def test_tray_exit_only_requests_one_real_window_exit() -> None:
     shell, window, tray, actions = _shell()
     shell.start()
 
-    shell.exit_application()
+    assert shell.exit_application() is True
     assert shell.handle_window_closing() is True
-    shell.exit_application()
+    assert shell.exit_application() is False
     actions.run_all()
 
     assert window.calls.count("destroy") == 1
+    assert tray.stop_calls == 1
+
+    shell.stop()
     assert tray.stop_calls == 1

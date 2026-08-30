@@ -134,7 +134,6 @@ def test_timeline_keeps_editor_fixed_and_scrolls_only_activity_list():
     assert "min-height: 0" in activity_list
     assert "overflow: auto" in activity_list
 
-    assert ".timeline-inspector.drawer-open { display: flex; }" in final
     assert index.index("styles.css?") < index.index("ui_components.css?")
 
 

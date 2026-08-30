@@ -1,9 +1,11 @@
 """Python capability bridge exposed to the WebView frontend via pywebview."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from ..api.application_services import ApplicationServices
+from .bridge_common import _GENERIC_ERROR
 from .bridge_dialogs import BridgeDialogMixin
 from .bridge_fd_work import FDWorkBridgeMixin
 from .bridge_overview import OverviewBridgeMixin
@@ -12,6 +14,8 @@ from .bridge_rules import ProjectRulesBridgeMixin
 from .bridge_settings import SettingsBridgeMixin
 from .bridge_statistics import StatisticsBridgeMixin
 from .bridge_timeline import TimelineBridgeMixin
+
+logger = logging.getLogger(__name__)
 
 SHIPPING_METHODS = frozenset(
     {
@@ -25,8 +29,9 @@ SHIPPING_METHODS = frozenset(
         "create_project_for_rules", "create_project_keyword_rule",
         "delete_project_folder_rule", "delete_project_for_rules",
         "delete_project_keyword_rule", "export_encrypted_backup",
-        "export_statistics_csv", "get_fd_work_status", "get_first_run_notice", "get_overview",
-        "get_project_rules", "get_refresh_state", "get_settings_privacy_status",
+        "export_statistics_csv", "get_application_metadata", "get_fd_work_status",
+        "get_first_run_notice", "get_overview", "get_project_rules",
+        "get_refresh_state", "get_settings_privacy_status",
         "get_statistics_export_summary", "get_status", "get_timeline",
         "get_timeline_session_activity_summary", "hide_timeline_session",
         "hide_timeline_session_activity", "import_encrypted_backup",
@@ -84,6 +89,16 @@ class WebViewBridge(
 
     def set_window(self, window: Any) -> None:
         self._window = window
+
+    def get_application_metadata(self) -> dict[str, Any]:
+        try:
+            return {
+                "ok": True,
+                "application": dict(self._services.metadata.get_application_metadata()),
+            }
+        except Exception:
+            logger.exception("webview bridge application metadata read failed")
+            return dict(_GENERIC_ERROR)
 
     def _runtime(self):
         return self._services.runtime_view

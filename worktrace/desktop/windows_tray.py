@@ -19,6 +19,8 @@ class WindowsTrayHost:
     _WM_STOP = 0x0400 + 21
     _CMD_OPEN = 1001
     _CMD_EXIT = 1002
+    _RESTART_INITIAL_SECONDS = 0.25
+    _RESTART_MAX_SECONDS = 5.0
 
     def __init__(
         self,
@@ -42,20 +44,25 @@ class WindowsTrayHost:
         self._active_icon_handle = None
         self._inactive_icon_handle = None
         self._icon_handle = None
+        self._icon_registered = False
         self._collection_active = False
         self._taskbar_created = 0
         self._deleted = False
 
     def start(self) -> bool:
         with self._lock:
-            if self._thread is not None:
-                return self._ready.is_set() and not self._failed.is_set()
+            if self._thread is not None and self._thread.is_alive():
+                return self.can_restore_window()
+            self._thread = None
             if not self._icon_path.is_file():
                 logger.error("tray icon missing: %s", self._icon_path)
                 self._failed.set()
                 return False
+            self._ready.clear()
+            self._failed.clear()
             self._stop_requested.clear()
             self._session_end_requested.clear()
+            self._icon_registered = False
             self._thread = threading.Thread(
                 target=self._run,
                 name="WorkTraceWindowsTray",
@@ -65,14 +72,33 @@ class WindowsTrayHost:
         if not self._ready.wait(5.0):
             logger.error("tray initialization timed out")
             self._failed.set()
-        return self._ready.is_set() and not self._failed.is_set()
+        return self.can_restore_window()
+
+    def is_running(self) -> bool:
+        """Compatibility alias for the user-visible restore capability."""
+
+        return self.can_restore_window()
+
+    def can_restore_window(self) -> bool:
+        """Return True only while Explorer has a live restore entry point."""
+
+        with self._lock:
+            return bool(
+                self._thread is not None
+                and self._thread.is_alive()
+                and self._ready.is_set()
+                and not self._failed.is_set()
+                and not self._stop_requested.is_set()
+                and self._hwnd
+                and self._icon_handle
+                and self._icon_registered
+            )
 
     def stop(self) -> None:
         self._stop_requested.set()
         with self._lock:
             thread = self._thread
             hwnd = self._hwnd
-            self._thread = None
         if thread is None:
             return
         if hwnd:
@@ -84,6 +110,9 @@ class WindowsTrayHost:
                 logger.warning("tray stop post failed", exc_info=True)
         if thread is not threading.current_thread():
             thread.join(timeout=5.0)
+        with self._lock:
+            if self._thread is thread and not thread.is_alive():
+                self._thread = None
 
     def set_collection_active(self, active: bool) -> None:
         """Switch the notification icon without changing collector ownership."""
@@ -94,10 +123,11 @@ class WindowsTrayHost:
                 return
             self._collection_active = active
             hwnd = self._hwnd
+            registered = self._icon_registered
             icon = (
                 self._active_icon_handle if active else self._inactive_icon_handle
             )
-            if not hwnd or not icon:
+            if not hwnd or not icon or not registered:
                 return
             self._icon_handle = icon
         try:
@@ -111,7 +141,8 @@ class WindowsTrayHost:
         with self._lock:
             hwnd = self._hwnd
             icon = self._icon_handle
-        if not hwnd or not icon:
+            registered = self._icon_registered
+        if not hwnd or not icon or not registered:
             return
         import win32gui
 
@@ -146,17 +177,24 @@ class WindowsTrayHost:
     def _add_icon(self) -> None:
         import win32gui
 
-        self._deleted = False
+        with self._lock:
+            self._deleted = False
+            self._icon_registered = False
         win32gui.Shell_NotifyIcon(win32gui.NIM_ADD, self._notify_data())
+        with self._lock:
+            self._icon_registered = True
 
     def _delete_icon(self) -> None:
-        if self._deleted or not self._hwnd:
-            return
-        self._deleted = True
+        with self._lock:
+            self._icon_registered = False
+            if self._deleted or not self._hwnd:
+                return
+            self._deleted = True
+            hwnd = self._hwnd
         try:
             import win32gui
 
-            win32gui.Shell_NotifyIcon(win32gui.NIM_DELETE, (self._hwnd, 0))
+            win32gui.Shell_NotifyIcon(win32gui.NIM_DELETE, (hwnd, 0))
         except Exception:
             logger.warning("tray icon deletion failed", exc_info=True)
 
@@ -166,6 +204,7 @@ class WindowsTrayHost:
             self._active_icon_handle = None
             self._inactive_icon_handle = None
             self._icon_handle = None
+            self._icon_registered = False
         try:
             import win32gui
 
@@ -178,76 +217,127 @@ class WindowsTrayHost:
             logger.debug("tray icon cleanup unavailable", exc_info=True)
 
     def _run(self) -> None:
+        restart_delay = self._RESTART_INITIAL_SECONDS
+        ever_ready = False
+        current_thread = threading.current_thread()
+        generation = 0
         try:
-            import win32api
-            import win32con
-            import win32gui
+            while not self._stop_requested.is_set():
+                unexpected_exit = False
+                generation += 1
+                try:
+                    import win32api
+                    import win32con
+                    import win32gui
 
-            self._taskbar_created = win32gui.RegisterWindowMessage("TaskbarCreated")
-            message_map = {
-                self._WM_TRAY: self._on_tray_message,
-                self._WM_STOP: self._on_stop,
-                win32con.WM_COMMAND: self._on_command,
-                win32con.WM_DESTROY: self._on_destroy,
-                win32con.WM_QUERYENDSESSION: self._on_query_end_session,
-                win32con.WM_ENDSESSION: self._on_end_session,
-                self._taskbar_created: self._on_taskbar_created,
-            }
-            class_name = f"WorkTraceTrayHost_{id(self)}"
-            wc = win32gui.WNDCLASS()
-            wc.hInstance = win32api.GetModuleHandle(None)
-            wc.lpszClassName = class_name
-            wc.lpfnWndProc = message_map
-            win32gui.RegisterClass(wc)
-            self._hwnd = win32gui.CreateWindow(
-                class_name,
-                "Trace Tray Host",
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                wc.hInstance,
-                None,
-            )
-            self._active_icon_handle = load_icon_variant(
-                self._icon_path,
-                active=True,
-            )
-            self._inactive_icon_handle = load_icon_variant(
-                self._icon_path,
-                active=False,
-            )
-            with self._lock:
-                self._icon_handle = (
-                    self._active_icon_handle
-                    if self._collection_active
-                    else self._inactive_icon_handle
+                    self._taskbar_created = win32gui.RegisterWindowMessage("TaskbarCreated")
+                    message_map = {
+                        self._WM_TRAY: self._on_tray_message,
+                        self._WM_STOP: self._on_stop,
+                        win32con.WM_COMMAND: self._on_command,
+                        win32con.WM_DESTROY: self._on_destroy,
+                        win32con.WM_QUERYENDSESSION: self._on_query_end_session,
+                        win32con.WM_ENDSESSION: self._on_end_session,
+                        self._taskbar_created: self._on_taskbar_created,
+                    }
+                    # Registered Win32 classes survive window destruction for the
+                    # process lifetime. A recovery attempt therefore needs a new
+                    # class name instead of re-registering the previous one.
+                    class_name = f"WorkTraceTrayHost_{id(self)}_{generation}"
+                    wc = win32gui.WNDCLASS()
+                    wc.hInstance = win32api.GetModuleHandle(None)
+                    wc.lpszClassName = class_name
+                    wc.lpfnWndProc = message_map
+                    win32gui.RegisterClass(wc)
+                    self._hwnd = win32gui.CreateWindow(
+                        class_name,
+                        "Trace Tray Host",
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        wc.hInstance,
+                        None,
+                    )
+                    self._active_icon_handle = load_icon_variant(
+                        self._icon_path,
+                        active=True,
+                    )
+                    self._inactive_icon_handle = load_icon_variant(
+                        self._icon_path,
+                        active=False,
+                    )
+                    with self._lock:
+                        self._icon_handle = (
+                            self._active_icon_handle
+                            if self._collection_active
+                            else self._inactive_icon_handle
+                        )
+                    self._add_icon()
+                    ever_ready = True
+                    restart_delay = self._RESTART_INITIAL_SECONDS
+                    self._ready.set()
+                    if self._stop_requested.is_set():
+                        self._delete_icon()
+                        win32gui.DestroyWindow(self._hwnd)
+                    else:
+                        win32gui.PumpMessages()
+                        unexpected_exit = not self._stop_requested.is_set()
+                except Exception:
+                    if not ever_ready:
+                        logger.exception("tray host failed")
+                        self._failed.set()
+                        self._ready.set()
+                        return
+                    logger.exception("tray host runtime failed; scheduling restart")
+                    unexpected_exit = True
+                finally:
+                    self._delete_icon()
+                    self._destroy_icon_handles()
+                    with self._lock:
+                        self._hwnd = None
+
+                if not unexpected_exit or self._stop_requested.is_set():
+                    return
+                logger.warning(
+                    "tray host restart scheduled delay_seconds=%.2f",
+                    restart_delay,
                 )
-            self._add_icon()
-            self._ready.set()
-            if self._stop_requested.is_set():
-                self._delete_icon()
-                win32gui.DestroyWindow(self._hwnd)
-            else:
-                win32gui.PumpMessages()
-        except Exception:
-            logger.exception("tray host failed")
-            self._failed.set()
-            self._ready.set()
+                if self._stop_requested.wait(restart_delay):
+                    return
+                restart_delay = min(
+                    restart_delay * 2.0,
+                    self._RESTART_MAX_SECONDS,
+                )
         finally:
-            self._delete_icon()
-            self._destroy_icon_handles()
             with self._lock:
                 self._hwnd = None
+                self._icon_registered = False
+                if self._thread is current_thread:
+                    self._thread = None
+
+    def _request_open_from_user(self, hwnd: int) -> object:
+        """Keep Explorer's explicit tray gesture in the foreground handoff path."""
+
+        try:
+            import win32gui
+
+            # TrackPopupMenu already requires this pattern. Do the same for every
+            # open command so the shell's immediate main-window activation runs
+            # while this process still owns the user-initiated foreground turn.
+            win32gui.SetForegroundWindow(hwnd)
+        except Exception:
+            logger.debug("tray foreground handoff preparation failed", exc_info=True)
+        return self._on_open()
 
     def _on_tray_message(self, hwnd, _msg, _wparam, lparam):
         import win32con
 
         if lparam == win32con.WM_LBUTTONDBLCLK:
-            self._on_open()
+            self._request_open_from_user(hwnd)
         elif lparam == win32con.WM_RBUTTONUP:
             self._show_menu(hwnd)
         return 0
@@ -277,10 +367,10 @@ class WindowsTrayHost:
         finally:
             win32gui.DestroyMenu(menu)
 
-    def _on_command(self, _hwnd, _msg, wparam, _lparam):
+    def _on_command(self, hwnd, _msg, wparam, _lparam):
         command = int(wparam) & 0xFFFF
         if command == self._CMD_OPEN:
-            self._on_open()
+            self._request_open_from_user(hwnd)
         elif command == self._CMD_EXIT:
             self._on_exit()
         return 0
@@ -312,6 +402,10 @@ class WindowsTrayHost:
         return 0
 
     def _on_taskbar_created(self, _hwnd, _msg, _wparam, _lparam):
+        with self._lock:
+            # Explorer has rebuilt the notification area, so the previous
+            # registration is no longer a valid restore entry point.
+            self._icon_registered = False
         try:
             self._add_icon()
         except Exception:

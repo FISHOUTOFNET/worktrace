@@ -46,6 +46,17 @@ def test_retired_statistics_all_time_label_css_is_removed() -> None:
     assert ".statistics-all-time-label" not in styles
 
 
+def test_toolbar_labels_share_primary_control_text_layer() -> None:
+    styles = _read("styles.css")
+    toolbar_label = _block(styles, ".toolbar label")
+    field_label = _block(styles, ".field > span")
+
+    assert "color: var(--color-text);" in toolbar_label
+    assert "var(--color-text-secondary)" not in toolbar_label
+    assert "color: var(--color-text-secondary);" in field_label
+    assert "font-size: var(--font-size-sm);" in field_label
+
+
 def test_statistics_empty_date_copy_inherits_native_control_typography() -> None:
     final = _read("ui_components.css")
     shell = _block(final, ".statistics-date-control-shell")

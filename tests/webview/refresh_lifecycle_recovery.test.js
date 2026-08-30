@@ -4,9 +4,41 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
+function runtimeState(revision) {
+  return {
+    ok: true,
+    runtime: {
+      schema_version: 2,
+      surface: "overview",
+      scope_report_date: "2026-08-22",
+      live_report_date: "2026-08-22",
+      snapshot: { revision, id: `sample-${revision}` },
+      revisions: { structure: "structure-a", page: `page-${revision}` },
+      collector: { live_eligible: false, status: "running", paused: false, display: "记录中" },
+      clock: {
+        is_live: false,
+        duration_semantic: "static_closed",
+        display_span_id: `span-${revision}`,
+        stable_live_key_hash: `key-${revision}`,
+      },
+      current_activity: { active: true, activity_id: revision, status: "normal" },
+      generations: {
+        report_structure: 1,
+        classification_catalog: 1,
+        settings: 1,
+        privacy_catalog: 1,
+      },
+      database_replacement_epoch: 0,
+      runtime_consistent: true,
+      needs_full_refresh: false,
+    },
+  };
+}
+
 function harness() {
   let token = 0;
   let nextTimerId = 1;
+  let refreshState = null;
   const timers = [];
   const app = {
     currentPage: "overview",
@@ -32,7 +64,9 @@ function harness() {
     clearError() {},
     showGlobalAlert() {},
     clearGlobalAlert() {},
-    validateLiveClock() { return null; },
+    validateLiveClock(clock) {
+      return clock && typeof clock === "object" ? clock : null;
+    },
     recordLiveClockContractViolation() {},
     readLiveClockTarget() { return null; },
     clearLiveClockTarget() {},
@@ -45,6 +79,7 @@ function harness() {
     refreshPolicy: { entryGenerations: ["report_structure"], automaticGenerations: ["report_structure"], deferred: true },
     hasLoadedData: () => !!app.lastOverviewSnapshot,
     refreshEvidence: () => app.lastOverviewSnapshot || null,
+    runtimeRefreshIdentity: (runtime) => String(runtime && runtime.liveRevision || ""),
     onRefreshRequested: () => Promise.resolve(null),
     resetGeneration() {},
   };
@@ -53,6 +88,7 @@ function harness() {
     hasLoadedData: () => app.timelineLoaded === true,
     refreshEvidence: () => app.lastTimelineData || null,
     reportDate: () => app.timelineDate || null,
+    runtimeRefreshIdentity: (runtime) => String(runtime && runtime.liveRevision || ""),
     onRefreshRequested: () => Promise.resolve(null),
     resetGeneration() {},
   };
@@ -61,6 +97,7 @@ function harness() {
     hasLoadedData: () => app.statisticsLoaded === true,
     refreshEvidence: () => app.statisticsAcceptedPayload || null,
     automaticRefreshAllowed: () => true,
+    runtimeRefreshIdentity: (runtime) => String(runtime && runtime.liveRevision || ""),
     refreshScopeKey: () => {
       const selection = app.statisticsSelection || {};
       return `statistics|${selection.allTime === true ? "all" : "range"}|${selection.dateFrom || ""}|${selection.dateTo || ""}`;
@@ -121,7 +158,7 @@ function harness() {
   context.WorkTraceApp = app;
   context.pywebview = {
     api: {
-      get_refresh_state() { return Promise.resolve(null); },
+      get_refresh_state() { return Promise.resolve(refreshState); },
       get_status() {
         return Promise.resolve({ ok: true, status: "running", paused: false, display: "记录中" });
       },
@@ -149,7 +186,11 @@ function harness() {
     "utf8"
   );
   vm.runInNewContext(source, context, { filename: "init_fd_work_v5.js" });
-  return { app, timers };
+  return {
+    app,
+    timers,
+    setRefreshState(value) { refreshState = value; },
+  };
 }
 
 function pendingTimer(timers) {
@@ -203,6 +244,26 @@ test("generation reset releases Rules and Settings loading state", () => {
 
   assert.equal(app.rulesLoading, false);
   assert.equal(app.settingsLoading, false);
+});
+
+test("runtime identity changes dirty a fresh deferred page before scheduling recovery", async () => {
+  const { app, timers, setRefreshState } = harness();
+  app.acceptRefreshStateRuntime(runtimeState("A"));
+  app.lastOverviewSnapshot = { version: 1 };
+  app.overview.onRefreshRequested = () => {
+    app.lastOverviewSnapshot = { version: 2 };
+    return Promise.resolve({ ok: true });
+  };
+  await app.refreshActivePage(null, { navigation: true }, "overview");
+  assert.equal(app.pageNeedsRefresh("overview"), false);
+
+  setRefreshState(runtimeState("B"));
+  await app.runRevisionCheck();
+
+  assert.equal(app.pageNeedsRefresh("overview"), true);
+  const deferred = pendingTimer(timers);
+  assert.ok(deferred);
+  assert.equal(deferred.ms, 1500);
 });
 
 test("failed automatic Statistics refresh retries and recovers without a new generation", async () => {

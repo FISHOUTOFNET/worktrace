@@ -5,9 +5,10 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 function harness() {
+  let runtime = { liveRevision: "A", pageRevision: "page-A" };
   const elements = {
     "kpi-total": {},
-    "current-activity": {},
+    "current-activity": { disabled: false, onclick: null },
     "overview-project-bar": {
       hidden: false,
       innerHTML: "",
@@ -26,7 +27,9 @@ function harness() {
     validateLiveClock() { return null; },
     clearLiveClockTarget() {},
     renderDurationProjected() {},
-    renderCurrentActivityElement() {},
+    renderCurrentActivityElement(target, activity) {
+      if (target) target.renderedActivity = activity;
+    },
     formatCompactHours() { return "0h"; },
     formatDuration() { return "00:00:00"; },
     formatProjectLabel(name) { return name || ""; },
@@ -42,13 +45,14 @@ function harness() {
           ok: true,
           overview: bundle("requested"),
           date: "2026-08-23",
+          current_session: session("requested"),
           runtime: { schema_version: 2 },
         });
       },
     },
     handleResult(result) { return result; },
     acceptPagePayloadRuntime() { return true; },
-    liveRuntimeStore: { get() { return null; } },
+    liveRuntimeStore: { get() { return runtime; } },
     showError() {},
   };
   const window = { WorkTraceApp: App, document };
@@ -69,45 +73,65 @@ function harness() {
     context,
     { filename: "overview.js" }
   );
-  return { App };
+  return {
+    App,
+    elements,
+    setRuntime(value) { runtime = value; },
+  };
+}
+
+function session(marker) {
+  return {
+    marker,
+    projection_instance_key: `session-${marker}`,
+    start_time: "2026-08-23 09:00:00",
+  };
 }
 
 function bundle(marker) {
   return {
     marker,
     today_total_seconds: 0,
-    current_activity: {},
+    current_activity: { marker, active: true, status: "normal" },
+    current_session: session(marker),
     project_distribution: { total_seconds: 0, segments: [] },
     recent: [],
   };
 }
 
-test("Overview consumes live-only collection suppression once", () => {
+test("Overview authoritative snapshots are never suppressed", async () => {
   const { App } = harness();
-  App.overview.onRuntimeTransition({ source: "refresh-state", liveChanged: true });
 
-  App.showOverview(bundle("suppressed"));
-  assert.equal(App.lastOverviewSnapshot, undefined);
-  assert.equal(App.suppressNextOverviewCollectionRefresh, false);
+  App.showOverview(bundle("first"));
+  App.showOverview(bundle("second"));
+  assert.equal(App.lastOverviewSnapshot.marker, "second");
+  assert.equal(App.suppressNextOverviewCollectionRefresh, undefined);
 
-  App.showOverview(bundle("accepted"));
-  assert.equal(App.lastOverviewSnapshot.marker, "accepted");
+  await App.overview.onRefreshRequested({ automatic: true });
+  assert.equal(App.lastOverviewSnapshot.marker, "requested");
 });
 
-test("Overview structural and manual refreshes bypass live suppression", async () => {
-  const { App } = harness();
-  App.overview.onRuntimeTransition({ source: "refresh-state", liveChanged: true });
-  App.overview.onRuntimeTransition({
-    source: "refresh-state",
-    structureChanged: true,
-    liveChanged: true,
-  });
-  App.showOverview(bundle("structural"));
-  assert.equal(App.lastOverviewSnapshot.marker, "structural");
+test("Overview heartbeat overlay does not mutate the authoritative snapshot", () => {
+  const { App, elements, setRuntime } = harness();
+  App.showOverview(bundle("A"));
+  assert.equal(App.overviewCommittedRuntimeIdentity, "page-A");
+  assert.equal(elements["current-activity"].disabled, false);
+  assert.equal(typeof elements["current-activity"].onclick, "function");
 
-  App.overview.onRuntimeTransition({ source: "refresh-state", liveChanged: true });
-  await App.overview.onRefreshRequested({ automatic: false });
-  App.showOverview(bundle("manual"));
-  assert.equal(App.lastOverviewSnapshot.marker, "manual");
+  setRuntime({ liveRevision: "B", pageRevision: "page-B" });
+  App.overview.updateCurrentActivity(
+    { marker: "B", active: true, status: "normal" },
+    { render: true }
+  );
+
+  assert.equal(App.lastOverviewSnapshot.current_activity.marker, "A");
+  assert.equal(elements["current-activity"].renderedActivity.marker, "B");
+  assert.equal(elements["current-activity"].disabled, true);
+  assert.equal(elements["current-activity"].onclick, null);
 });
 
+test("Overview runtime refresh identity follows authoritative page revision", () => {
+  const { App } = harness();
+  assert.equal(App.overview.runtimeRefreshIdentity({ pageRevision: "page-a" }), "page-a");
+  assert.equal(App.overview.runtimeRefreshIdentity({ pageRevision: "page-b" }), "page-b");
+});

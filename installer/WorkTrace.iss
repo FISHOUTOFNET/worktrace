@@ -73,14 +73,23 @@ Name: "{group}\有迹"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; 
 Name: "{autodesktop}\有迹"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyInstalledIconName}"; Tasks: desktopicon
 
 [Registry]
-; Keep the legacy Run value name as a compatibility identifier; its target is Trace.exe.
+; The legacy Run value is now only a short-lived installer compatibility bootstrap.
+; The frozen executable replaces it with the canonical current-user logon task.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "WorkTrace"; ValueData: """{app}\Trace.exe"" --background"; Tasks: startup; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "WorkTrace"; Tasks: not startup; Flags: deletevalue
 Root: HKCU; Subkey: "Software\WorkTrace\InstallBootstrap"; ValueType: dword; ValueName: "EnableFDWork"; ValueData: "1"; Tasks: fdwork; Flags: uninsdeletevalue uninsdeletekeyifempty
 Root: HKCU; Subkey: "Software\WorkTrace\InstallBootstrap"; ValueType: none; ValueName: "EnableFDWork"; Tasks: not fdwork; Flags: deletevalue
 
 [Run]
+; Apply the user's selected launch-at-login intent explicitly. A failed enable
+; retains the Run fallback; a disabled selection removes both owned mechanisms.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--configure-launch-at-login enable"; Flags: runhidden waituntilterminated; Tasks: startup
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--configure-launch-at-login disable"; Flags: runhidden waituntilterminated; Tasks: not startup
 Filename: "{app}\{#MyAppExeName}"; Description: "启动有迹"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; Remove both the scheduled task and any legacy Run fallback before payload deletion.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--configure-launch-at-login disable"; Flags: runhidden waituntilterminated
 
 [Code]
 const
@@ -88,6 +97,7 @@ const
   WebView2BootstrapperUrl = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703';
   WebView2BootstrapperName = 'MicrosoftEdgeWebview2Setup.exe';
   MaintenanceShutdownEventName = 'Local\WorkTrace_UpdateShutdown_v1';
+  StartupTaskName = 'WorkTrace Launch At Login';
   EventModifyState = $0002;
   Synchronize = $00100000;
   GenericWrite = $40000000;
@@ -144,6 +154,45 @@ begin
   );
 end;
 
+function ExistingApplicationExePath: String;
+var
+  Candidate: String;
+begin
+  Candidate := ExpandConstant('{app}\{#MyAppExeName}');
+  if FileExists(Candidate) then
+  begin
+    Result := Candidate;
+    exit;
+  end;
+  Candidate := ExpandConstant('{app}\{#LegacyAppExeName}');
+  if FileExists(Candidate) then
+  begin
+    Result := Candidate;
+    exit;
+  end;
+  Result := '';
+end;
+
+function ScheduledStartupTaskExists: Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := False;
+  try
+    if Exec(
+      ExpandConstant('{sys}\schtasks.exe'),
+      '/Query /TN "' + StartupTaskName + '"',
+      '',
+      SW_HIDE,
+      ewWaitUntilTerminated,
+      ResultCode
+    ) then
+      Result := ResultCode = 0;
+  except
+    Log('Unable to query scheduled startup task: ' + GetExceptionMessage);
+  end;
+end;
+
 function ExistingStartupEnabled: Boolean;
 var
   ExistingValue: String;
@@ -154,8 +203,13 @@ begin
     'Software\Microsoft\Windows\CurrentVersion\Run',
     'WorkTrace',
     ExistingValue
-  ) then
-    Result := Trim(ExistingValue) <> '';
+  ) and (Trim(ExistingValue) <> '') then
+  begin
+    Result := True;
+    exit;
+  end;
+
+  Result := ScheduledStartupTaskExists;
 end;
 
 function ExistingPrivacyVersionAccepted: Boolean;
@@ -177,25 +231,6 @@ begin
        (CompareText(Trim(ExistingValue), '2') = 0) then
       Result := True;
   end;
-end;
-
-function ExistingApplicationExePath: String;
-var
-  Candidate: String;
-begin
-  Candidate := ExpandConstant('{app}\{#MyAppExeName}');
-  if FileExists(Candidate) then
-  begin
-    Result := Candidate;
-    exit;
-  end;
-  Candidate := ExpandConstant('{app}\{#LegacyAppExeName}');
-  if FileExists(Candidate) then
-  begin
-    Result := Candidate;
-    exit;
-  end;
-  Result := '';
 end;
 
 function MaintenanceShutdownEventExists: Boolean;

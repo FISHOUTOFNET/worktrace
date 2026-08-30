@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..services import export_service
+from .statistics_interactive_range_policy import validate_interactive_statistics_range
 
 
 class StatisticsExportError(ValueError):
@@ -60,15 +61,43 @@ def _map_statistics_export_failure(action):
         raise StatisticsExportError("operation_failed") from exc
 
 
+def _prepare_interactive_statistics_csv(
+    date_from: str,
+    date_to: str,
+    project_id: str | int | None,
+):
+    validate_interactive_statistics_range(date_from, date_to)
+    return export_service.prepare_statistics_csv(date_from, date_to, project_id)
+
+
+def _write_interactive_statistics_csv(
+    date_from: str,
+    date_to: str,
+    output_path,
+    expected_export_ticket_revision: str,
+    project_id: str | int | None,
+) -> dict[str, Any]:
+    validate_interactive_statistics_range(date_from, date_to)
+    return export_service.write_statistics_csv(
+        date_from,
+        date_to,
+        output_path,
+        expected_export_ticket_revision,
+        project_id,
+    )
+
+
 def prepare_statistics_csv(
     date_from: str,
     date_to: str,
     project_id: str | int | None = None,
 ):
-    """Freeze an opaque point-in-time statistics export before path selection."""
+    """Freeze a bounded point-in-time statistics export before path selection."""
 
     return _map_statistics_export_failure(
-        lambda: export_service.prepare_statistics_csv(date_from, date_to, project_id)
+        lambda: _prepare_interactive_statistics_csv(
+            date_from, date_to, project_id
+        )
     )
 
 
@@ -87,10 +116,10 @@ def export_statistics_csv(
     expected_export_ticket_revision: str,
     project_id: str | int | None = None,
 ) -> dict[str, Any]:
-    """Legacy ticket-bound CSV API retained for compatibility callers."""
+    """Legacy ticket-bound CSV API retained for bounded compatibility callers."""
 
     return _map_statistics_export_failure(
-        lambda: export_service.write_statistics_csv(
+        lambda: _write_interactive_statistics_csv(
             date_from,
             date_to,
             output_path,

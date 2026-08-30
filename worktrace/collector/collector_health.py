@@ -4,6 +4,7 @@ import logging
 import re
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -22,7 +23,9 @@ HEALTH_STOPPED = "stopped"
 
 _FAILING_THRESHOLD = 3
 _SUCCESS_PERSIST_INTERVAL_SECONDS = 30
+_FAILURE_PERSIST_INTERVAL_SECONDS = 60
 _STATE_LOCK = threading.RLock()
+_PROGRESS_LOCK = threading.RLock()
 _SAFE_CODE_PATTERN = re.compile(r"[^a-z0-9_]+")
 
 
@@ -32,9 +35,23 @@ class _RuntimeHealthState:
     failures: int
     last_failure_at: str
     last_success_persisted_at: str
+    last_failure_persisted_at: str
+    last_failure_phase: str
+    last_failure_code: str
+
+
+@dataclass
+class _RuntimeProgressState:
+    generation: int = 0
+    runtime_status: str = "stopped"
+    started_monotonic: float = 0.0
+    last_successful_observation_at: str = ""
+    last_success_monotonic: float = 0.0
+    terminal_reason: str = ""
 
 
 _STATE_BY_DATABASE: dict[tuple[str, int], _RuntimeHealthState] = {}
+_RUNTIME_PROGRESS = _RuntimeProgressState()
 
 
 def _runtime_state() -> _RuntimeHealthState:
@@ -55,9 +72,83 @@ def _runtime_state() -> _RuntimeHealthState:
                     "",
                 )
                 or "",
+                last_failure_persisted_at=get_setting(
+                    "collector_last_failure_at",
+                    "",
+                )
+                or "",
+                last_failure_phase=get_setting(
+                    "collector_last_failure_phase",
+                    "",
+                )
+                or "",
+                last_failure_code=get_setting(
+                    "collector_last_failure_kind",
+                    "",
+                )
+                or "",
             )
             _STATE_BY_DATABASE[key] = state
         return state
+
+
+def begin_runtime_invocation(generation: int) -> None:
+    """Reset process-local progress for one AppRuntime-owned Collector invocation."""
+
+    with _PROGRESS_LOCK:
+        _RUNTIME_PROGRESS.generation = max(0, int(generation))
+        _RUNTIME_PROGRESS.runtime_status = "starting"
+        _RUNTIME_PROGRESS.started_monotonic = time.monotonic()
+        _RUNTIME_PROGRESS.last_successful_observation_at = ""
+        _RUNTIME_PROGRESS.last_success_monotonic = 0.0
+        _RUNTIME_PROGRESS.terminal_reason = ""
+
+
+def record_runtime_status(status: str) -> None:
+    """Project a cheap process-local status without durable I/O."""
+
+    value = str(status or "").strip().lower() or "unknown"
+    with _PROGRESS_LOCK:
+        _RUNTIME_PROGRESS.runtime_status = value
+
+
+def terminalize_runtime_invocation(generation: int, reason: str) -> None:
+    with _PROGRESS_LOCK:
+        if int(generation) != int(_RUNTIME_PROGRESS.generation):
+            return
+        _RUNTIME_PROGRESS.runtime_status = "stopped"
+        _RUNTIME_PROGRESS.terminal_reason = _safe_health_code(reason)
+
+
+def runtime_progress_snapshot() -> dict[str, object]:
+    """Return the process-local signal consumed by AppRuntime liveness."""
+
+    with _PROGRESS_LOCK:
+        return {
+            "generation": int(_RUNTIME_PROGRESS.generation),
+            "runtime_status": str(_RUNTIME_PROGRESS.runtime_status),
+            "started_monotonic": float(_RUNTIME_PROGRESS.started_monotonic),
+            "last_successful_observation_at": str(
+                _RUNTIME_PROGRESS.last_successful_observation_at
+            ),
+            "last_success_monotonic": float(_RUNTIME_PROGRESS.last_success_monotonic),
+            "terminal_reason": str(_RUNTIME_PROGRESS.terminal_reason),
+        }
+
+
+def _record_successful_runtime_progress(at_time: str) -> None:
+    with _PROGRESS_LOCK:
+        _RUNTIME_PROGRESS.last_successful_observation_at = str(at_time or "")
+        _RUNTIME_PROGRESS.last_success_monotonic = time.monotonic()
+        _RUNTIME_PROGRESS.runtime_status = "running"
+
+
+def record_sampling_progress() -> None:
+    """Refresh process-local liveness without advancing the durable time watermark."""
+
+    with _PROGRESS_LOCK:
+        _RUNTIME_PROGRESS.last_success_monotonic = time.monotonic()
+        _RUNTIME_PROGRESS.runtime_status = "running"
 
 
 def _elapsed_seconds(start: str, end: str) -> int | None:
@@ -75,6 +166,7 @@ def _elapsed_seconds(start: str, end: str) -> int | None:
 
 
 def record_collector_started(at_time: str | None = None) -> None:
+    record_runtime_status("running")
     state = _runtime_state()
     with _STATE_LOCK:
         state.health_state = HEALTH_HEALTHY
@@ -91,6 +183,7 @@ def record_collector_started(at_time: str | None = None) -> None:
 
 def record_successful_observation(at_time: str | None = None) -> None:
     at = at_time or now_str()
+    _record_successful_runtime_progress(at)
     state = _runtime_state()
     with _STATE_LOCK:
         recovered = (
@@ -132,11 +225,15 @@ def record_transient_failure(
     at_time: str | None = None,
 ) -> None:
     safe_code = _safe_failure_code(code)
+    safe_phase = _safe_phase(phase)
     if code not in RETRYABLE_COLLECTOR_FAILURE_CODES:
         raise ValueError("collector_failure_code_not_retryable")
     at = at_time or now_str()
     state = _runtime_state()
     with _STATE_LOCK:
+        previous_health = state.health_state
+        previous_phase = state.last_failure_phase
+        previous_code = state.last_failure_code
         state.failures += 1
         state.health_state = (
             HEALTH_FAILING
@@ -144,22 +241,33 @@ def record_transient_failure(
             else HEALTH_DEGRADED
         )
         state.last_failure_at = at
+        state.last_failure_phase = safe_phase
+        state.last_failure_code = safe_code
+        elapsed = _elapsed_seconds(state.last_failure_persisted_at, at)
+        should_persist = bool(
+            state.failures == 1
+            or state.health_state != previous_health
+            or safe_phase != previous_phase
+            or safe_code != previous_code
+            or elapsed is None
+            or elapsed < 0
+            or elapsed >= _FAILURE_PERSIST_INTERVAL_SECONDS
+        )
         failures = state.failures
         health_state = state.health_state
+        if should_persist:
+            state.last_failure_persisted_at = at
+
+    if not should_persist:
+        return
     set_settings(
         {
             "collector_health_state": health_state,
             "collector_last_failure_at": at,
             "collector_consecutive_failures": str(failures),
-            "collector_last_failure_phase": _safe_phase(phase),
+            "collector_last_failure_phase": safe_phase,
             "collector_last_failure_kind": safe_code,
         }
-    )
-    logging.warning(
-        "collector transient failure phase=%s code=%s consecutive=%s",
-        _safe_phase(phase),
-        safe_code,
-        failures,
     )
 
 
@@ -192,7 +300,19 @@ def record_fatal_failure(
     )
 
 
+def record_unhandled_runtime_failure(at_time: str | None = None) -> None:
+    """Capture an exception escaping run_collector without logging raw exception text."""
+
+    record_fatal_failure(
+        "runtime_boundary",
+        CollectorFailureCode.UNEXPECTED_FAILURE,
+        at_time,
+    )
+
+
 def record_collector_stopped(at_time: str | None = None) -> None:
+    at = at_time or now_str()
+    record_runtime_status("stopped")
     state = _runtime_state()
     with _STATE_LOCK:
         state.health_state = HEALTH_STOPPED
@@ -200,7 +320,7 @@ def record_collector_stopped(at_time: str | None = None) -> None:
         {
             "collector_status": "stopped",
             "collector_health_state": HEALTH_STOPPED,
-            "last_shutdown_at": at_time or now_str(),
+            "last_collector_stop_at": at,
         }
     )
     logging.info("collector health state=stopped")
@@ -277,12 +397,18 @@ __all__ = [
     "HEALTH_FAILING",
     "HEALTH_HEALTHY",
     "HEALTH_STOPPED",
+    "begin_runtime_invocation",
     "format_time",
     "record_collector_started",
     "record_collector_stopped",
     "record_fatal_failure",
     "record_health_code",
+    "record_runtime_status",
+    "record_sampling_progress",
     "record_successful_observation",
     "record_transient_failure",
+    "record_unhandled_runtime_failure",
     "reset_collector_failures",
+    "runtime_progress_snapshot",
+    "terminalize_runtime_invocation",
 ]

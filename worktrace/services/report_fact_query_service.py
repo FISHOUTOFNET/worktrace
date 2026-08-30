@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date as date_type, datetime, time as datetime_time, timedelta
 
 from ..constants import (
@@ -39,6 +40,7 @@ def load_report_activity_rows(
     end_date: str,
     *,
     conn=None,
+    duration_overrides: Mapping[int, int] | None = None,
 ) -> list[dict]:
     """Load canonical persisted facts without routing through a page adapter."""
 
@@ -48,6 +50,7 @@ def load_report_activity_rows(
                 start_date,
                 end_date,
                 conn=read_conn,
+                duration_overrides=duration_overrides,
             )
 
     uncategorized_id = get_uncategorized_project_id(conn)
@@ -65,7 +68,13 @@ def load_report_activity_rows(
         carry_minutes * 60,
         REPORT_CONTEXT_SHORT_MERGE_SECONDS,
     )
-    rows = _load_fact_rows(conn, start_date, end_date, carry_seconds=carry_seconds)
+    rows = _load_fact_rows(
+        conn,
+        start_date,
+        end_date,
+        carry_seconds=carry_seconds,
+        duration_overrides=duration_overrides,
+    )
     boundaries = boundary_times_for_rows(rows, conn=conn)
     activity_ids = [int(row["id"]) for row in rows if int(row.get("id") or 0)]
     clipboard_times = clipboard_fact_query_service.clipboard_times_for_activity_ids(
@@ -130,6 +139,7 @@ def _load_fact_rows(
     end_date: str,
     *,
     carry_seconds: int = 0,
+    duration_overrides: Mapping[int, int] | None = None,
 ) -> list[dict]:
     """Load activity fact rows overlapping ``[day_start - carry, day_end + carry]``.
 
@@ -202,6 +212,12 @@ def _load_fact_rows(
     rows: list[dict] = []
     for raw in raw_rows:
         row = dict(raw)
+        activity_id = int(row.get("id") or 0)
+        if duration_overrides is not None and activity_id in duration_overrides:
+            row["duration_seconds"] = max(
+                0,
+                int(duration_overrides[activity_id]),
+            )
         _attach_resource_fields(row)
         row.update(official_project_fields(row, uncategorized_id))
         row.update(report_project_fields(row, uncategorized_id))

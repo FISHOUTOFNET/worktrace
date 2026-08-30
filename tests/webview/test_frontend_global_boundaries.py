@@ -94,9 +94,13 @@ def test_frontend_modules_share_one_namespace_and_iife_boundary() -> None:
         r"\bexport\s+(?:const|let|var|function)\s+\w+",
         r"\brequire\s*\(",
     )
+    behaviorless_compatibility_assets = {"statistics_live_projection.js"}
     for name in ALL_JS_FILES:
         source = read_js(name).strip()
-        assert "var App = window.WorkTraceApp = window.WorkTraceApp || {};" in source
+        if name not in behaviorless_compatibility_assets:
+            assert "var App = window.WorkTraceApp = window.WorkTraceApp || {};" in source
+        else:
+            assert source == '(function () {\n    "use strict";\n})();'
         assert "(function () {" in source[:400]
         assert source.endswith("})();")
         for pattern in forbidden_patterns:

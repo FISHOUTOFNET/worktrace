@@ -1,4 +1,4 @@
-"""Versioned, restartable repair of missing durable activity-resource facts."""
+"""Versioned, restartable repair of durable activity-resource facts."""
 
 from __future__ import annotations
 
@@ -14,12 +14,13 @@ from ..platforms.base import ActiveWindow
 from ..resources.detectors import detect_resource
 from ..resources.resource_builders import make_system_resource
 from ..resources.types import DetectedResource
+from ..retry_state import RetryEpisode
 from ..worker_health import WorkerHealthReporter
 from ..write_gate import DATABASE_WRITE_GATE
 from .resource_service import create_or_update_activity_resource
 
 DEFAULT_BATCH_SIZE = 200
-REPAIR_POLICY_VERSION = 1
+REPAIR_POLICY_VERSION = 2
 _WORKER_IDLE_SECONDS = 1.0
 _VALID_STATUSES = {"pending", "running", "completed", "failed"}
 
@@ -84,76 +85,111 @@ def repair_missing_activity_resources(batch_size: int = DEFAULT_BATCH_SIZE) -> i
         logging.exception("activity resource repair state was invalid; restarting policy")
         state = _default_state()
 
-    first_missing_id = _first_unrepaired_activity_id()
-    if first_missing_id is None:
-        if state["status"] != "completed":
-            state["status"] = "completed"
-            state["completed_at"] = now_str()
-            state["last_error"] = ""
-            _persist_state(state)
-        return 0
-
+    # Once the current policy sweep is complete, only genuinely missing durable
+    # facts are eligible. This keeps future detector changes from rewriting
+    # history while still repairing newly missing rows.
     if state["status"] == "completed":
-        state = _default_state()
+        rows = _load_missing_rows_after(0, size)
+        if not rows:
+            return 0
+        return _repair_rows(rows, state, policy_sweep=False)
 
     cursor = int(state["cursor_activity_id"])
-    if first_missing_id <= cursor:
-        cursor = 0
-        state["cursor_activity_id"] = 0
-
-    rows = _load_missing_rows_after(cursor, size)
+    rows = _load_policy_rows_after(cursor, size)
     if not rows:
-        raise RuntimeError("activity_resource_repair_cursor_inconsistent")
+        _mark_state_completed(state)
+        return 0
+    return _repair_rows(rows, state, policy_sweep=True)
 
-    state["status"] = "running"
-    state["started_at"] = str(state["started_at"] or now_str())
-    state["completed_at"] = ""
+
+def _repair_rows(
+    rows: list[dict[str, Any]],
+    state: dict[str, Any],
+    *,
+    policy_sweep: bool,
+) -> int:
+    if not rows:
+        return 0
+
+    if policy_sweep:
+        state["status"] = "running"
+        state["started_at"] = str(state["started_at"] or now_str())
+        state["completed_at"] = ""
     state["last_error"] = ""
+
     try:
-        prepared: list[tuple[int, DetectedResource, bool, bool]] = []
+        prepared: list[
+            tuple[int, DetectedResource, bool, bool, bool]
+        ] = []
         for row in rows:
             resource, detection_failed = _resource_for_row(row)
+            has_existing = _has_persisted_resource(row)
+            should_write = (
+                not has_existing
+                or (
+                    not detection_failed
+                    and _resource_identity_changed(row, resource)
+                )
+            )
             prepared.append(
                 (
                     int(row["id"]),
                     resource,
-                    resource.resource_kind == "unknown",
+                    should_write and resource.resource_kind == "unknown",
                     detection_failed,
+                    should_write,
                 )
             )
+
+        changed_count = sum(
+            1
+            for _activity_id, _resource, _is_unknown, _failed, should_write
+            in prepared
+            if should_write
+        )
 
         with DomainUnitOfWork(
             (DataGenerationNamespace.REPORT_STRUCTURE,)
         ) as uow:
             conn = uow.connection
-            for activity_id, resource, _is_unknown, _failed in prepared:
-                create_or_update_activity_resource(activity_id, resource, conn=conn)
-            state["cursor_activity_id"] = int(prepared[-1][0])
+            for activity_id, resource, _is_unknown, _failed, should_write in prepared:
+                if should_write:
+                    create_or_update_activity_resource(
+                        activity_id,
+                        resource,
+                        conn=conn,
+                    )
+            if policy_sweep:
+                state["cursor_activity_id"] = int(prepared[-1][0])
             state["processed_count"] = int(state["processed_count"]) + len(prepared)
-            state["repaired_count"] = int(state["repaired_count"]) + len(prepared)
+            state["repaired_count"] = int(state["repaired_count"]) + changed_count
             state["unknown_count"] = int(state["unknown_count"]) + sum(
                 1
-                for _activity_id, _resource, is_unknown, _failed in prepared
+                for _activity_id, _resource, is_unknown, _failed, _should_write
+                in prepared
                 if is_unknown
             )
             state["failed_count"] = int(state["failed_count"]) + sum(
                 1
-                for _activity_id, _resource, _is_unknown, failed in prepared
+                for _activity_id, _resource, _is_unknown, failed, _should_write
+                in prepared
                 if failed
             )
             _write_state(conn, state)
-            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
+            if changed_count:
+                uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
 
-        if _first_unrepaired_activity_id() is None:
-            state["status"] = "completed"
-            state["completed_at"] = now_str()
-            state["last_error"] = ""
-            _persist_state(state)
+        if policy_sweep and not _load_policy_rows_after(
+            int(state["cursor_activity_id"]),
+            1,
+        ):
+            _mark_state_completed(state)
 
         logging.info(
-            "activity resource repair committed policy=%s batch=%s total=%s cursor=%s status=%s",
+            "activity resource repair committed policy=%s batch=%s changed=%s total=%s cursor=%s status=%s",
             REPAIR_POLICY_VERSION,
             len(prepared),
+            changed_count,
             state["repaired_count"],
             state["cursor_activity_id"],
             state["status"],
@@ -169,6 +205,13 @@ def repair_missing_activity_resources(batch_size: int = DEFAULT_BATCH_SIZE) -> i
         raise
 
 
+def _mark_state_completed(state: dict[str, Any]) -> None:
+    state["status"] = "completed"
+    state["completed_at"] = now_str()
+    state["last_error"] = ""
+    _persist_state(state)
+
+
 def run_activity_resource_repair_worker(
     stop_event: threading.Event,
     *,
@@ -180,6 +223,7 @@ def run_activity_resource_repair_worker(
 
     size = max(1, int(batch_size))
     interval = max(0.1, float(poll_seconds))
+    retry_episode = RetryEpisode()
     logging.info("activity resource repair worker loop enter")
     while not stop_event.is_set():
         if DATABASE_WRITE_GATE.writes_blocked():
@@ -190,11 +234,29 @@ def run_activity_resource_repair_worker(
         try:
             repaired = repair_missing_activity_resources(size)
         except Exception:
-            logging.exception("activity resource repair worker iteration failed")
+            retry = retry_episode.failed("activity_resource_repair_iteration_failed")
             health.failed("activity_resource_repair_iteration_failed")
-            repaired = 0
-        else:
-            health.succeeded()
+            if retry.detail_log_due:
+                logging.warning(
+                    "activity resource repair worker iteration failed",
+                    exc_info=True,
+                )
+            elif retry.summary_log_due:
+                logging.warning(
+                    "activity resource repair worker failure continues consecutive=%s elapsed_seconds=%.1f",
+                    retry.attempt,
+                    retry.elapsed_seconds,
+                )
+            stop_event.wait(max(interval, retry.delay_seconds))
+            continue
+        recovery = retry_episode.succeeded()
+        health.succeeded()
+        if recovery.recovered:
+            logging.info(
+                "activity resource repair worker recovered attempts=%s elapsed_seconds=%.1f",
+                recovery.attempts,
+                recovery.elapsed_seconds,
+            )
         if repaired >= size:
             continue
         stop_event.wait(interval)
@@ -287,6 +349,46 @@ def _first_unrepaired_activity_id() -> int | None:
     return int(row["activity_id"])
 
 
+def _load_policy_rows_after(
+    cursor_activity_id: int,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Load one policy-v2 sweep batch.
+
+    Policy v2 re-evaluates existing Edge browser resources exactly once so
+    browser-owned profile suffixes can be removed from durable identity. Other
+    already-persisted resource kinds are not revisited.
+    """
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT a.id, a.app_name, a.process_name, a.window_title,
+                   a.file_path_hint, a.start_time, a.status,
+                   ar.activity_id AS existing_resource_activity_id,
+                   ar.resource_kind AS existing_resource_kind,
+                   ar.resource_subtype AS existing_resource_subtype,
+                   ar.display_name AS existing_display_name,
+                   ar.identity_key AS existing_identity_key
+            FROM activity_log a
+            LEFT JOIN activity_resource ar ON ar.activity_id = a.id
+            WHERE a.id > ?
+              AND (
+                    ar.activity_id IS NULL
+                 OR TRIM(COALESCE(ar.identity_key, '')) = ''
+                 OR (
+                        LOWER(TRIM(COALESCE(a.process_name, ''))) IN ('msedge.exe', 'msedge')
+                    AND ar.resource_kind = 'browser_tab'
+                 )
+              )
+            ORDER BY a.id
+            LIMIT ?
+            """,
+            (max(0, int(cursor_activity_id)), int(limit)),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def _load_missing_rows_after(
     cursor_activity_id: int,
     limit: int,
@@ -295,7 +397,12 @@ def _load_missing_rows_after(
         rows = conn.execute(
             """
             SELECT a.id, a.app_name, a.process_name, a.window_title,
-                   a.file_path_hint, a.start_time, a.status
+                   a.file_path_hint, a.start_time, a.status,
+                   ar.activity_id AS existing_resource_activity_id,
+                   ar.resource_kind AS existing_resource_kind,
+                   ar.resource_subtype AS existing_resource_subtype,
+                   ar.display_name AS existing_display_name,
+                   ar.identity_key AS existing_identity_key
             FROM activity_log a
             LEFT JOIN activity_resource ar ON ar.activity_id = a.id
             WHERE (ar.activity_id IS NULL OR TRIM(COALESCE(ar.identity_key, '')) = '')
@@ -306,6 +413,27 @@ def _load_missing_rows_after(
             (max(0, int(cursor_activity_id)), int(limit)),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def _has_persisted_resource(row: dict[str, Any]) -> bool:
+    return bool(
+        row.get("existing_resource_activity_id") is not None
+        and str(row.get("existing_identity_key") or "").strip()
+    )
+
+
+def _resource_identity_changed(
+    row: dict[str, Any],
+    resource: DetectedResource,
+) -> bool:
+    return any(
+        (
+            str(row.get("existing_resource_kind") or "") != resource.resource_kind,
+            str(row.get("existing_resource_subtype") or "") != resource.resource_subtype,
+            str(row.get("existing_display_name") or "") != resource.display_name,
+            str(row.get("existing_identity_key") or "") != resource.identity_key,
+        )
+    )
 
 
 def _resource_for_row(row: dict[str, Any]) -> tuple[DetectedResource, bool]:

@@ -6,6 +6,7 @@ import os
 from typing import Any
 
 from ..config import resolve_paths
+from ..constants import CLIPBOARD_CAPTURE_AVAILABLE
 from ..privacy_policy import (
     PRIVACY_NOTICE_HIGHLIGHTS,
     PRIVACY_NOTICE_TITLE,
@@ -93,6 +94,8 @@ def is_clipboard_capture_enabled() -> bool:
 
 
 def set_clipboard_capture_enabled(value: bool) -> None:
+    if value and not CLIPBOARD_CAPTURE_AVAILABLE:
+        raise ValueError("clipboard_capture_unavailable")
     set_setting("clipboard_capture_enabled", "true" if value else "false")
 
 
@@ -114,6 +117,7 @@ def get_settings_privacy_status() -> dict[str, Any]:
                 "page": "settings_privacy",
                 "storage_model": "local_only",
                 "local_data_path": str(resolve_paths().data_dir),
+                "clipboard_capture_supported": CLIPBOARD_CAPTURE_AVAILABLE,
                 "clipboard_capture_enabled": is_clipboard_capture_enabled(),
                 "export_path_configured": bool(get_export_path()),
                 **maintenance,
@@ -307,6 +311,12 @@ def clear_all_local_data_for_webview(confirm_text: str) -> dict[str, Any]:
 def set_clipboard_capture_enabled_for_webview(enabled: bool) -> dict[str, Any]:
     if enabled is not True and enabled is not False:
         return {"ok": False, "error": "请选择有效的剪贴板记录状态"}
+    if enabled and not CLIPBOARD_CAPTURE_AVAILABLE:
+        return {
+            "ok": False,
+            "error": "剪贴板记录暂未开放",
+            "error_code": "clipboard_capture_unavailable",
+        }
     try:
         set_clipboard_capture_enabled(enabled)
         status_result = get_settings_privacy_status()

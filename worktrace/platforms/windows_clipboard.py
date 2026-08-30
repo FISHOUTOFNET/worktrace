@@ -54,13 +54,15 @@ class ClipboardMonitor:
 
     def __init__(
         self,
-        source_window_provider: Callable[[], ActiveWindow],
+        source_window_provider: Callable[[], ActiveWindow | None],
         *,
         poll_seconds: float = 0.25,
+        capture_available: bool = True,
     ) -> None:
         self._events: deque[ClipboardTextEvent] = deque(maxlen=_MAX_CLIPBOARD_QUEUE)
         self._events_lock = threading.Lock()
         self._state_lock = threading.Lock()
+        self._capture_available = bool(capture_available)
         self._enabled = False
         self._last_sequence: int | None = None
         self._generation = 0
@@ -69,7 +71,7 @@ class ClipboardMonitor:
 
     def set_enabled(self, enabled: bool) -> None:
         with self._state_lock:
-            requested = bool(enabled)
+            requested = bool(enabled) and self._capture_available
             if requested == self._enabled:
                 if not requested:
                     self._clear_locked()
@@ -117,6 +119,12 @@ class ClipboardMonitor:
         """Run the capture loop on the calling AppRuntime-owned thread."""
 
         health.succeeded()
+        if not self._capture_available:
+            # Preserve the established worker topology without polling the OS or
+            # tripping the progress watchdog while this shipping capability is frozen.
+            health.maintenance_paused(True)
+            stop_event.wait()
+            return
         while not stop_event.wait(self._poll_seconds):
             try:
                 self._capture_iteration()
@@ -144,6 +152,8 @@ class ClipboardMonitor:
         if not self._enabled or generation != self._generation:
             return
         source_window = self._source_window_provider()
+        if source_window is None:
+            return
         text = read_clipboard_unicode_text()
         if not text or not self._enabled or generation != self._generation:
             return

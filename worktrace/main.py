@@ -7,12 +7,9 @@ from typing import Sequence
 
 
 def setup_logging(log_path) -> None:
-    logging.basicConfig(
-        filename=log_path,
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-        encoding="utf-8",
-    )
+    from .logging_config import configure_file_logging
+
+    configure_file_logging(log_path)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -26,6 +23,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .desktop.update_shutdown import request_running_instance_shutdown
 
         return 0 if request_running_instance_shutdown(timeout_seconds=20.0) else 5
+
+    from .platforms.windows_dpi import configure_process_dpi_awareness
+
+    configure_process_dpi_awareness()
 
     try:
         from .desktop.install_bootstrap import consume_privacy_install_intent

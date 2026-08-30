@@ -56,7 +56,9 @@ class MaintenanceProcessProbe(Protocol):
 class WindowsUpdateShutdownKernel:
     EVENT_MODIFY_STATE = 0x0002
     SYNCHRONIZE = 0x00100000
-    WAIT_OBJECT_0 = 0
+    WAIT_OBJECT_0 = 0x00000000
+    WAIT_TIMEOUT = 0x00000102
+    WAIT_FAILED = 0xFFFFFFFF
 
     @staticmethod
     def _kernel32():
@@ -93,11 +95,21 @@ class WindowsUpdateShutdownKernel:
             kernel32.CloseHandle(handle)
 
     def wait_for_signal(self, event, timeout_seconds: float) -> bool:
-        result = self._kernel32().WaitForSingleObject(
-            event,
-            max(1, int(timeout_seconds * 1000)),
+        result = int(
+            self._kernel32().WaitForSingleObject(
+                event,
+                max(1, int(timeout_seconds * 1000)),
+            )
         )
-        return int(result) == self.WAIT_OBJECT_0
+        if result == self.WAIT_OBJECT_0:
+            return True
+        if result == self.WAIT_TIMEOUT:
+            return False
+        if result == self.WAIT_FAILED:
+            raise UpdateShutdownError(
+                f"update_shutdown_wait_failed:{int(ctypes.get_last_error())}"
+            )
+        raise UpdateShutdownError(f"update_shutdown_wait_unexpected:{result}")
 
     def wake_waiter(self, event) -> None:
         self._kernel32().SetEvent(event)
@@ -199,8 +211,9 @@ class ApplicationUpdateShutdownCoordinator:
         if not self._supported():
             return
         with self._lock:
-            if self._thread is not None:
+            if self._thread is not None and self._thread.is_alive():
                 return
+            self._thread = None
             if self._event is None:
                 raise UpdateShutdownError("update_shutdown_event_not_prepared")
             self._stop_event.clear()
@@ -367,7 +380,9 @@ class ApplicationUpdateShutdownCoordinator:
                 signaled = self._kernel.wait_for_signal(event, 0.25)
             except Exception:
                 logger.exception("update shutdown listener wait failed")
-                return
+                if self._stop_event.wait(0.25):
+                    return
+                continue
             if not signaled:
                 continue
             with self._lock:

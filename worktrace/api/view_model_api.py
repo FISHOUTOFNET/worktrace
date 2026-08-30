@@ -13,6 +13,19 @@ if TYPE_CHECKING:
     from ..runtime.app_runtime import AppRuntime
 
 
+def _runtime_live_eligible(runtime: "AppRuntime | None") -> bool:
+    if runtime is None:
+        raise ValueError("runtime_missing")
+    reader = getattr(runtime, "collection_liveness_snapshot", None)
+    if not callable(reader):
+        # Narrow injected legacy/test capabilities predate runtime liveness.
+        return True
+    try:
+        return bool(dict(reader()).get("live_eligible"))
+    except Exception:
+        return False
+
+
 def _attach_runtime(
     payload: dict[str, Any],
     *,
@@ -50,7 +63,9 @@ def get_overview_view_model(
 ) -> dict[str, Any]:
     scoped_date = _scoped_report_date(today, None)
     with projection_perf_scope(scoped_date, surface="overview"):
-        with page_read_scope():
+        with page_read_scope(
+            collection_live_eligible=_runtime_live_eligible(runtime)
+        ):
             with stage("page_read_scope"):
                 payload = view_model_service.get_overview_view_model(today)
             with stage("bridge_attach"):
@@ -71,7 +86,9 @@ def get_timeline_view_model(
 ) -> dict[str, Any]:
     scoped_date = _scoped_report_date(report_date, None)
     with projection_perf_scope(scoped_date, surface="timeline"):
-        with page_read_scope():
+        with page_read_scope(
+            collection_live_eligible=_runtime_live_eligible(runtime)
+        ):
             with stage("page_read_scope"):
                 payload = view_model_service.get_timeline_view_model(report_date)
             with stage("bridge_attach"):
@@ -95,7 +112,9 @@ def get_session_activity_summary_view_model(
 ) -> dict[str, Any]:
     scoped_date = _scoped_report_date(report_date, None)
     with projection_perf_scope(scoped_date, surface="details"):
-        with page_read_scope():
+        with page_read_scope(
+            collection_live_eligible=_runtime_live_eligible(runtime)
+        ):
             with stage("page_read_scope"):
                 payload = view_model_service.get_session_activity_summary_view_model(
                     report_date=report_date,
@@ -121,7 +140,9 @@ def get_refresh_state_view_model(
 ) -> dict[str, Any]:
     scoped_date = _scoped_report_date(report_date, None)
     with projection_perf_scope(scoped_date, surface="refresh"):
-        with page_read_scope():
+        with page_read_scope(
+            collection_live_eligible=_runtime_live_eligible(runtime)
+        ):
             with stage("page_read_scope"):
                 payload = refresh_state_view_model_service.get_refresh_state_view_model(
                     report_date

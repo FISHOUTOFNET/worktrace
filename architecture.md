@@ -49,7 +49,7 @@ state or database facts.
 | Existing-instance activation Event | `ApplicationInstanceCoordinator` |
 | Process/thread lifecycle | `AppRuntime` |
 | Worker declarations and handles | `AppRuntime` worker registry |
-| Worker initialization readiness | worker-owned `WorkerStartupReporter` handshake |
+| Worker invocation readiness | `AppRuntime` startup handshake |
 | Collector command identity/state | `CollectorControl` / `RuntimeCollectorControl` |
 | Collection transitions | `CollectorStateMachine` |
 | Atomic maintenance activity seal | `ActivityMaintenanceCommandService` |
@@ -59,6 +59,7 @@ state or database facts.
 | Permanent project deletion orchestration | `project_deletion_command_service` |
 | Rule write invariants | canonical rule command/service layer |
 | Verified page read snapshot | `PageReadContext` |
+| Verified as-of report structure | `report_effective_projection_service` |
 | Row runtime overlay | `ActivityRowOverlay` |
 | Exact live-time DTO | `activity_live_clock` |
 | Application composition | `ApplicationServices` |
@@ -95,13 +96,17 @@ the icon and destroys the WebView window. The composition-root `finally` remains
 the only caller of `AppRuntime.shutdown()`. The tray thread never calls Runtime,
 database or Collector APIs.
 
-A worker is READY only after the worker itself has completed required
-initialization, schema/database access and recovery/validation and reports ready
-before entering its stable blocking loop. Thread liveness and AppRuntime
-preflight cannot create readiness. The runtime wrapper owns thread start,
-startup timeout, unexpected exit, unhandled exception, stopped state and handle
-cleanup. Worker functions own initialization signalling, iteration
-success/failure, maintenance-paused state and domain health codes only.
+A worker is READY once `AppRuntime` owns a live invocation loop that can be
+stopped and re-entered safely. READY is deliberately not evidence that the first
+fallible database/filesystem iteration succeeded: database busy, maintenance,
+generation changes and domain-task failures are iteration health facts reported
+through `WorkerHealth`. The runtime wrapper owns thread start, startup timeout,
+bounded restart after unexpected return/unhandled exception, stopped state and
+handle cleanup. Non-critical worker targets that fail after READY degrade the
+runtime and are re-entered by the same owned thread with bounded exponential
+backoff; shutdown cancels any pending restart. Worker functions continue to own
+their domain iteration success/failure, maintenance-paused state and stable
+health codes, and they never create parallel worker threads.
 
 Shutdown sets the runtime stop signal, wakes blocking workers, signals each
 handle, joins Collector and every registered worker and records any surviving
@@ -114,6 +119,12 @@ fields or a parallel `error` alias; the Bridge translates canonical error codes
 for users.
 
 ## Collector and maintenance
+
+Collector startup readiness has the same liveness boundary: the ready handshake
+is emitted after non-fallible process-local initialization and before ordinary
+SQLite-backed health/settings maintenance. Retryable database-busy failures in
+that maintenance remain runtime failures and are retried inside the Collector
+loop; they do not invalidate the already-live Collector invocation.
 
 User pause and runtime maintenance are separate commands. Collector control kinds
 are user pause, maintenance hold, database reset and maintenance release. The
@@ -320,9 +331,12 @@ narrow host callbacks for Rules-owned refresh work. FD Work must not read
 `refreshRulesPanelWriteState` directly.
 
 Overview, Timeline, Details, Statistics and Export use the same canonical report
-facts. Natural live-second growth is DOM-local and does not trigger heavy page
-reload. Structural/replacement changes flow through explicit revisions and the
-existing refresh coordinator.
+facts. A verified persisted open activity may be projected through the single
+`report_effective_projection_service` read owner so short-return and boundary
+compaction use the same kernel before presentation; provisional groups are never
+mutation identities. Natural live-second growth is DOM-local and does not trigger
+heavy page reload. Structural/replacement changes flow through explicit revisions
+and the existing refresh coordinator.
 
 Statistics date-range transport uses a single semantic: empty `date_from` and
 `date_to` together mean canonical all-time (1970-01-01 to today); any other

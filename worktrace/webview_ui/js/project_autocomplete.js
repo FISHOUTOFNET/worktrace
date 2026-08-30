@@ -3,6 +3,7 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
     var PROJECT_AUTOCOMPLETE_LIMIT = 10;
+    var enhancedStates = [];
 
     function normalizedProjectSearchText(value) {
         return String(value || "").trim().toLocaleLowerCase();
@@ -122,6 +123,15 @@
         };
     }
 
+    function focusDisclosureAllowed() {
+        if (App.shellVisible === false) return false;
+        if (typeof App.isTransientFocusSuppressed === "function"
+                && App.isTransientFocusSuppressed()) return false;
+        if (typeof App.transientInputModality !== "function") return true;
+        var modality = App.transientInputModality();
+        return modality === "pointer" || modality === "keyboard";
+    }
+
     function enhanceProjectSelect(select) {
         if (!select || String(select.tagName || "").toUpperCase() !== "SELECT") return null;
         if (select._projectAutocomplete) return select._projectAutocomplete;
@@ -174,9 +184,12 @@
             items: [],
             activeIndex: -1,
             dirty: false,
-            catalogRefreshPromise: null
+            catalogRefreshPromise: null,
+            preserveDraftWhileUnfocused: false,
+            closeMenu: null
         };
         select._projectAutocomplete = state;
+        enhancedStates.push(state);
 
         function closeMenu() {
             menu.hidden = true;
@@ -185,6 +198,7 @@
             state.items = [];
             state.activeIndex = -1;
         }
+        state.closeMenu = closeMenu;
 
         function restoreSelectionLabel() {
             input.value = selectedSourceLabel(select);
@@ -271,7 +285,7 @@
             state.items = candidates;
             state.activeIndex = -1;
             menu.innerHTML = "";
-            if (!candidates.length || select.disabled) {
+            if (!candidates.length || select.disabled || App.shellVisible === false) {
                 closeMenu();
                 return;
             }
@@ -312,7 +326,7 @@
             var pending = catalog.load().then(function (snapshot) {
                 if (!snapshot) return null;
                 syncFilterSourceOptions(snapshot.filterProjects || []);
-                if (document.activeElement === input) {
+                if (document.activeElement === input && focusDisclosureAllowed()) {
                     renderCandidates(state.dirty ? input.value : "");
                 }
                 return snapshot;
@@ -330,8 +344,18 @@
         }
 
         input.addEventListener("focus", function () {
-            syncFromSource();
-            renderCandidates("");
+            var preserveDraft = state.preserveDraftWhileUnfocused === true;
+            state.preserveDraftWhileUnfocused = false;
+            if (!preserveDraft) syncFromSource();
+            else {
+                input.disabled = !!select.disabled;
+                if (select.disabled) closeMenu();
+            }
+            if (!focusDisclosureAllowed()) {
+                closeMenu();
+                return;
+            }
+            renderCandidates(preserveDraft && state.dirty ? input.value : "");
             refreshCatalogForInteraction();
             if (input.select) input.select();
         });
@@ -369,6 +393,10 @@
         });
         input.addEventListener("blur", function () {
             setTimeout(function () {
+                if (state.preserveDraftWhileUnfocused === true) {
+                    closeMenu();
+                    return;
+                }
                 if (shell.contains && shell.contains(document.activeElement)) return;
                 restoreSelectionLabel();
                 closeMenu();
@@ -379,7 +407,7 @@
         if (typeof MutationObserver === "function") {
             var observer = new MutationObserver(function () {
                 syncFromSource();
-                if (!menu.hidden && document.activeElement === input) {
+                if (!menu.hidden && document.activeElement === input && focusDisclosureAllowed()) {
                     renderCandidates(state.dirty ? input.value : "");
                 }
             });
@@ -397,6 +425,15 @@
     }
     App.enhanceProjectSelect = enhanceProjectSelect;
 
+    function dismissProjectAutocompleteMenus(options) {
+        options = options || {};
+        enhancedStates.forEach(function (state) {
+            if (options.preserveDraft === true) state.preserveDraftWhileUnfocused = true;
+            if (typeof state.closeMenu === "function") state.closeMenu();
+        });
+    }
+    App.dismissProjectAutocompleteMenus = dismissProjectAutocompleteMenus;
+
     function installProjectAutocompletes() {
         ["timeline-project-filter", "statistics-project-filter", "edit-project-select"]
             .forEach(function (id) {
@@ -407,5 +444,21 @@
             });
     }
     App.installProjectAutocompletes = installProjectAutocompletes;
+
+    App.projectAutocomplete = Object.freeze({
+        onShellHidden: function () {
+            dismissProjectAutocompleteMenus({ preserveDraft: true });
+        },
+        onShellVisible: function () {
+            dismissProjectAutocompleteMenus();
+        }
+    });
+
+    if (typeof window.addEventListener === "function") {
+        window.addEventListener("blur", function () {
+            dismissProjectAutocompleteMenus({ preserveDraft: true });
+        });
+    }
+
     installProjectAutocompletes();
 })();

@@ -94,6 +94,7 @@ function runtimeState(structureRevision, reportGeneration = 1, liveRevision = "l
   return {
     structureRevision,
     liveRevision,
+    liveReportDate: "2026-08-22",
     generations: {
       report_structure: reportGeneration,
       classification_catalog: 1,
@@ -180,7 +181,7 @@ test("composition leaves manual refresh owned by the central coordinator", async
 });
 
 test("loaded settings refresh in the background on every page entry", async () => {
-  const { App, listeners } = harness();
+  const { App } = harness();
   let requests = 0;
   App.currentPage = "settings";
   App.bridge = {
@@ -249,7 +250,7 @@ test("statistics report boundary freezes the old live target without issuing a s
   assert.equal(App.backgroundStatisticsRefresh, undefined);
 });
 
-test("live revision alone neither freezes nor refetches statistics", () => {
+test("statistics live identity change immediately freezes the old live target", () => {
   const { App, setRuntime } = harness();
   setRuntime(runtimeState("structure-1", 1, "live-1"));
   App.currentPage = "statistics";
@@ -257,7 +258,22 @@ test("live revision alone neither freezes nor refetches statistics", () => {
 
   App.acceptRefreshStateRuntime({ runtime: runtimeState("structure-1", 1, "live-2") });
 
-  assert.equal(App.statisticsLiveTickerSuspended, false);
+  assert.equal(App.statisticsLiveTickerSuspended, true);
+  assert.equal(App.statisticsLiveProjection.recoveryReason(), "statistics_runtime_identity_changed");
+});
+
+test("statistics runtime identity is scoped to a selection containing the live date", () => {
+  const { App } = harness();
+  assert.equal(
+    App.statistics.runtimeRefreshIdentity({ liveReportDate: "2026-08-22", liveRevision: "live-a" }),
+    "live-a"
+  );
+
+  App.setStatisticsSelection(false, "2026-08-01", "2026-08-21", null);
+  assert.equal(
+    App.statistics.runtimeRefreshIdentity({ liveReportDate: "2026-08-22", liveRevision: "live-b" }),
+    ""
+  );
 });
 
 test("statistics local ticker stops while an activity-boundary sync is pending", () => {

@@ -199,6 +199,90 @@ class FDWorkPageAdapter(_CoreFDWorkPageAdapter):
             timeout_seconds=timeout_seconds,
         )
 
+    def reset_case_picker(
+        self,
+        window: Any,
+        contract: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Synchronously remove only WorkTrace-owned picker/fill artifacts."""
+        script = (
+            "(function(){"
+            f"{_VERIFIED_WORK_SHELL_WINDOW_RESOLVER}"
+            "/*\"action_nonce\":\"direct-picker-reset\",\"action\":\"leaveCasePicker\"*/"
+            "var target=workTraceWorkShellWindow();"
+            "if(!target)return {ok:false,error:'page_contract_changed'};"
+            "var doc=target.document;"
+            "var p=target.WorkTraceFDWorkPickerSession;"
+            "var ownedBlocker=doc.getElementById('worktrace-fdwork-picker-blocker');"
+            "var restoreInput=!!ownedBlocker;"
+            "var value={ok:true};var failed=false;"
+            f"if(p&&p.version==={self.adapter_version}&&typeof p.leaveCasePicker===\"function\"){{"
+            "try{value=p.leaveCasePicker();}catch(_error){failed=true;}}"
+            "var blocker=doc.getElementById('worktrace-fdwork-picker-blocker');"
+            "if(blocker&&blocker.remove)blocker.remove();"
+            "var toolbar=doc.getElementById('worktrace-fdwork-picker-toolbar');"
+            "if(toolbar&&toolbar.remove)toolbar.remove();"
+            "var fillBlocker=doc.getElementById('worktrace-fdwork-fill-blocker');"
+            "if(fillBlocker&&fillBlocker.remove)fillBlocker.remove();"
+            "if(restoreInput){var input=doc.querySelector('#basic_caseId');"
+            "if(input&&input.disabled)input.disabled=false;}"
+            "if(failed)return {ok:false,error:'javascript_exception'};"
+            "return !value||value.ok!==false?{ok:true}:value;"
+            "})()"
+        )
+        started_at = self._clock()
+        value: Any = None
+        internal_error_kind: str | None = None
+        try:
+            value = window.evaluate_js(script)
+        except Exception as exc:
+            kind = getattr(exc, "kind", None)
+            internal_error_kind = (
+                kind
+                if isinstance(kind, str)
+                and kind in {
+                    "callback_timeout",
+                    "executor_rejected",
+                    "guard_rejected",
+                    "javascript_exception",
+                    "window_closed",
+                    "navigation_changed",
+                }
+                else "javascript_exception"
+            )
+            value = {"ok": False, "error": internal_error_kind}
+        result_type = type(value).__name__ if value is not None else "none"
+        validated = self._validated_action_result(value, internal_error_kind)
+        self._emit_action_diagnostic(
+            action="leaveCasePicker",
+            contract=contract,
+            value=value,
+            internal_error_kind=(
+                None if validated.get("ok") is True else str(validated.get("error") or "dom_contract_changed")
+            ),
+            callback_executed=True,
+            result_type=result_type,
+            elapsed_ms=max(0, int((self._clock() - started_at) * 1000)),
+        )
+        return validated
+
+    def leave_case_picker(
+        self,
+        window: Any,
+        contract: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        # Cleanup is local, synchronous and idempotent; do not depend on the
+        # picker message/callback channel that may itself be the failed path.
+        return self.reset_case_picker(window, contract)
+
+    def fill_entry(self, window: Any, draft: Any, *, contract: Mapping[str, Any]) -> dict[str, Any]:
+        result = dict(super().fill_entry(window, draft, contract=contract))
+        if result.get("ok") is not True and result.get("error") == "callback_timeout":
+            # Once fillEntry was dispatched the Save click may already have
+            # happened. A lost terminal callback must never invite blind retry.
+            return {"ok": False, "error": "save_outcome_unknown"}
+        return result
+
     def _ensure_picker_session(self, window: Any) -> Mapping[str, Any]:
         probe_script = (
             "(function(){"

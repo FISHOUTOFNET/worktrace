@@ -25,8 +25,10 @@ if ([string]::IsNullOrWhiteSpace($InstallDir)) {
 }
 
 $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$startupTaskName = "WorkTrace Launch At Login"
 $uninstaller = Join-Path $InstallDir "unins000.exe"
-$expectedStartup = '"' + (Join-Path $InstallDir "Trace.exe") + '" --background'
+$expectedExe = Join-Path $InstallDir "Trace.exe"
+$expectedStartup = '"' + $expectedExe + '" --background'
 $upgradePidFile = Join-Path $tempRoot "worktrace-upgrade-smoke.pid"
 $uninstallPidFile = Join-Path $tempRoot "worktrace-uninstall-smoke.pid"
 $firstInstallLog = Join-Path $tempRoot "worktrace-first-install.log"
@@ -66,6 +68,45 @@ function Invoke-CheckedProcess {
     }
 }
 
+function Remove-StartupTask {
+    $task = Get-ScheduledTask -TaskName $startupTaskName -ErrorAction SilentlyContinue
+    if ($null -ne $task) {
+        Unregister-ScheduledTask -TaskName $startupTaskName -Confirm:$false -ErrorAction Stop
+    }
+}
+
+function Assert-NoLegacyRunValue {
+    $remaining = Get-ItemPropertyValue `
+        -Path $runKey `
+        -Name "WorkTrace" `
+        -ErrorAction SilentlyContinue
+    if ($null -ne $remaining) {
+        throw "Legacy HKCU Run startup value remained after scheduled-task migration: $remaining"
+    }
+}
+
+function Assert-CanonicalStartupTask {
+    $task = Get-ScheduledTask -TaskName $startupTaskName -ErrorAction Stop
+    $actions = @($task.Actions)
+    if ($actions.Count -ne 1) {
+        throw "Startup task has unexpected action count: $($actions.Count)"
+    }
+    if ($actions[0].Execute -ne $expectedExe) {
+        throw "Startup task targets unexpected executable: $($actions[0].Execute)"
+    }
+    if ($actions[0].Arguments -ne "--background") {
+        throw "Startup task has unexpected arguments: $($actions[0].Arguments)"
+    }
+    if ($actions[0].WorkingDirectory -ne $InstallDir) {
+        throw "Startup task has unexpected working directory: $($actions[0].WorkingDirectory)"
+    }
+    $triggers = @($task.Triggers)
+    if ($triggers.Count -ne 1 -or $triggers[0].CimClass.CimClassName -ne "MSFT_TaskLogonTrigger") {
+        throw "Startup task does not have exactly one logon trigger"
+    }
+    Assert-NoLegacyRunValue
+}
+
 if (Test-Path -LiteralPath $InstallDir) {
     Remove-Item -Recurse -Force -LiteralPath $InstallDir
 }
@@ -78,6 +119,7 @@ Remove-ItemProperty `
     -Path $runKey `
     -Name "WorkTrace" `
     -ErrorAction SilentlyContinue
+Remove-StartupTask
 
 try {
     Invoke-CheckedProcess `
@@ -94,13 +136,7 @@ try {
             "/TASKS=`"startup`""
         )
 
-    $firstStartup = Get-ItemPropertyValue `
-        -Path $runKey `
-        -Name "WorkTrace" `
-        -ErrorAction Stop
-    if ($firstStartup -ne $expectedStartup) {
-        throw "First install wrote unexpected startup value: $firstStartup"
-    }
+    Assert-CanonicalStartupTask
 
     & ".\scripts\smoke_installed_launch.ps1" `
         -InstallDir $InstallDir `
@@ -108,10 +144,15 @@ try {
         -PidFile $upgradePidFile
     $upgradePid = [int](Get-Content -LiteralPath $upgradePidFile -Raw)
 
+    # Emulate an installed pre-migration release. Upgrade must preserve the
+    # user's enabled preference, create the canonical scheduled task first, and
+    # only then remove the legacy Run value.
+    Remove-StartupTask
     Copy-Item `
         -LiteralPath (Join-Path $InstallDir "Trace.exe") `
         -Destination (Join-Path $InstallDir "WorkTrace.exe") `
         -Force
+    New-Item -Path $runKey -Force | Out-Null
     Set-ItemProperty `
         -Path $runKey `
         -Name "WorkTrace" `
@@ -139,13 +180,7 @@ try {
         throw "Upgrade left legacy WorkTrace.exe behind"
     }
 
-    $upgradedStartup = Get-ItemPropertyValue `
-        -Path $runKey `
-        -Name "WorkTrace" `
-        -ErrorAction Stop
-    if ($upgradedStartup -ne $expectedStartup) {
-        throw "Upgrade did not preserve enabled startup state: $upgradedStartup"
-    }
+    Assert-CanonicalStartupTask
 
     if (-not (Test-Path -LiteralPath $uninstaller)) {
         throw "Installer smoke uninstaller was not generated"
@@ -180,6 +215,9 @@ try {
     if ($null -ne $remainingStartup) {
         throw "Uninstall left startup value behind"
     }
+    if ($null -ne (Get-ScheduledTask -TaskName $startupTaskName -ErrorAction SilentlyContinue)) {
+        throw "Uninstall left scheduled startup task behind"
+    }
 }
 finally {
     foreach ($pidValue in @($upgradePid, $uninstallPid)) {
@@ -204,6 +242,7 @@ finally {
             -ErrorAction SilentlyContinue
     }
 
+    Remove-StartupTask
     Remove-ItemProperty `
         -Path $runKey `
         -Name "WorkTrace" `

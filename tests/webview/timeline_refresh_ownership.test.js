@@ -1,9 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 const vm = require("node:vm");
-const { TIMELINE_MODULES, loadTimelineModules } = require("./timeline_test_modules");
+const { loadTimelineModules } = require("./timeline_test_modules");
 
 function harness() {
   let editing = false;
@@ -55,27 +53,23 @@ function harness() {
   };
 }
 
-test("Timeline consumes live-only suppression once", async () => {
+test("Timeline live identity changes never suppress authoritative refresh", async () => {
   const { App, refreshes } = harness();
   App.timeline.onRuntimeTransition({ source: "refresh-state", liveChanged: true });
 
   await App.refreshTimeline();
-  assert.equal(refreshes(), 0);
-  assert.equal(App.suppressNextTimelineCollectionRefresh, false);
 
-  await App.refreshTimeline();
   assert.equal(refreshes(), 1);
+  assert.equal(App.suppressNextTimelineCollectionRefresh, undefined);
 });
 
-test("Timeline structural pending outranks one-shot suppression", async () => {
+test("Timeline structural pending still drains through the authoritative refresh path", async () => {
   const { App, refreshes } = harness();
-  App.suppressNextTimelineCollectionRefresh = true;
   App.timelineStructuralRefreshPending = true;
 
   assert.equal(await App.refreshTimeline(), true);
   assert.equal(refreshes(), 1);
   assert.equal(App.timelineStructuralRefreshPending, false);
-  assert.equal(App.suppressNextTimelineCollectionRefresh, false);
 });
 
 test("Timeline holds structural refresh while editing and drains on a safe local tick", async () => {
@@ -106,13 +100,38 @@ test("Timeline restores structural pending when a drain refresh fails", async ()
   assert.equal(App.timelineStructuralRefreshPending, true);
 });
 
-test("Timeline manual refresh bypasses passive live suppression", async () => {
-  const { App, refreshes } = harness();
-  App.timeline.onRuntimeTransition({ source: "refresh-state", liveChanged: true });
+test("Timeline heartbeat overlay does not mutate the authoritative snapshot", () => {
+  const { App } = harness();
+  App.lastTimelineData = { current_activity: { marker: "A" } };
 
-  await App.timeline.onRefreshRequested({ automatic: false });
+  App.timeline.updateCurrentActivity({ marker: "B" }, { render: false });
 
-  assert.equal(refreshes(), 1);
-  assert.equal(App.suppressNextTimelineCollectionRefresh, false);
+  assert.equal(App.lastTimelineData.current_activity.marker, "A");
 });
 
+test("Timeline runtime refresh identity is scoped to the live report date", () => {
+  const { App } = harness();
+
+  assert.equal(
+    App.timeline.runtimeRefreshIdentity({
+      liveReportDate: "2026-08-22",
+      liveRevision: "rev-live",
+    }),
+    "rev-live"
+  );
+  assert.equal(
+    App.timeline.runtimeRefreshIdentity({
+      liveReportDate: "2026-08-23",
+      liveRevision: "rev-other",
+    }),
+    ""
+  );
+});
+
+test("Timeline automatic refresh is blocked while editing", () => {
+  const { App, setEditing } = harness();
+  setEditing(true);
+  assert.equal(App.timeline.automaticRefreshAllowed("2026-08-22"), false);
+  setEditing(false);
+  assert.equal(App.timeline.automaticRefreshAllowed("2026-08-22"), true);
+});

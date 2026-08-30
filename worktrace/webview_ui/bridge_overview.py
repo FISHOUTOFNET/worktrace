@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class OverviewBridgeMixin:
     def get_status(self) -> dict[str, Any]:
         try:
-            return self._app_control.get_collection_status()
+            return dict(self._app_control.get_collection_status())
         except Exception:
             logger.exception("webview bridge get_status failed")
             return dict(_GENERIC_ERROR)

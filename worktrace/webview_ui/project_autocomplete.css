@@ -7,8 +7,8 @@
 }
 .project-autocomplete-shell.project-autocomplete-filter {
     width: var(--project-filter-width);
-    min-width: var(--project-filter-width);
-    max-width: var(--project-filter-width);
+    min-width: 0;
+    max-width: 100%;
 }
 .field .project-autocomplete-shell {
     width: 100%;
@@ -59,15 +59,35 @@
     background: var(--color-accent-soft);
 }
 .project-autocomplete-name {
+    min-width: 0;
     max-width: 220px;
     overflow: hidden;
     text-overflow: ellipsis;
     font-weight: 500;
 }
 .project-autocomplete-description {
+    min-width: 0;
     max-width: 150px;
     overflow: hidden;
     text-overflow: ellipsis;
     color: var(--color-text-tertiary);
     font-size: var(--font-size-sm);
+}
+
+/* Compact desktop menus stay within the same responsive width as their visible
+   filter control. This avoids the hidden native select becoming the only
+   shrinkable element and prevents a max-content menu from crossing the viewport. */
+@media (max-width: 959px) {
+    .toolbar .project-autocomplete-shell.project-autocomplete-filter {
+        width: var(--project-filter-width);
+        min-width: 0;
+        max-width: 100%;
+    }
+    .toolbar .project-autocomplete-filter .project-autocomplete-menu {
+        left: 0;
+        right: auto;
+        width: 100%;
+        min-width: 100%;
+        max-width: 100%;
+    }
 }

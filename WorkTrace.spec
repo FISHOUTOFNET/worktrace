@@ -7,6 +7,7 @@ from PyInstaller.utils.hooks import collect_all
 root = Path(SPECPATH)
 brand_icon = root / 'build' / 'brand' / 'worktrace.ico'
 paused_brand_icon = root / 'build' / 'brand' / 'worktrace-paused.ico'
+app_manifest = root / 'packaging' / 'windows' / 'trace.manifest.xml'
 icon_generator = runpy.run_path(str(root / 'scripts' / 'generate_brand_icon.py'))
 icon_generator['generate_icon'](brand_icon)
 icon_generator['generate_icon'](paused_brand_icon, grayscale=True)
@@ -23,7 +24,9 @@ datas = [
     (str(root / 'worktrace' / 'webview_ui' / 'styles.css'), 'worktrace/webview_ui'),
     (str(root / 'worktrace' / 'webview_ui' / 'ui_components.css'), 'worktrace/webview_ui'),
     (str(root / 'worktrace' / 'webview_ui' / 'project_autocomplete.css'), 'worktrace/webview_ui'),
+    (str(root / 'worktrace' / 'webview_ui' / 'application_metadata.css'), 'worktrace/webview_ui'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'core.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'application_metadata.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'privacy_notice.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'fd_work_v5.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'ui_components.js'), 'worktrace/webview_ui/js'),
@@ -36,9 +39,12 @@ datas = [
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline_editor_state.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline_fd_work.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline_selection_continuity.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline_delete_actions.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline_action_presentation.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'statistics.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'statistics_interactive_range_policy.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'statistics_live_projection.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'settings_presentation.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'settings_transient_ui.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'settings_data_operations.js'), 'worktrace/webview_ui/js'),
@@ -51,6 +57,7 @@ datas = [
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'rules_delete_actions.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'page_lifecycle.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'init_fd_work_v5.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'shell_lifecycle.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'ui_composition.js'), 'worktrace/webview_ui/js'),
     (str(brand_icon), 'worktrace/assets'),
     (str(paused_brand_icon), 'worktrace/assets'),
@@ -103,6 +110,7 @@ portable_exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=str(brand_icon),
+    manifest=str(app_manifest),
 )
 
 installed_exe = EXE(
@@ -123,6 +131,7 @@ installed_exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=str(brand_icon),
+    manifest=str(app_manifest),
 )
 
 installed_app = COLLECT(

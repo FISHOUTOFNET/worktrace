@@ -81,6 +81,20 @@ class ProjectionComputation:
     activity_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class VerifiedOpenProjectionOverride:
+    """Verified request-local duration for the single persisted open activity."""
+
+    activity_id: int
+    duration_seconds: int
+
+    def __post_init__(self) -> None:
+        if int(self.activity_id) <= 0:
+            raise ValueError("effective_projection_requires_open_activity")
+        if int(self.duration_seconds) < 0:
+            raise ValueError("effective_projection_requires_nonnegative_duration")
+
+
 def compute_projection_snapshot_revision(
     start_date: str,
     end_date: str,
@@ -140,6 +154,32 @@ def compute_projection(
     start_date: str,
     end_date: str,
 ) -> ProjectionComputation:
+    """Return durable projection semantics; runtime state is never consulted."""
+    return _compute_projection(conn, start_date, end_date)
+
+
+def compute_effective_read_projection(
+    conn,
+    start_date: str,
+    end_date: str,
+    verified_open_override: VerifiedOpenProjectionOverride,
+) -> ProjectionComputation:
+    """Return request-local as-of structure using one verified open duration."""
+    return _compute_projection(
+        conn,
+        start_date,
+        end_date,
+        verified_open_override=verified_open_override,
+    )
+
+
+def _compute_projection(
+    conn,
+    start_date: str,
+    end_date: str,
+    *,
+    verified_open_override: VerifiedOpenProjectionOverride | None = None,
+) -> ProjectionComputation:
     """Run the single projection computation path and return raw results.
 
     This is the sole owner of projection business logic (fact query, session
@@ -151,10 +191,20 @@ def compute_projection(
     uncategorized_id = get_uncategorized_project_id(conn)
     project_states = _load_project_states(conn, uncategorized_id)
     with stage("fact_query"):
+        duration_overrides = (
+            {
+                int(verified_open_override.activity_id): int(
+                    verified_open_override.duration_seconds
+                )
+            }
+            if verified_open_override is not None
+            else None
+        )
         rows = load_report_activity_rows(
             start_date,
             end_date,
             conn=conn,
+            duration_overrides=duration_overrides,
         )
 
     # Visibility is applied after continuity is established. A soft-deleted
@@ -210,6 +260,11 @@ def compute_projection(
             protected_member_sets=protected_member_sets,
             interval_rows=reportable_rows,
             unrecorded_gap_boundary_seconds=gap_threshold,
+            effective_open_activity_id=(
+                int(verified_open_override.activity_id)
+                if verified_open_override is not None
+                else 0
+            ),
         )
         base_projection = build_base_projection(
             base_sessions,
@@ -497,6 +552,8 @@ def _load_project_states(conn, uncategorized_id: int) -> list[ProjectState]:
 
 __all__ = [
     "ProjectionComputation",
+    "VerifiedOpenProjectionOverride",
+    "compute_effective_read_projection",
     "compute_projection",
     "compute_projection_snapshot_revision",
 ]

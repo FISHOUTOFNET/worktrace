@@ -35,6 +35,7 @@ EXPECTED_SHIPPING_METHODS = frozenset(
         "delete_project_keyword_rule",
         "export_encrypted_backup",
         "export_statistics_csv",
+        "get_application_metadata",
         "get_fd_work_status",
         "get_first_run_notice",
         "get_overview",

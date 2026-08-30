@@ -139,32 +139,39 @@ def run_folder_index_worker(
     *,
     health,
 ) -> None:
+    """Run retryable folder-index iterations on the AppRuntime-owned thread."""
+
     logging.info("folder index worker loop enter")
     next_hot_refresh_at = 0.0
-    try:
-        ensure_index_states_for_folder_rules()
-        _core.recover_interrupted_indexes()
-        reconcile_index_eligibility()
-        if privacy_gate_service.is_sensitive_runtime_allowed():
-            validate_ready_indexes(stop_event)
-    except Exception:
-        logging.exception("folder index startup validation failed")
-        health.failed("folder_index_startup_failed")
-    else:
-        health.succeeded()
+    startup_reconciliation_pending = True
 
     while not stop_event.is_set():
+        if DATABASE_WRITE_GATE.writes_blocked():
+            health.maintenance_paused(True)
+            _core._wait_for_worker()
+            continue
+        health.maintenance_paused(False)
+
+        if not privacy_gate_service.is_sensitive_runtime_allowed():
+            health.maintenance_paused(True)
+            _core._wait_for_worker()
+            continue
+        health.maintenance_paused(False)
+
         try:
-            if DATABASE_WRITE_GATE.writes_blocked():
-                health.maintenance_paused(True)
+            if startup_reconciliation_pending:
+                # Startup reconciliation is ordinary retryable worker work. It
+                # must observe the same write/privacy gates and exception
+                # boundary as later iterations so transient SQLite contention
+                # cannot escape to the AppRuntime wrapper.
+                ensure_index_states_for_folder_rules()
+                _core.recover_interrupted_indexes()
+                reconcile_index_eligibility()
+                validate_ready_indexes(stop_event)
+                startup_reconciliation_pending = False
+                health.succeeded()
                 _core._wait_for_worker()
                 continue
-            health.maintenance_paused(False)
-            if not privacy_gate_service.is_sensitive_runtime_allowed():
-                health.maintenance_paused(True)
-                _core._wait_for_worker()
-                continue
-            health.maintenance_paused(False)
 
             ensure_index_states_for_folder_rules()
             _core._retry_pending_gc()
@@ -191,9 +198,14 @@ def run_folder_index_worker(
             health.succeeded()
             _core._wait_for_worker()
         except Exception:
-            logging.exception("folder index worker error")
-            health.failed("folder_index_iteration_failed")
+            if startup_reconciliation_pending:
+                logging.exception("folder index startup reconciliation failed")
+                health.failed("folder_index_startup_failed")
+            else:
+                logging.exception("folder index worker error")
+                health.failed("folder_index_iteration_failed")
             _core._wait_for_worker()
+
     logging.info("folder index worker loop exit")
 
 

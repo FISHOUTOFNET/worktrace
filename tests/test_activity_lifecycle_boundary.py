@@ -116,9 +116,11 @@ def test_recorder_has_no_public_midnight_split_compatibility_entrypoint() -> Non
     assert {"prepare_midnight_split", "resume_midnight_split"} <= methods
 
 
-def test_runtime_routes_shutdown_close_all_through_lifecycle() -> None:
+def test_runtime_shutdown_routes_open_rows_through_safe_recovery() -> None:
     source = _read(RUNTIME_DIR / "app_runtime.py")
-    assert "activity_lifecycle_service.close_all_open_activities" in source
+    assert "recovery_service.recover_unclosed_activity_facts(" in source
+    assert "allow_legacy_heartbeat=False" in source
+    assert "activity_lifecycle_service.close_all_open_activities" not in source
 
 
 def test_recovery_routes_activity_and_boundary_facts_through_one_lifecycle_owner() -> None:

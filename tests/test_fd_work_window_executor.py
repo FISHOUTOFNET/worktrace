@@ -96,8 +96,98 @@ def test_callback_timeout_discards_stale_callback_and_next_command_continues():
     assert timed_out.ok is False
     assert timed_out.error_kind == "callback_timeout"
     assert timed_out.callback_executed is False
+    assert executor.stalled is False
     assert following.ok is True
     assert following.value == "next"
+    executor.shutdown(timeout=1)
+
+
+def test_blocked_sync_command_latches_stall_and_never_starts_second_owner():
+    executor = FDWorkWindowExecutor(name="fd-work-test-stalled")
+    original_worker = executor._worker
+    command_entered = threading.Event()
+    release_command = threading.Event()
+    outcome = {}
+    mutations = []
+
+    def blocked(done):
+        command_entered.set()
+        release_command.wait(timeout=1)
+        done("late")
+
+    submitter = threading.Thread(
+        target=lambda: outcome.setdefault(
+            "result", executor.submit(blocked, lambda: True, 0.05)
+        )
+    )
+    submitter.start()
+    assert command_entered.wait(timeout=1)
+    submitter.join(timeout=0.5)
+
+    assert not submitter.is_alive()
+    assert outcome["result"].ok is False
+    assert outcome["result"].error_kind == "executor_stalled"
+    assert executor.stalled is True
+    assert executor._worker is original_worker
+
+    following = executor.submit(
+        lambda done: (mutations.append("ran"), done(True)),
+        lambda: True,
+        1,
+    )
+    assert following.ok is False
+    assert following.error_kind == "executor_stalled"
+    assert mutations == []
+    assert executor._worker is original_worker
+
+    release_command.set()
+    original_worker.join(timeout=1)
+    assert not original_worker.is_alive()
+    assert mutations == []
+    executor.shutdown(timeout=1)
+
+
+def test_request_expiring_in_fifo_is_skipped_without_poisoning_owner():
+    executor = FDWorkWindowExecutor(name="fd-work-test-queued-timeout")
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    first_result = {}
+    mutations = []
+
+    def first(done):
+        first_entered.set()
+        assert release_first.wait(timeout=1)
+        done("first")
+
+    first_submitter = threading.Thread(
+        target=lambda: first_result.setdefault(
+            "result", executor.submit(first, lambda: True, 1)
+        )
+    )
+    first_submitter.start()
+    assert first_entered.wait(timeout=1)
+
+    expired = executor.submit(
+        lambda done: (mutations.append("expired-ran"), done(True)),
+        lambda: True,
+        0.03,
+    )
+    assert expired.ok is False
+    assert expired.error_kind == "request_timeout"
+    assert executor.stalled is False
+
+    release_first.set()
+    first_submitter.join(timeout=1)
+    assert not first_submitter.is_alive()
+    assert first_result["result"].ok is True
+
+    following = executor.submit(
+        lambda done: (mutations.append("following"), done(True)),
+        lambda: True,
+        1,
+    )
+    assert following.ok is True
+    assert mutations == ["following"]
     executor.shutdown(timeout=1)
 
 

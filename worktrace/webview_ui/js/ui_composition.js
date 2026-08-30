@@ -3,20 +3,12 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    function clearSettledFDWorkAuthOverride(status) {
-        if (!status || status.operation !== "none") return;
-        if (["ready", "idle", "error", "disabled", "shutdown"].indexOf(status.session_state) < 0) {
-            return;
-        }
-        var override = App.fdWorkStatusOverride;
-        var reason = String(override && override.reason || "");
-        if (/登录|连接 FD Work/.test(reason)) App.fdWorkStatusOverride = null;
-    }
-
     function syncFDWorkConsumers(status) {
-        clearSettledFDWorkAuthOverride(status || App.fdWorkStatus);
         if (App.settings && typeof App.settings.onFDWorkStatusChanged === "function") {
             App.settings.onFDWorkStatusChanged(status || App.fdWorkStatus || null);
+        }
+        if (App.timelineFDWork && typeof App.timelineFDWork.onStatusChanged === "function") {
+            App.timelineFDWork.onStatusChanged(status || App.fdWorkStatus || null);
         }
         if (typeof App.updateFDWorkEntryButton === "function") {
             App.updateFDWorkEntryButton();
@@ -73,22 +65,13 @@
         }
 
         // A page payload is itself the authoritative refresh for the active page.
-        // Cross-surface invalidation still applies, but current-page reconcile is
-        // reserved for heartbeat refresh-state transitions to avoid double fetches.
+        // Cross-surface invalidation still applies, but current-page transient
+        // interlocks are reserved for heartbeat refresh-state transitions.
         if (source !== "refresh-state") return accepted;
 
         if (page === "timeline" && App.timeline
             && typeof App.timeline.onRuntimeTransition === "function") {
             App.timeline.onRuntimeTransition({
-                source: source,
-                structureChanged: structureChanged,
-                liveChanged: liveChanged
-            });
-        }
-
-        if (page === "overview" && App.overview
-            && typeof App.overview.onRuntimeTransition === "function") {
-            App.overview.onRuntimeTransition({
                 source: source,
                 structureChanged: structureChanged,
                 liveChanged: liveChanged

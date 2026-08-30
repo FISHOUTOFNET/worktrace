@@ -1,0 +1,68 @@
+.application-version-label {
+    min-height: 14px;
+    margin-top: 7px;
+    color: var(--color-text-tertiary);
+    font-size: var(--font-size-xs);
+    line-height: 1.25;
+    text-align: center;
+    white-space: nowrap;
+}
+
+/* Settings owns one continuous vertical rhythm. The active section supplies
+   the full-width divider; the application-information footer only supplies
+   content, so the last setting row cannot inherit footer spacing. */
+.settings-section:not([hidden]) {
+    border-bottom: 1px solid var(--color-border);
+}
+
+#settings-storage-card {
+    grid-template-columns: auto minmax(0, 1fr);
+}
+
+.settings-local-data-path {
+    min-width: 0;
+    max-width: 100%;
+    justify-self: end;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: right;
+}
+
+#settings-section-advanced > label.setting-row[for="settings-fd-work-toggle"] {
+    padding-bottom: 9px;
+}
+
+#settings-fd-work-reconnect:not([hidden]) {
+    margin: 0 0 9px auto;
+}
+
+.settings-application-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin: 0;
+    padding: 11px 4px 2px;
+    border-top: 0;
+    color: var(--color-text-tertiary);
+    font-size: var(--font-size-xs);
+    line-height: 1.3;
+}
+
+.settings-application-footer-version,
+.settings-application-footer-creator {
+    min-width: 0;
+    white-space: nowrap;
+}
+
+.settings-application-footer-creator {
+    margin-left: auto;
+    text-align: right;
+}
+
+@media (max-width: 959px) {
+    .application-version-label {
+        display: none;
+    }
+}

@@ -13,6 +13,7 @@ from typing import Any
 
 from . import PRODUCT_DISPLAY_NAME, PRODUCT_NAME, config
 from .collector.single_instance import get_application_instance_coordinator
+from .desktop.collection_icon_projection import CollectionIconProjectionHost
 from .desktop.deferred_ui import DeferredUIGate, InitialUIRequest
 from .desktop.install_bootstrap import consume_fd_work_install_intent
 from .desktop.update_shutdown import get_application_update_shutdown_coordinator
@@ -30,12 +31,9 @@ from .webview_ui.runtime_check import (
 
 
 def setup_logging(log_path) -> None:
-    logging.basicConfig(
-        filename=log_path,
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-        encoding="utf-8",
-    )
+    from .logging_config import configure_file_logging
+
+    configure_file_logging(log_path)
 
 
 def resource_path(relative: str) -> Path:
@@ -311,7 +309,7 @@ def _run_webview_ui(
             js_api=bridge.shipping_api,
             width=1080,
             height=720,
-            min_size=(800, 540),
+            min_size=(840, 560),
             hidden=False,
             focus=True,
         )
@@ -345,8 +343,10 @@ def _run_webview_ui(
             initial_hidden=False,
             window_icons=window_icons,
             webview_power=webview_power,
-            collection_active_provider=lambda: services.app_control.is_collection_active(),
         )
+        attach_window_icons = getattr(tray, "attach_window_icons", None)
+        if callable(attach_window_icons):
+            attach_window_icons(window_icons)
         shell_holder["shell"] = shell
         fd_work_controller.bind_main_focus_callback(shell.show_window)
         _bind_shell_events(
@@ -462,6 +462,21 @@ def _wait_after_failed_headless_ui(deferred_ui: DeferredUIGate) -> None:
             return
 
 
+def _request_runtime_shutdown(runtime) -> None:
+    request_shutdown = getattr(runtime, "request_shutdown", None)
+    if not callable(request_shutdown):
+        logging.warning("application runtime missing cooperative shutdown capability")
+        return
+    request_shutdown()
+
+
+def _run_cleanup_step(name: str, callback) -> None:
+    try:
+        callback()
+    except Exception:
+        logging.exception("application cleanup failed stage=%s", name)
+
+
 def main(*, background: bool = False) -> int:
     startup_started_at = time.monotonic()
     paths = config.resolve_paths()
@@ -488,8 +503,18 @@ def main(*, background: bool = False) -> int:
     update_shutdown = get_application_update_shutdown_coordinator()
     update_shutdown_prepared = False
     exit_lock = threading.Lock()
-    exit_requested = False
+    exit_worker_running = False
+    runtime_shutdown_lock = threading.Lock()
+    runtime_shutdown_completed = False
     deferred_ui: DeferredUIGate | None = None
+
+    def shutdown_runtime_once() -> None:
+        nonlocal runtime_shutdown_completed
+        with runtime_shutdown_lock:
+            if runtime_shutdown_completed:
+                return
+            runtime.shutdown()
+            runtime_shutdown_completed = True
 
     try:
         try:
@@ -604,26 +629,84 @@ def main(*, background: bool = False) -> int:
             return bool(shell and shell.show_window())
 
         def exit_application() -> None:
-            nonlocal exit_requested
+            nonlocal exit_worker_running
             with exit_lock:
-                if exit_requested:
+                if exit_worker_running:
                     return
-                exit_requested = True
-            logging.info("application exit requested")
-            services.fd_work.shutdown()
-            if deferred_ui is not None:
-                deferred_ui.request_exit()
-                return
-            shell = shell_holder.get("shell")
-            if shell is not None:
-                shell.exit_application()
+                exit_worker_running = True
+
+            def perform_application_exit() -> None:
+                nonlocal exit_worker_running
+                logging.info("application exit requested")
+                try:
+                    _run_cleanup_step(
+                        "runtime_request",
+                        lambda: _request_runtime_shutdown(runtime),
+                    )
+                    if services is not None:
+                        _run_cleanup_step(
+                            "fd_work_exit",
+                            lambda: services.fd_work.shutdown(),
+                        )
+                    elif fd_work_controller is not None:
+                        _run_cleanup_step(
+                            "fd_work_controller_exit",
+                            lambda: fd_work_controller.shutdown(),
+                        )
+
+                    shell = shell_holder.get("shell")
+                    if deferred_ui is not None:
+                        _run_cleanup_step(
+                            "deferred_ui_exit",
+                            lambda: deferred_ui.request_exit(),
+                        )
+                        if shell is not None:
+                            # request_exit owns the normal bound-shell path. Call
+                            # the shell capability once more so a transient native
+                            # destroy failure stays retryable instead of becoming
+                            # sticky behind DeferredUIGate._exit_requested.
+                            _run_cleanup_step(
+                                "desktop_shell_exit",
+                                lambda: shell.exit_application(),
+                            )
+                        elif tray is not None:
+                            _run_cleanup_step("tray_exit", lambda: tray.stop())
+                    elif shell is not None:
+                        _run_cleanup_step(
+                            "desktop_shell_exit",
+                            lambda: shell.exit_application(),
+                        )
+                    elif tray is not None:
+                        _run_cleanup_step("tray_exit", lambda: tray.stop())
+
+                    # Explicit application exit owns full runtime terminalization.
+                    # The outer finally reuses the same once-guarded capability,
+                    # so GUI-loop return cannot race a second terminal shutdown.
+                    _run_cleanup_step("runtime_exit", shutdown_runtime_once)
+                finally:
+                    with exit_lock:
+                        exit_worker_running = False
+
+            try:
+                threading.Thread(
+                    target=perform_application_exit,
+                    name="WorkTraceApplicationExit",
+                    daemon=True,
+                ).start()
+            except Exception:
+                with exit_lock:
+                    exit_worker_running = False
+                logging.exception("application exit worker startup failed")
 
         icon_path = desktop_resource_path("worktrace.ico")
-        tray = WindowsTrayHost(
-            icon_path=icon_path,
-            on_open=open_application,
-            on_exit=exit_application,
-            on_session_end=exit_application,
+        tray = CollectionIconProjectionHost(
+            tray=WindowsTrayHost(
+                icon_path=icon_path,
+                on_open=open_application,
+                on_exit=exit_application,
+                on_session_end=exit_application,
+            ),
+            collection_active_provider=app_control.is_collection_active,
         )
 
         if deferred_ui is not None:
@@ -631,9 +714,7 @@ def main(*, background: bool = False) -> int:
             if update_shutdown_prepared:
                 update_shutdown.bind_shutdown_handler(exit_application)
             tray_available = tray.start()
-            if tray_available:
-                tray.set_collection_active(app_control.is_collection_active())
-            else:
+            if not tray_available:
                 logging.error("headless tray unavailable; opening visible UI")
                 deferred_ui.request_open()
             logging.info(
@@ -718,19 +799,27 @@ def main(*, background: bool = False) -> int:
             background=background,
         )
     finally:
-        instance_coordinator.stop_activation_listener()
-        update_shutdown.stop_listener()
+        logging.info("application cleanup begin")
+        _run_cleanup_step(
+            "activation_listener",
+            lambda: instance_coordinator.stop_activation_listener(),
+        )
+        _run_cleanup_step(
+            "update_shutdown_listener",
+            lambda: update_shutdown.stop_listener(),
+        )
         if services is not None:
-            services.fd_work.shutdown()
+            _run_cleanup_step("fd_work", lambda: services.fd_work.shutdown())
         elif fd_work_controller is not None:
-            fd_work_controller.shutdown()
+            _run_cleanup_step("fd_work_controller", lambda: fd_work_controller.shutdown())
         shell = shell_holder.get("shell")
         if shell is not None:
-            shell.stop()
+            _run_cleanup_step("desktop_shell", lambda: shell.stop())
         elif tray is not None:
-            tray.stop()
-        runtime.shutdown()
-        update_shutdown.close()
+            _run_cleanup_step("tray", lambda: tray.stop())
+        _run_cleanup_step("runtime", shutdown_runtime_once)
+        _run_cleanup_step("update_shutdown", lambda: update_shutdown.close())
+        logging.info("application cleanup end")
 
 
 if __name__ == "__main__":

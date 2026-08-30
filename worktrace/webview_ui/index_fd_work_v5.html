@@ -4,9 +4,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>有迹 · Trace</title>
-    <link rel="stylesheet" href="styles.css?v=8033423c5fb890e0">
-    <link rel="stylesheet" href="ui_components.css?v=0250acb23d6a89f7">
-    <link rel="stylesheet" href="project_autocomplete.css?v=1b8aa4d1915ef51b">
+    <link rel="stylesheet" href="styles.css?v=4f045161ba1811a0">
+    <link rel="stylesheet" href="ui_components.css?v=d2f4f2f68e2760fc">
+    <link rel="stylesheet" href="project_autocomplete.css?v=40b59ac328b8b1d4">
+    <link rel="stylesheet" href="application_metadata.css?v=b8992aaf5b8bd978">
 </head>
 <body>
     <svg class="icon-sprite" aria-hidden="true">
@@ -55,6 +56,7 @@
             </nav>
             <div class="nav-footer">
                 <button id="toggle-pause-btn" type="button" class="toggle-btn" aria-label="开始记录" data-tooltip="开始记录"><svg class="icon" aria-hidden="true"><use href="#icon-play"/></svg><span class="nav-label">开始记录</span></button>
+                <div id="application-version-label" class="application-version-label" aria-label="应用版本"></div>
             </div>
         </aside>
         <main class="app-main">
@@ -73,7 +75,7 @@
             <section id="page-timeline" class="page timeline-page">
                 <header class="page-header page-header-compact"><div><h1>时间详情</h1></div><div class="page-total"><span id="timeline-total-label">今日总时长</span><strong id="timeline-total" class="numeric">00:00:00</strong></div></header>
                 <div class="toolbar timeline-toolbar">
-                    <div class="control-group timeline-date-controls"><button id="timeline-prev-btn" type="button" class="icon-button" aria-label="前一天" data-tooltip="前一天"><svg class="icon" aria-hidden="true"><use href="#icon-chevron-left"/></svg></button><input id="timeline-date-input" class="date-control" type="date" aria-label="日期"><button id="timeline-next-btn" type="button" class="icon-button" aria-label="后一天" data-tooltip="后一天"><svg class="icon" aria-hidden="true"><use href="#icon-chevron-right"/></svg></button></div>
+                    <div class="control-group timeline-date-controls"><button id="timeline-prev-btn" type="button" class="icon-button" aria-label="前一天" data-tooltip="前一天"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-chevron-left"/></svg></button><input id="timeline-date-input" class="date-control" type="date" aria-label="日期"><button id="timeline-next-btn" type="button" class="icon-button" aria-label="后一天" data-tooltip="后一天"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-chevron-right"/></svg></button></div>
                     <button id="timeline-today-btn" type="button">今日</button><label for="timeline-project-filter">项目</label><select id="timeline-project-filter" class="project-filter-control"><option value="">全部项目</option><option value="unclassified">未归类</option></select>
                 </div>
                 <div id="timeline-error" class="inline-alert error" role="alert" hidden>加载失败，请稍后重试。</div>
@@ -106,12 +108,12 @@
                 </div>
             </section>
 
-            <section id="page-statistics" class="page statistics-page">
+            <section id="page-statistics" class="page statistics-page" data-max-range-days="366">
                 <header class="page-header page-header-compact"><div><h1>统计与导出</h1></div><button id="stats-export-action-btn" type="button" class="button primary" disabled><svg class="icon" aria-hidden="true"><use href="#icon-download"/></svg><span>导出 CSV</span></button></header>
                 <div class="toolbar statistics-toolbar">
                     <div class="statistics-date-range" aria-label="统计日期范围"><div class="statistics-date-editor"><div id="statistics-date-inputs" class="statistics-date-inputs"><label class="sr-only" for="statistics-date-from">开始日期</label><span class="statistics-date-control-shell"><input id="statistics-date-from" class="date-control statistics-date-control" type="date" data-empty="true" aria-label="开始日期"><span class="statistics-date-empty-label" aria-hidden="true">YYYY/MM/DD</span></span><span aria-hidden="true">至</span><label class="sr-only" for="statistics-date-to">结束日期</label><span class="statistics-date-control-shell"><input id="statistics-date-to" class="date-control statistics-date-control" type="date" data-empty="true" aria-label="结束日期"><span class="statistics-date-empty-label" aria-hidden="true">YYYY/MM/DD</span></span><button id="statistics-apply-range-btn" type="button">应用</button></div></div><span id="statistics-date-status" class="statistics-date-status" role="status" aria-live="polite" hidden></span></div>
                     <label for="statistics-project-filter">项目</label><select id="statistics-project-filter" class="project-filter-control"><option value="">全部项目</option></select><span class="toolbar-spacer"></span>
-                    <div class="quick-ranges" aria-label="快捷日期范围"><button id="statistics-today-btn" type="button" aria-pressed="false">今日</button><button id="statistics-week-btn" type="button" aria-pressed="false">本周</button><button id="statistics-month-btn" type="button" aria-pressed="false">本月</button><button id="statistics-all-btn" type="button" aria-pressed="false">全部</button></div>
+                    <div class="quick-ranges" aria-label="快捷日期范围"><button id="statistics-today-btn" type="button" aria-pressed="false">今日</button><button id="statistics-week-btn" type="button" aria-pressed="false">本周</button><button id="statistics-month-btn" type="button" aria-pressed="false">本月</button><button id="statistics-all-btn" type="button" aria-pressed="false" hidden disabled aria-hidden="true">全部</button></div>
                 </div>
                 <div id="statistics-error" class="inline-alert error" role="alert" hidden>加载统计失败</div><div id="statistics-loading" class="inline-status" hidden>更新中…</div>
                 <div id="statistics-results" hidden>
@@ -174,6 +176,10 @@
                             <h2>高级</h2><label class="setting-row" for="settings-fd-work-toggle"><span><strong>FD Work 插件</strong></span><span class="toggle-wrap"><span id="settings-fd-work-toggle-status" class="toggle-status">未加载</span><input id="settings-fd-work-toggle" type="checkbox" disabled></span></label><button id="settings-fd-work-reconnect" type="button" class="button" hidden>登录 FD Work</button>
                             <article id="settings-recovery-card" class="setting-row" hidden><span><strong>数据库维护未完成</strong><small id="settings-recovery-reason">阻断原因：未加载</small></span><button id="settings-recovery-btn" type="button" class="button primary" disabled>尝试恢复</button></article><p id="settings-recovery-status" class="inline-status" role="status" aria-live="polite" hidden></p>
                         </section>
+                        <footer id="settings-application-footer" class="settings-application-footer" aria-label="应用信息">
+                            <span id="settings-application-version" class="settings-application-footer-version"></span>
+                            <span id="settings-application-creator" class="settings-application-footer-creator">Created by Sun Yi</span>
+                        </footer>
                     </div>
                 </div>
             </section>
@@ -183,33 +189,38 @@
         <div id="global-alert" class="inline-alert error global-alert" role="alert" hidden></div><div id="app-toast" class="toast" role="status" aria-live="polite" hidden></div><div id="app-tooltip" role="tooltip" hidden></div>
     </div>
     <script src="js/core.js?v=10cac8add53ab362"></script>
+    <script src="js/application_metadata.js?v=cddfc9082bdc8daa"></script>
     <script src="js/privacy_notice.js?v=efaedf2701fe731a"></script>
-    <script src="js/fd_work_v5.js?v=1ade801e636af4d8"></script>
-    <script src="js/ui_components.js?v=999f27260c84ac88"></script>
+    <script src="js/fd_work_v5.js?v=5018c3a6a32bbc55"></script>
+    <script src="js/ui_components.js?v=5426e5326fe24bb8"></script>
     <script src="js/project_catalog.js?v=643d2293ddb5e3bc"></script>
-    <script src="js/project_autocomplete.js?v=cdfba7e64fc846fc"></script>
-    <script src="js/overview.js?v=369e23ff0ead21c9"></script>
+    <script src="js/project_autocomplete.js?v=ffd71ac359d07929"></script>
+    <script src="js/overview.js?v=40c5ec451722c4d1"></script>
     <script src="js/timeline_request_state.js?v=0acbf17fc352a67d"></script>
-    <script src="js/timeline_presentation.js?v=2b77b5673f3d53df"></script>
-    <script src="js/timeline_transient_ui.js?v=510533ecc237ec57"></script>
+    <script src="js/timeline_presentation.js?v=d9cca651ac3507ee"></script>
+    <script src="js/timeline_transient_ui.js?v=2dc9528da7695d5c"></script>
     <script src="js/timeline_editor_state.js?v=fbb38490c2058d09"></script>
-    <script src="js/timeline_fd_work.js?v=6178e0327a4234e7"></script>
-    <script src="js/timeline.js?v=ddb47e22bfd18163"></script>
+    <script src="js/timeline_fd_work.js?v=2b3f7f4e60b407a1"></script>
+    <script src="js/timeline.js?v=8a2af69a161f05de"></script>
+    <script src="js/timeline_selection_continuity.js?v=a63073957ee30d79"></script>
     <script src="js/timeline_delete_actions.js?v=5cf0635fb1418fe8"></script>
     <script src="js/timeline_action_presentation.js?v=657350d41c71d9ab"></script>
-    <script src="js/statistics.js?v=8705fc373c801368"></script>
-    <script src="js/settings_presentation.js?v=7c0123578ec4a15b"></script>
+    <script src="js/statistics.js?v=9e78069aad5c66c5"></script>
+    <script src="js/statistics_interactive_range_policy.js?v=7f5bb111fa1b8955"></script>
+    <script src="js/statistics_live_projection.js?v=c6347f997d036aa0"></script>
+    <script src="js/settings_presentation.js?v=8c7a4ccc85d8f16d"></script>
     <script src="js/settings_transient_ui.js?v=3ec9edcccfcaa633"></script>
-    <script src="js/settings_data_operations.js?v=015daceb98a03778"></script>
+    <script src="js/settings_data_operations.js?v=d9a2e467708bc20f"></script>
     <script src="js/settings_backup_recovery.js?v=fe28bd4d7c46ac27"></script>
-    <script src="js/settings.js?v=915a654a58fd966e"></script>
+    <script src="js/settings.js?v=c8686d695ee9b54e"></script>
     <script src="js/rules.js?v=0f187339d4f0eb07"></script>
     <script src="js/rules_render.js?v=df44fbec92018dca"></script>
     <script src="js/rules_create_panel_v5.js?v=7e67bede14948687"></script>
     <script src="js/rules_rule_actions.js?v=967725a6e2074a48"></script>
     <script src="js/rules_delete_actions.js?v=c7dc20bfc5dd2018"></script>
     <script src="js/page_lifecycle.js?v=4c4df099ea93e7a8"></script>
-    <script src="js/init_fd_work_v5.js?v=05d588507becd160"></script>
-    <script src="js/ui_composition.js?v=88729b83f698cd97"></script>
+    <script src="js/init_fd_work_v5.js?v=838e34c54bb67ea0"></script>
+    <script src="js/shell_lifecycle.js?v=4e63a092f8dd5321"></script>
+    <script src="js/ui_composition.js?v=139df5e97f68b309"></script>
 </body>
 </html>

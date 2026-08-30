@@ -43,7 +43,7 @@ def test_rules_and_settings_own_refresh_state_and_requests():
     assert "App.settings.onDataChanged" in composition
 
 
-def test_timeline_owns_structural_pending_and_live_suppression():
+def test_timeline_owns_only_the_structural_edit_interlock():
     composition = source("ui_composition.js")
     timeline = source("timeline.js")
 
@@ -57,9 +57,23 @@ def test_timeline_owns_structural_pending_and_live_suppression():
     for private_name in forbidden_composition_knowledge:
         assert private_name not in composition
 
+    assert "App.suppressNextTimelineCollectionRefresh" not in timeline
     assert "onRuntimeTransition" in timeline
     assert "applyLocalTick" in timeline
+    assert "runtimeRefreshIdentity" in timeline
     assert "App.timeline.onRuntimeTransition" in composition
+
+
+def test_fd_work_transient_state_stays_with_timeline_owner():
+    composition = source("ui_composition.js")
+    timeline_fd_work = source("timeline_fd_work.js")
+
+    assert "App.fdWorkStatusOverride" not in composition
+    assert "clearSettledFDWorkAuthOverride" not in composition
+    assert "/登录|连接 FD Work/" not in composition
+    assert "App.timelineFDWork.onStatusChanged" in composition
+    assert "fdWorkStatusOverrides" in timeline_fd_work
+    assert "onFDWorkStatusChanged" in timeline_fd_work
 
 
 def test_timeline_refresh_coordinator_forwards_refresh_options():
@@ -67,18 +81,22 @@ def test_timeline_refresh_coordinator_forwards_refresh_options():
     timeline = source("timeline.js")
 
     assert "method.call(capability, options" in init
-    assert "function onTimelineRefreshRequested(options, context)" in timeline
-    assert "options.automatic === true" in timeline
+    assert "function onTimelineRefreshRequested(options)" in timeline
+    assert "return refreshTimeline(options)" in timeline
 
 
-def test_overview_owns_live_collection_suppression():
+def test_overview_runtime_invalidation_is_coordinator_owned():
     composition = source("ui_composition.js")
     overview = source("overview.js")
+    init = source("init_fd_work_v5.js")
 
     assert "App.suppressNextOverviewCollectionRefresh" not in composition
+    assert "App.suppressNextOverviewCollectionRefresh" not in overview
     assert "App.showOverview =" not in composition
-    assert "onRuntimeTransition" in overview
-    assert "App.overview.onRuntimeTransition" in composition
+    assert "onRuntimeTransition" not in overview
+    assert "App.overview.onRuntimeTransition" not in composition
+    assert "runtimeRefreshIdentity" in overview
+    assert "markPagesDirtyForRuntimeChanges" in init
 
 
 def test_init_dispatches_the_existing_local_tick_to_the_active_page():
@@ -99,13 +117,14 @@ def test_init_dispatches_the_existing_local_tick_to_the_active_page():
 def test_statistics_owns_accepted_snapshot_ticker_and_numeric_dom_patch():
     composition = source("ui_composition.js")
     statistics = source("statistics.js")
+    compatibility = source("statistics_live_projection.js")
 
     for private_name in (
         "App.statisticsAcceptedPayload",
         "App.statisticsLiveTickerSuspended",
         "App.statisticsLastLiveRenderKey",
         "statisticsLiveSummaryAtNow",
-        "patchStatisticsLiveSummary",
+        "patchStatisticsLiveProjection",
         "applyStatisticsLocalTicker",
     ):
         assert private_name not in composition
@@ -120,11 +139,16 @@ def test_statistics_owns_accepted_snapshot_ticker_and_numeric_dom_patch():
         assert private_dom_id not in composition
 
     assert "statisticsLiveSummaryAtNow" in statistics
-    assert "patchStatisticsLiveSummary" in statistics
+    assert "patchStatisticsLiveProjection" in statistics
     assert "applyStatisticsLocalTicker" in statistics
+    assert "acceptStatisticsRuntimeSync(data.runtime_sync)" in statistics
+    assert "runtimeRefreshIdentity" in statistics
+    assert "statistics_runtime_identity_changed" in statistics
     assert "showStatistics(summary)" not in statistics.split(
         "function applyStatisticsLocalTicker()", 1
-    )[1].split("function validateStatisticsDateRange", 1)[0]
+    )[1].split("function showStatisticsError", 1)[0]
+    assert "App.statistics =" not in compatibility
+    assert "App.handleResult =" not in compatibility
 
 
 def test_composition_has_no_page_data_reads_monkey_patches_or_private_dom_ids():

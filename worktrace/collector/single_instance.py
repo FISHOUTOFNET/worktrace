@@ -167,7 +167,9 @@ class ActivationKernel(Protocol):
 class WindowsActivationKernel:
     EVENT_MODIFY_STATE = 0x0002
     SYNCHRONIZE = 0x00100000
-    WAIT_OBJECT_0 = 0
+    WAIT_OBJECT_0 = 0x00000000
+    WAIT_TIMEOUT = 0x00000102
+    WAIT_FAILED = 0xFFFFFFFF
 
     @staticmethod
     def _kernel32():
@@ -200,11 +202,23 @@ class WindowsActivationKernel:
         return bool(self._kernel32().SetEvent(event))
 
     def wait_for_activation(self, event, timeout_seconds: float) -> bool:
-        result = self._kernel32().WaitForSingleObject(
-            event,
-            max(1, int(timeout_seconds * 1000)),
+        result = int(
+            self._kernel32().WaitForSingleObject(
+                event,
+                max(1, int(timeout_seconds * 1000)),
+            )
         )
-        return int(result) == self.WAIT_OBJECT_0
+        if result == self.WAIT_OBJECT_0:
+            return True
+        if result == self.WAIT_TIMEOUT:
+            return False
+        if result == self.WAIT_FAILED:
+            raise SingleInstanceError(
+                f"single_instance_activation_wait_failed:{int(ctypes.get_last_error())}"
+            )
+        raise SingleInstanceError(
+            f"single_instance_activation_wait_unexpected:{result}"
+        )
 
     def wake_activation_waiter(self, event) -> None:
         self._kernel32().SetEvent(event)
@@ -259,8 +273,9 @@ class ApplicationInstanceCoordinator:
         if not self._supported():
             return
         with self._lock:
-            if self._thread is not None:
+            if self._thread is not None and self._thread.is_alive():
                 return
+            self._thread = None
             if self._event is None:
                 raise SingleInstanceError("activation_event_not_prepared")
             self._stop_event.clear()
@@ -375,7 +390,9 @@ class ApplicationInstanceCoordinator:
                 signaled = self._kernel.wait_for_activation(event, 0.25)
             except Exception:
                 logging.exception("activation listener wait failed")
-                return
+                if self._stop_event.wait(0.25):
+                    return
+                continue
             if not signaled:
                 continue
             with self._lock:

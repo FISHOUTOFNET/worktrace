@@ -19,10 +19,20 @@
         return clock;
     }
 
+    function projectedClock(clock, durableSeconds) {
+        var durable = Math.max(0, parseInt(durableSeconds, 10) || 0);
+        if (!clock || clock.is_live !== true) {
+            return { seconds: durable, canTick: false };
+        }
+        var projected = App.projectLiveClockDurationNow(clock, Date.now());
+        return {
+            seconds: projected === null ? durable : projected,
+            canTick: projected !== null
+        };
+    }
+
     function clockedSeconds(clock, durableSeconds) {
-        if (!clock || clock.is_live !== true) return durableSeconds;
-        var projected = App.computeClockDurationNow(clock, Date.now());
-        return projected === null ? durableSeconds : projected;
+        return projectedClock(clock, durableSeconds).seconds;
     }
 
     function formatTimelineStartTime(startTime) {
@@ -51,14 +61,15 @@
             "aggregate_live",
             "timeline_total_invalid_live_clock"
         );
-        if (clock && clock.is_live === true) {
+        var projection = projectedClock(clock, durable);
+        if (projection.canTick) {
             App.setLiveClockTarget(element, clock, "timeline-total", "timeline-total");
         } else {
             App.clearLiveClockTarget(element);
         }
         App.renderDurationProjected(
             element,
-            clockedSeconds(clock, durable),
+            projection.seconds,
             "timeline-total"
         );
     }
@@ -177,9 +188,10 @@
                 "aggregate_live",
                 "timeline_detail_invalid_live_clock"
             );
-            var canTick = !!(clock && clock.is_live === true);
             var durable = Math.max(0, parseInt(row.duration_seconds, 10) || 0);
-            var seconds = clockedSeconds(clock, durable);
+            var projection = projectedClock(clock, durable);
+            var canTick = projection.canTick;
+            var seconds = projection.seconds;
             var continuityKey = canTick
                 ? App.liveContinuityKey(row, "project-summary")
                 : "";

@@ -16,8 +16,6 @@ from worktrace.services import folder_rule_service, project_service
 from worktrace.services.project_inference_service import assign_project_for_activity
 
 
-# Full local path with non-whitelisted extension -> local_file anchor
-
 class TestFullLocalPathUnknownExtension:
     @pytest.mark.parametrize(
         "file_path,window_title,app_name,process_name",
@@ -49,63 +47,73 @@ class TestFullLocalPathUnknownExtension:
         assert result.is_anchor is True
         assert result.path_hint == file_path
         assert result.identity_key.startswith("file_path:")
+        assert result.confidence == 80
 
-    def test_dwg_full_path_identity_is_path_based(self):
-        aw = ActiveWindow(
-            app_name="AutoCAD",
-            process_name="acad.exe",
-            window_title="design.dwg - AutoCAD",
-            file_path_hint=r"C:\Cases\A\design.dwg",
-        )
-        result = LocalFileDetector().detect(aw)
-        assert result is not None
-        # Path-based identity must differ from a bare-name identity.
-        assert result.identity_key.startswith("file_path:")
-        assert "file_name:" not in result.identity_key
-
-    def test_psd_full_path_anchor(self):
-        aw = ActiveWindow(
-            app_name="Photoshop",
-            process_name="photoshop.exe",
-            window_title="mockup.psd - Photoshop",
-            file_path_hint=r"C:\Cases\A\mockup.psd",
-        )
-        result = LocalFileDetector().detect(aw)
-        assert result is not None
-        assert result.resource_kind == "local_file"
-        assert result.resource_subtype == "unknown"
-        assert result.is_anchor is True
-        assert result.path_hint == r"C:\Cases\A\mockup.psd"
-
-
-# Bare file name with unknown extension -> NOT local_file
 
 class TestBareFileNameUnknownExtension:
-    def test_bare_unknown_ext_not_detected_by_local_file_detector(self):
+    @pytest.mark.parametrize(
+        "file_name",
+        [
+            "design.dwg",
+            "mockup.psd",
+            "logo.ai",
+            "photo.jpg",
+            "recording.mp4",
+            "archive.7z",
+            "database.sqlite3",
+        ],
+    )
+    def test_probable_bare_unknown_ext_is_pathless_local_file(self, file_name):
         aw = ActiveWindow(
             app_name="Some App",
             process_name="someapp.exe",
-            window_title="design.dwg - Some App",
+            window_title=f"{file_name} - Some App",
         )
-        assert LocalFileDetector().detect(aw) is None
+        result = LocalFileDetector().detect(aw)
 
-    def test_bare_unknown_ext_falls_back_to_generic_app_in_registry(self):
+        assert result is not None
+        assert result.resource_kind == "local_file"
+        assert result.resource_subtype == "unknown"
+        assert result.display_name == file_name
+        assert result.is_anchor is True
+        assert result.path_hint is None
+        assert result.identity_key.startswith("file_name:")
+        assert result.confidence == 65
+
+    def test_registry_preserves_unknown_file_instead_of_generic_app(self):
         registry = ResourceDetectorRegistry()
         registry.register(SystemDetector())
         registry.register(LocalFileDetector())
         registry.register(GenericAppDetector())
         aw = ActiveWindow(
+            app_name="Photos",
+            process_name="photos.exe",
+            window_title="evidence.heic - Photos",
+        )
+
+        result = registry.detect(aw)
+
+        assert result.resource_kind == "local_file"
+        assert result.display_name == "evidence.heic"
+        assert result.is_anchor is True
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "version 1.2 - Some App",
+            "v2.10 - Some App",
+            "example.com - Some App",
+            "https://example.com/report.pdf - Some App",
+        ],
+    )
+    def test_dotted_non_file_titles_do_not_become_files(self, title):
+        aw = ActiveWindow(
             app_name="Some App",
             process_name="someapp.exe",
-            window_title="design.dwg - Some App",
+            window_title=title,
         )
-        result = registry.detect(aw)
-        assert result.resource_kind == "app"
-        assert result.resource_subtype == "generic_app"
-        assert result.is_anchor is False
+        assert LocalFileDetector().detect(aw) is None
 
-
-# Existing whitelist behavior preserved
 
 class TestWhitelistPreserved:
     def test_full_path_pdf_still_pdf(self):
@@ -133,9 +141,9 @@ class TestWhitelistPreserved:
         assert result.resource_kind == "local_file"
         assert result.resource_subtype == "pdf"
         assert result.is_anchor is True
-        # Bare name -> no path_hint, name-based identity.
         assert result.path_hint is None
         assert result.identity_key.startswith("file_name:")
+        assert result.confidence == 80
 
     @pytest.mark.parametrize(
         "file_path,expected_subtype",
@@ -159,7 +167,6 @@ class TestWhitelistPreserved:
         assert result.resource_subtype == expected_subtype
 
     def test_whitelisted_other_extension_full_path_is_text_file(self):
-        # .json is whitelisted but has no dedicated subtype -> text_file.
         aw = ActiveWindow(
             app_name="Editor",
             process_name="editor.exe",
@@ -171,30 +178,30 @@ class TestWhitelistPreserved:
         assert result.resource_subtype == "text_file"
 
 
-# Office document extensions are deferred to OfficeWpsDetector / FallbackFileDetector
-
 class TestOfficeExtensionDeferral:
     @pytest.mark.parametrize("ext", [".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"])
-    def test_office_extension_full_path_deferred(self, ext):
-        # Office extensions have dedicated detectors with specific subtypes
-        # (word_document, spreadsheet, presentation). LocalFileDetector must
-        # defer them so they don't degrade to "unknown".
-        aw = ActiveWindow(
+    def test_office_extension_is_deferred_with_or_without_full_path(self, ext):
+        with_path = ActiveWindow(
             app_name="SomeEditor",
             process_name="someeditor.exe",
             window_title=f"file{ext} - Editor",
             file_path_hint=rf"C:\Docs\file{ext}",
         )
-        assert LocalFileDetector().detect(aw) is None
+        without_path = ActiveWindow(
+            app_name="SomeEditor",
+            process_name="someeditor.exe",
+            window_title=f"file{ext} - Editor",
+        )
+        detector = LocalFileDetector()
+        assert detector.detect(with_path) is None
+        assert detector.detect(without_path) is None
 
-
-# Folder rule inference for unknown-extension full paths
 
 class TestFolderRuleWithUnknownExtension:
     def test_folder_rule_matches_dwg_full_path(self, temp_db):
-        pid = project_service.create_project("Design Project")
-        folder_rule_service.create_or_update_folder_rule(r"D:\Design", pid)
-        aid = activity_service.create_activity(
+        project_id = project_service.create_project("Design Project")
+        folder_rule_service.create_or_update_folder_rule(r"D:\Design", project_id)
+        activity_id = activity_service.create_activity(
             "AutoCAD",
             "acad.exe",
             "design.dwg - AutoCAD",
@@ -202,16 +209,16 @@ class TestFolderRuleWithUnknownExtension:
             start_time="2026-06-18 09:00:00",
         )
 
-        assignment = assign_project_for_activity(aid)
+        assignment = assign_project_for_activity(activity_id)
 
         assert assignment["source"] == "folder_rule"
-        assert assignment["project_id"] == pid
-        assert activity_service.get_activity(aid)["project_id"] == pid
+        assert assignment["project_id"] == project_id
+        assert activity_service.get_activity(activity_id)["project_id"] == project_id
 
     def test_folder_rule_matches_psd_full_path(self, temp_db):
-        pid = project_service.create_project("Art Project")
-        folder_rule_service.create_or_update_folder_rule(r"C:\Art", pid)
-        aid = activity_service.create_activity(
+        project_id = project_service.create_project("Art Project")
+        folder_rule_service.create_or_update_folder_rule(r"C:\Art", project_id)
+        activity_id = activity_service.create_activity(
             "Photoshop",
             "photoshop.exe",
             "mockup.psd - Photoshop",
@@ -219,23 +226,7 @@ class TestFolderRuleWithUnknownExtension:
             start_time="2026-06-18 09:00:00",
         )
 
-        assignment = assign_project_for_activity(aid)
+        assignment = assign_project_for_activity(activity_id)
 
         assert assignment["source"] == "folder_rule"
-        assert assignment["project_id"] == pid
-
-    def test_folder_rule_matches_nested_unknown_ext_full_path(self, temp_db):
-        pid = project_service.create_project("Engineering")
-        folder_rule_service.create_or_update_folder_rule(r"D:\Engineering", pid)
-        aid = activity_service.create_activity(
-            "SolidWorks",
-            "sldworks.exe",
-            "bracket.sldprt - SolidWorks",
-            file_path_hint=r"D:\Engineering\Assembly\bracket.sldprt",
-            start_time="2026-06-18 09:00:00",
-        )
-
-        assignment = assign_project_for_activity(aid)
-
-        assert assignment["source"] == "folder_rule"
-        assert assignment["project_id"] == pid
+        assert assignment["project_id"] == project_id

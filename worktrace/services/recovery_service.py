@@ -8,6 +8,7 @@ from datetime import datetime, time as datetime_time, timedelta
 from ..constants import STATUS_ERROR, TIME_FORMAT
 from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
+from ..retry_state import RetryEpisode
 from ..worker_health import WorkerHealthReporter
 from ..write_gate import DATABASE_WRITE_GATE
 from . import (
@@ -24,18 +25,83 @@ _WORKER_SEGMENT_BATCH_SIZE = 7
 _WORKER_IDLE_SECONDS = 1.0
 
 
-def recover_unclosed_records() -> None:
-    """Seal open rows with constant startup work and durable long-span progress."""
+def _durable_recovery_watermark(*, allow_legacy_heartbeat: bool = True) -> str:
+    """Return the safest durable Collector observation known across processes."""
 
+    successful = get_setting("collector_last_successful_observation_at", "") or ""
+    if _parse_time(successful) is not None:
+        return successful
+    if not allow_legacy_heartbeat:
+        return ""
+    # Backward compatibility for databases created before the successful-
+    # observation watermark existed. Runtime-owned crash/shutdown recovery
+    # disables this fallback because heartbeat can precede a completed sample.
     heartbeat = get_setting("last_collector_heartbeat", "") or ""
-    fallback_now = now_str()
-    heartbeat_dt = _parse_time(heartbeat)
-    fallback_dt = _parse_time(fallback_now)
-    heartbeat_is_valid = bool(
-        heartbeat_dt is not None
-        and fallback_dt is not None
-        and heartbeat_dt <= fallback_dt
+    return heartbeat if _parse_time(heartbeat) is not None else ""
+
+
+def _safe_recovery_point(
+    row,
+    *,
+    preferred_end_time: str,
+    fallback_now: str,
+) -> tuple[str, int, str]:
+    """Choose a fail-closed end point supported by durable/runtime evidence."""
+
+    start_text = str(row["start_time"] or "")
+    start_dt = _parse_time(start_text)
+    now_dt = _parse_time(fallback_now)
+    if start_dt is None or now_dt is None:
+        return fallback_now, 0, STATUS_ERROR
+
+    candidates: list[datetime] = []
+    preferred_dt = _parse_time(preferred_end_time)
+    if preferred_dt is not None:
+        if preferred_dt > now_dt:
+            return (
+                fallback_now,
+                max(0, int((now_dt - start_dt).total_seconds())),
+                STATUS_ERROR,
+            )
+        if start_dt <= preferred_dt:
+            candidates.append(preferred_dt)
+
+    try:
+        persisted_seconds = max(0, int(row["duration_seconds"] or 0))
+    except (TypeError, ValueError):
+        persisted_seconds = 0
+    checkpoint_dt = start_dt + timedelta(seconds=persisted_seconds)
+    if persisted_seconds > 0 and start_dt <= checkpoint_dt <= now_dt:
+        candidates.append(checkpoint_dt)
+
+    if candidates:
+        end_dt = max(candidates)
+        return (
+            end_dt.strftime(TIME_FORMAT),
+            max(0, int((end_dt - start_dt).total_seconds())),
+            str(row["status"] or STATUS_ERROR),
+        )
+
+    # No evidence proves any elapsed time after the row opened. Close at the
+    # start and mark the fact as error rather than counting outage time.
+    return start_text, 0, STATUS_ERROR
+
+
+def recover_unclosed_activity_facts(
+    *,
+    safe_end_time: str | None = None,
+    allow_legacy_heartbeat: bool = True,
+) -> int:
+    """Seal durable open facts without claiming a process-restart boundary."""
+
+    preferred = str(
+        safe_end_time
+        or _durable_recovery_watermark(
+            allow_legacy_heartbeat=allow_legacy_heartbeat,
+        )
+        or ""
     )
+    fallback_now = now_str()
     with get_connection() as conn:
         rows = conn.execute(
             """
@@ -52,23 +118,11 @@ def recover_unclosed_records() -> None:
     continuations: list[dict] = []
     recovered_at: list[str] = []
     for row in rows:
-        end_time = heartbeat if heartbeat_is_valid else fallback_now
-        status = row["status"] if heartbeat_is_valid else STATUS_ERROR
-        try:
-            duration = int(
-                (
-                    datetime.strptime(end_time, TIME_FORMAT)
-                    - datetime.strptime(row["start_time"], TIME_FORMAT)
-                ).total_seconds()
-            )
-        except ValueError:
-            duration = 0
-            status = STATUS_ERROR
-            end_time = fallback_now
-        if duration < 0:
-            duration = 0
-            status = STATUS_ERROR
-            end_time = fallback_now
+        end_time, duration, status = _safe_recovery_point(
+            row,
+            preferred_end_time=preferred,
+            fallback_now=fallback_now,
+        )
         start_dt = _parse_time(row["start_time"])
         end_dt = _parse_time(end_time)
         if (
@@ -122,8 +176,65 @@ def recover_unclosed_records() -> None:
             boundaries,
             continuations,
         )
+    return len(rows)
+
+
+def recover_unclosed_records() -> None:
+    """Run process-start recovery, including the distinct restart boundary."""
+
+    recover_unclosed_activity_facts()
     record_restart_boundary_if_needed()
     clear_runtime_activity_state("recovery_startup_boundary")
+
+
+def recover_after_collector_crash(
+    safe_end_time: str | None = None,
+) -> dict[str, object]:
+    """Reconcile a dead Collector before AppRuntime creates a replacement."""
+
+    try:
+        recovered = recover_unclosed_activity_facts(
+            safe_end_time=safe_end_time,
+            allow_legacy_heartbeat=False,
+        )
+        clear_runtime_activity_state("collector_crash_recovery")
+    except sqlite3.OperationalError as exc:
+        sqlite_code = getattr(exc, "sqlite_errorcode", None)
+        message = str(exc).strip().lower()
+        retryable = bool(
+            sqlite_code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+            or message
+            in {
+                "database is locked",
+                "database table is locked",
+                "database is busy",
+            }
+        )
+        logging.error(
+            "collector crash recovery failed code=%s exception_type=%s",
+            "database_busy" if retryable else "operational_error",
+            type(exc).__name__,
+        )
+        return {
+            "ok": False,
+            "error": "database_busy" if retryable else "collector_recovery_failed",
+            "retryable": retryable,
+        }
+    except Exception as exc:
+        logging.error(
+            "collector crash recovery failed code=unexpected_failure exception_type=%s",
+            type(exc).__name__,
+        )
+        return {
+            "ok": False,
+            "error": "collector_recovery_failed",
+            "retryable": False,
+        }
+    return {
+        "ok": True,
+        "recovered_open_activities": int(recovered),
+        "retryable": False,
+    }
 
 
 def run_startup_recovery_worker(
@@ -137,6 +248,7 @@ def run_startup_recovery_worker(
 
     limit = max(1, int(batch_segments))
     interval = max(0.1, float(poll_seconds))
+    discovery_retry = RetryEpisode()
     logging.info("startup recovery continuation worker loop enter")
     while not stop_event.is_set():
         if DATABASE_WRITE_GATE.writes_blocked():
@@ -144,17 +256,31 @@ def run_startup_recovery_worker(
             stop_event.wait(interval)
             continue
         health.maintenance_paused(False)
-        with get_connection() as conn:
-            jobs = startup_recovery_job_repository.list_runnable_jobs(
-                conn,
-                limit=1,
-            )
-        if not jobs:
-            health.succeeded()
-            stop_event.wait(interval)
-            continue
-        job = jobs[0]
+
+        job: dict[str, object] | None = None
         try:
+            # Runnable-job discovery belongs to this worker iteration. SQLite
+            # BUSY/LOCKED here is recoverable domain health, not an AppRuntime
+            # target crash requiring wrapper-level restart.
+            with get_connection() as conn:
+                jobs = startup_recovery_job_repository.list_runnable_jobs(
+                    conn,
+                    limit=1,
+                )
+            recovery = discovery_retry.succeeded()
+            if recovery.recovered:
+                logging.info(
+                    "startup recovery discovery recovered code=%s attempts=%s elapsed_seconds=%.1f",
+                    recovery.code,
+                    recovery.attempts,
+                    recovery.elapsed_seconds,
+                )
+            if not jobs:
+                health.succeeded()
+                stop_event.wait(interval)
+                continue
+
+            job = jobs[0]
             commands, boundaries, next_cursor, completed = _plan_continuation_batch(
                 job,
                 limit,
@@ -168,12 +294,32 @@ def run_startup_recovery_worker(
             )
         except Exception as exc:
             code = _classify_recovery_failure(exc)
-            logging.exception(
+            job_id = int(job["id"]) if job is not None else None
+            if job_id is None:
+                retry = discovery_retry.failed(code.value)
+                if retry.detail_log_due:
+                    logging.warning(
+                        "startup recovery discovery failed code=%s",
+                        code.value,
+                        exc_info=True,
+                    )
+                elif retry.summary_log_due:
+                    logging.warning(
+                        "startup recovery discovery failure continues code=%s consecutive=%s elapsed_seconds=%.1f",
+                        code.value,
+                        retry.attempt,
+                        retry.elapsed_seconds,
+                    )
+                health.failed(code.value)
+                stop_event.wait(max(interval, retry.delay_seconds))
+                continue
+            logging.warning(
                 "startup recovery continuation failed job_id=%s code=%s",
-                job.get("id"),
+                job_id,
                 code.value,
+                exc_info=True,
             )
-            _record_recovery_failure_safely(int(job["id"]), code)
+            _record_recovery_failure_safely(job_id, code)
             health.failed(code.value)
             stop_event.wait(interval)
         else:
@@ -385,10 +531,13 @@ def record_restart_boundary_if_needed() -> None:
 
 
 def _latest_known_shutdown_boundary() -> str | None:
+    successful = get_setting("collector_last_successful_observation_at", "") or ""
     candidates = [
         get_setting("last_shutdown_at", "") or "",
-        get_setting("last_collector_heartbeat", "") or "",
+        successful,
     ]
+    if not _parse_time(successful):
+        candidates.append(get_setting("last_collector_heartbeat", "") or "")
     parsed: list[tuple[datetime, str]] = []
     for candidate in candidates:
         try:
@@ -444,6 +593,8 @@ __all__ = [
     "detect_time_jump",
     "mark_record_error",
     "record_restart_boundary_if_needed",
+    "recover_after_collector_crash",
+    "recover_unclosed_activity_facts",
     "recover_unclosed_records",
     "run_startup_recovery_worker",
 ]

@@ -3,20 +3,38 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    if (typeof App.suppressNextOverviewCollectionRefresh !== "boolean") {
-        App.suppressNextOverviewCollectionRefresh = false;
+    function aggregateLiveProjection(clock, durableSeconds, enabled) {
+        var raw = Number(durableSeconds);
+        var durable = Number.isFinite(raw) ? Math.max(0, raw) : 0;
+        if (enabled === false
+            || !clock
+            || clock.is_live !== true
+            || clock.duration_semantic !== "aggregate_live") {
+            return { seconds: durable, canTick: false };
+        }
+        if (typeof App.projectLiveClockDurationNow !== "function") {
+            // The runtime coordinator is installed later in the shipping script
+            // order. Preserve source live metadata without projecting any new
+            // seconds until that authority exists.
+            return { seconds: durable, canTick: true };
+        }
+        var projected = App.projectLiveClockDurationNow(clock, Date.now());
+        return {
+            seconds: projected === null ? durable : projected,
+            canTick: projected !== null
+        };
     }
 
     function renderKpi(element, durableSeconds, target, continuityKey) {
         var clock = target && App.validateLiveClock(target.live_clock);
-        var live = !!(target && target.enabled === true && clock && clock.is_live === true
-            && clock.duration_semantic === "aggregate_live");
-        var seconds = live
-            ? App.computeClockDurationNow(clock, Date.now())
-            : Math.max(0, parseInt(durableSeconds, 10) || 0);
-        if (live) App.setLiveClockTarget(element, clock, continuityKey, continuityKey);
+        var projection = aggregateLiveProjection(
+            clock,
+            durableSeconds,
+            !!(target && target.enabled === true)
+        );
+        if (projection.canTick) App.setLiveClockTarget(element, clock, continuityKey, continuityKey);
         else App.clearLiveClockTarget(element);
-        App.renderDurationProjected(element, seconds || 0, continuityKey);
+        App.renderDurationProjected(element, projection.seconds || 0, continuityKey);
     }
 
     function kpiLiveTarget(bundle, field) {
@@ -27,17 +45,15 @@
 
     function durationMarkup(item, role) {
         var clock = App.validateLiveClock(item && item.live_clock);
-        var canTick = !!(clock && clock.is_live === true
-            && clock.duration_semantic === "aggregate_live");
         var durable = Math.max(0, parseInt(item && item.duration_seconds, 10) || 0);
-        var seconds = canTick ? App.computeClockDurationNow(clock, Date.now()) : durable;
-        var continuity = canTick ? App.liveContinuityKey(item, role) : "";
-        var attributes = canTick
+        var projection = aggregateLiveProjection(clock, durable, true);
+        var continuity = projection.canTick ? App.liveContinuityKey(item, role) : "";
+        var attributes = projection.canTick
             ? App.liveClockDataAttributes(clock, continuity, role)
             : "";
         return '<strong class="numeric recent-duration"' + attributes
-            + ' data-duration-seconds="' + String(seconds || 0) + '">'
-            + App.escapeHtml(App.formatDuration(seconds || 0)) + '</strong>';
+            + ' data-duration-seconds="' + String(projection.seconds || 0) + '">'
+            + App.escapeHtml(App.formatDuration(projection.seconds || 0)) + '</strong>';
     }
 
     function descriptionClass(item, base) {
@@ -59,14 +75,10 @@
         bar.hidden = false;
         bar.innerHTML = segments.map(function (segment, index) {
             var clock = App.validateLiveClock(segment && segment.live_clock);
-            var canTick = !!(clock && clock.is_live === true
-                && clock.duration_semantic === "aggregate_live");
             var rawSeconds = Number(segment.duration_seconds);
             var durableSeconds = Number.isFinite(rawSeconds) ? Math.max(0, rawSeconds) : 0;
-            var projectedSeconds = canTick
-                ? App.computeClockDurationNow(clock, Date.now())
-                : null;
-            var seconds = projectedSeconds === null ? durableSeconds : projectedSeconds;
+            var projection = aggregateLiveProjection(clock, durableSeconds, true);
+            var seconds = projection.seconds;
             var grow = Math.max(1, Math.round(seconds));
             var label = String(segment.label || "");
             var hours = App.formatCompactHours(seconds);
@@ -77,13 +89,13 @@
                     ? "is-uncategorized"
                     : "rank-" + String(index + 1);
             var accessibleText = label + "，" + exactDuration;
-            var continuity = canTick
+            var continuity = projection.canTick
                 ? App.liveContinuityKey(
                     segment,
                     "overview-project-" + String(segment.key || index)
                 )
                 : "";
-            var durationAttributes = canTick
+            var durationAttributes = projection.canTick
                 ? App.liveClockDataAttributes(
                     clock,
                     continuity,
@@ -104,6 +116,9 @@
 
     function timelineIntent(item, focusTarget) {
         if (!item || !item.projection_instance_key) return;
+        if (typeof App.openTimelineSelectionIntent === "function") {
+            return App.openTimelineSelectionIntent(item, focusTarget || "");
+        }
         var date = String(item.start_time || item.report_date || App.timelineDate || "").slice(0, 10);
         if (!date) return;
         App.pendingTimelineSelectionIntent = {
@@ -113,16 +128,9 @@
         };
         App.timelineDate = date;
         App.switchPage("timeline");
-        App.loadTimelineReport(date, {
+        return App.loadTimelineReport(date, {
             showLoading: true,
             resetSelection: false
-        }).then(function () {
-            var selected = App.findSessionByProjectionKey(item.projection_instance_key);
-            if (!selected) return;
-            App.selectTimelineSession(item.projection_instance_key, App.currentSessions || []);
-            if (typeof App.focusTimelineEditorField === "function") {
-                App.focusTimelineEditorField(focusTarget || "");
-            }
         });
     }
     App.openOverviewTimelineIntent = timelineIntent;
@@ -162,14 +170,19 @@
         bindIntentButtons(list, items, "data-recent-index");
     }
 
+    function currentRuntimeIdentity() {
+        var store = App.liveRuntimeStore;
+        var runtime = store && typeof store.get === "function" ? store.get() : null;
+        if (typeof App.runtimeRefreshIdentityForPage === "function") {
+            return String(App.runtimeRefreshIdentityForPage("overview", runtime) || "");
+        }
+        return String(runtime && (runtime.pageRevision || runtime.liveRevision) || "");
+    }
+
     function showOverview(bundle) {
         if (!bundle) return;
-        if (App.currentPage === "overview"
-            && App.suppressNextOverviewCollectionRefresh === true) {
-            App.suppressNextOverviewCollectionRefresh = false;
-            return;
-        }
         App.lastOverviewSnapshot = bundle;
+        App.overviewCommittedRuntimeIdentity = currentRuntimeIdentity();
         renderKpi(
             document.getElementById("kpi-total"),
             bundle.today_total_seconds,
@@ -241,22 +254,19 @@
     App.refreshOverview = refreshOverview;
 
     function updateCurrentActivity(activity, options) {
-        if (!App.lastOverviewSnapshot) App.lastOverviewSnapshot = {};
-        App.lastOverviewSnapshot.current_activity = activity || {};
         if (!options || options.render !== true || App.currentPage !== "overview") return;
         var target = document.getElementById("current-activity");
-        if (target) App.renderCurrentActivityElement(target, activity || {}, "overview");
-    }
-    function onOverviewRuntimeTransition(change) {
-        change = change || {};
-        if (change.source !== "refresh-state" || App.currentPage !== "overview") return;
-        App.suppressNextOverviewCollectionRefresh = change.structureChanged !== true
-            && change.liveChanged === true;
+        if (!target) return;
+        App.renderCurrentActivityElement(target, activity || {}, "overview");
+        var runtimeIdentity = currentRuntimeIdentity();
+        var committedIdentity = String(App.overviewCommittedRuntimeIdentity || "");
+        if (runtimeIdentity && committedIdentity && runtimeIdentity !== committedIdentity) {
+            target.disabled = true;
+            target.onclick = null;
+        }
     }
 
-    function onOverviewRefreshRequested(options) {
-        options = options || {};
-        if (options.automatic !== true) App.suppressNextOverviewCollectionRefresh = false;
+    function onOverviewRefreshRequested() {
         return refreshOverview();
     }
 
@@ -270,11 +280,13 @@
         refreshEvidence: function () { return App.lastOverviewSnapshot || null; },
         onPageEntered: onOverviewRefreshRequested,
         onRefreshRequested: onOverviewRefreshRequested,
-        onRuntimeTransition: onOverviewRuntimeTransition,
+        runtimeRefreshIdentity: function (runtime) {
+            return String(runtime && runtime.pageRevision || "");
+        },
         updateCurrentActivity: updateCurrentActivity,
         resetGeneration: function () {
             App.overviewRequestToken = (App.overviewRequestToken || 0) + 1;
-            App.suppressNextOverviewCollectionRefresh = false;
+            App.overviewCommittedRuntimeIdentity = "";
         }
     });
 })();

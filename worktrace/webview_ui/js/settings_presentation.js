@@ -28,6 +28,14 @@
 
     function clearSettingsError() { showSettingsError(""); }
 
+    function clearSettingsErrorIf(message) {
+        var banner = element("settings-error");
+        if (!banner || banner.hidden) return false;
+        if (String(banner.textContent || "") !== String(message || "")) return false;
+        clearSettingsError();
+        return true;
+    }
+
     function viewBusy(viewState) {
         viewState = viewState || {};
         return viewState.loading === true || !!viewState.operation;
@@ -45,6 +53,13 @@
 
     function fdWorkMutationActive(viewState) {
         return operationIs(viewState, "fd_work_write");
+    }
+
+    function clipboardCaptureSupported(status) {
+        if (!status || !Object.prototype.hasOwnProperty.call(status, "clipboard_capture_supported")) {
+            return true;
+        }
+        return status.clipboard_capture_supported === true;
     }
 
     function setSettingsBackupControlsDisabled(disabled) {
@@ -82,7 +97,8 @@
 
         var captureToggle = element("settings-clipboard-toggle");
         if (captureToggle) {
-            captureToggle.disabled = blocked
+            captureToggle.disabled = !clipboardCaptureSupported(status)
+                || blocked
                 || operationIs(viewState, "clipboard_write")
                 || fdWorkMutationActive(viewState)
                 || !loaded;
@@ -98,15 +114,7 @@
                 || launchStatus.supported !== true;
         }
 
-        var fdWorkToggle = element("settings-fd-work-toggle");
-        var fdWorkStatus = viewState.fdWorkStatus || status.fd_work || {};
-        if (fdWorkToggle) {
-            fdWorkToggle.disabled = blocked
-                || operationIs(viewState, "fd_work_write")
-                || !loaded
-                || fdWorkStatus.supported !== true;
-        }
-
+        renderFDWorkToggle(status, viewState);
         setSettingsBackupControlsDisabled(busy);
         setSettingsDangerControlsDisabled(busy);
         syncRecoveryButtonState(status, viewState);
@@ -140,13 +148,15 @@
     function renderCaptureToggle(status, viewState) {
         var toggle = element("settings-clipboard-toggle");
         if (!toggle) return;
-        var enabled = !!(status && status.clipboard_capture_enabled);
+        var supported = clipboardCaptureSupported(status);
+        var enabled = supported && !!(status && status.clipboard_capture_enabled);
         toggle.checked = enabled;
-        toggle.disabled = pageBlocked(viewState)
+        toggle.disabled = !supported
+            || pageBlocked(viewState)
             || operationIs(viewState, "clipboard_write")
             || fdWorkMutationActive(viewState)
             || !(viewState && viewState.loaded === true);
-        setCaptureToggleStatus(enabled ? "开启" : "关闭");
+        setCaptureToggleStatus(supported ? (enabled ? "开启" : "关闭") : "暂未开放");
     }
 
     function setLaunchAtLoginToggleStatus(text) {
@@ -177,27 +187,32 @@
         if (!toggle) return;
         var fdWork = viewState && viewState.fdWorkStatus || status && status.fd_work || {};
         var supported = fdWork.supported === true;
+        var sessionView = typeof App.fdWorkSessionPresentation === "function"
+            ? App.fdWorkSessionPresentation(fdWork)
+            : null;
         toggle.checked = supported && fdWork.enabled === true;
         toggle.disabled = !supported
             || pageBlocked(viewState)
             || operationIs(viewState, "fd_work_write")
             || !(viewState && viewState.loaded === true);
-        var statusText = typeof App.fdWorkStatusText === "function"
-            ? App.fdWorkStatusText(fdWork)
-            : (toggle.checked ? "开启" : "关闭");
+        var statusText = sessionView
+            ? sessionView.statusText
+            : (typeof App.fdWorkStatusText === "function"
+                ? App.fdWorkStatusText(fdWork)
+                : (toggle.checked ? "开启" : "关闭"));
         if (statusText === "插件关闭") statusText = "关闭";
         if (target) target.textContent = supported ? statusText : "当前不可用";
         if (reconnect) {
-            var recoverable = supported && fdWork.enabled === true
-                && (fdWork.session_state === "probing"
-                    || fdWork.session_state === "login_required"
-                    || fdWork.session_state === "error");
+            var recoverable = supported
+                && fdWork.enabled === true
+                && !!(sessionView && sessionView.canStartSession === true);
             reconnect.hidden = !recoverable;
             reconnect.disabled = !recoverable
                 || pageBlocked(viewState)
                 || fdWorkMutationActive(viewState);
-            reconnect.textContent = fdWork.session_state === "error"
-                ? "重新连接" : "登录 FD Work";
+            reconnect.textContent = sessionView && sessionView.actionLabel
+                ? sessionView.actionLabel
+                : "登录 FD Work";
         }
     }
 
@@ -323,6 +338,7 @@
 
     App.settingsPresentation = Object.freeze({
         clearSettingsError: clearSettingsError,
+        clearSettingsErrorIf: clearSettingsErrorIf,
         renderBackupManifest: renderBackupManifest,
         renderFDWorkToggle: renderFDWorkToggle,
         renderLaunchAtLoginToggle: renderLaunchAtLoginToggle,

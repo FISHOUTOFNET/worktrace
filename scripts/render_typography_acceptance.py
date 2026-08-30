@@ -148,6 +148,10 @@ def main() -> int:
     profiles = (
         ("desktop", 1080, 720, 1.0),
         ("compact-150", 800, 540, 1.5),
+        # Shipping refuses to resize below 840x560. Exercise the supported
+        # compact-desktop floor instead of validating an unreachable mobile-like
+        # page reflow at 720px.
+        ("compact-840", 840, 560, 1.0),
     )
     reports: dict[str, object] = {
         "edge": str(edge),

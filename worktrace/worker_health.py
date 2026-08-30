@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from typing import Callable
 
 DEFAULT_CONSECUTIVE_FAILURE_THRESHOLD = 3
 
@@ -25,6 +27,8 @@ class WorkerHealthSnapshot:
     last_successful_iteration_at: str = ""
     last_failure_code: str = ""
     consecutive_failures: int = 0
+    served: bool = False
+    last_progress_monotonic: float = 0.0
 
     def degraded(
         self,
@@ -36,6 +40,19 @@ class WorkerHealthSnapshot:
                 not self.running
                 or self.consecutive_failures >= max(1, int(threshold))
             )
+        )
+
+    def stalled(self, now_monotonic: float, timeout_seconds: float) -> bool:
+        timeout = max(0.0, float(timeout_seconds or 0.0))
+        if timeout <= 0.0:
+            return False
+        return bool(
+            self.started
+            and self.running
+            and not self.maintenance_paused
+            and self.last_progress_monotonic > 0.0
+            and max(0.0, float(now_monotonic) - self.last_progress_monotonic)
+            > timeout
         )
 
     def to_public_dict(self) -> dict[str, object]:
@@ -51,9 +68,14 @@ class WorkerHealthSnapshot:
 class WorkerHealthRegistry:
     """Thread-safe health state owned by one ``AppRuntime`` instance."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        monotonic_func: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._lock = threading.RLock()
         self._states: dict[str, WorkerHealthSnapshot] = {}
+        self._monotonic = monotonic_func
 
     def reporter(self, name: str) -> "WorkerHealthReporter":
         normalized = str(name or "").strip()
@@ -74,13 +96,16 @@ class WorkerHealthRegistry:
             started=True,
             running=True,
             maintenance_paused=False,
+            last_progress_monotonic=self._monotonic(),
         )
 
     def mark_success(self, name: str) -> None:
         self._change(
             name,
             running=True,
+            served=True,
             last_successful_iteration_at=_timestamp(),
+            last_progress_monotonic=self._monotonic(),
             last_failure_code="",
             consecutive_failures=0,
         )
@@ -93,18 +118,30 @@ class WorkerHealthRegistry:
                 current,
                 started=True,
                 running=True,
+                last_progress_monotonic=self._monotonic(),
                 last_failure_code=normalized,
                 consecutive_failures=current.consecutive_failures + 1,
             )
 
     def mark_maintenance_paused(self, name: str, paused: bool) -> None:
-        self._change(name, maintenance_paused=bool(paused))
+        paused = bool(paused)
+        with self._lock:
+            current = self._states.setdefault(name, WorkerHealthSnapshot(name))
+            self._states[name] = replace(
+                current,
+                started=True,
+                running=True,
+                served=current.served or paused,
+                maintenance_paused=paused,
+                last_progress_monotonic=self._monotonic(),
+            )
 
     def mark_stopped(self, name: str) -> None:
         self._change(
             name,
             running=False,
             maintenance_paused=False,
+            last_progress_monotonic=self._monotonic(),
         )
 
     def snapshots(self) -> dict[str, WorkerHealthSnapshot]:
@@ -125,6 +162,20 @@ class WorkerHealthRegistry:
             name
             for name, state in sorted(self.snapshots().items())
             if state.degraded(threshold)
+        )
+
+    def stalled_workers(
+        self,
+        progress_timeouts: dict[str, float],
+        *,
+        now_monotonic: float | None = None,
+    ) -> tuple[str, ...]:
+        now = self._monotonic() if now_monotonic is None else float(now_monotonic)
+        timeouts = dict(progress_timeouts or {})
+        return tuple(
+            name
+            for name, state in sorted(self.snapshots().items())
+            if state.stalled(now, float(timeouts.get(name, 0.0) or 0.0))
         )
 
 

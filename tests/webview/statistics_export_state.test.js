@@ -275,7 +275,7 @@ test("all quick range keeps native date controls and controlled empty presentati
 
   await App.applyStatisticsDraftSelection();
   assert.deepEqual(statisticsCalls.at(-1), ["2026-07-01", "2026-07-17", ""]);
-  assert.equal(element("statistics-month-btn").getAttribute("aria-pressed"), "true");
+  assert.equal(element("statistics-month-btn").getAttribute("aria-pressed"), "false");
   assert.equal(element("statistics-all-btn").getAttribute("aria-pressed"), "false");
 });
 
@@ -431,14 +431,14 @@ test("stale request cannot render or end loading owned by the latest request", a
   assert.equal(element("statistics-results").hidden, false);
 });
 
-test("applied manual dates derive shortcut highlighting without a custom mode", async () => {
+test("applied manual dates remain custom even when matching a shortcut", async () => {
   const { App, element } = harness();
   App.initStatisticsDefaults();
   element("statistics-date-from").value = "2026-07-01";
   element("statistics-date-to").value = "2026-07-17";
   element("statistics-date-from").dispatch("change");
   await App.applyStatisticsDraftSelection();
-  assert.equal(element("statistics-month-btn").getAttribute("aria-pressed"), "true");
+  assert.equal(element("statistics-month-btn").getAttribute("aria-pressed"), "false");
   element("statistics-date-from").value = "2026-07-02";
   element("statistics-date-from").dispatch("change");
   await App.applyStatisticsDraftSelection();

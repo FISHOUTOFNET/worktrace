@@ -40,8 +40,16 @@ def test_statistics_all_time_keeps_native_dates_with_controlled_empty_presentati
     assert "--statistics-date-width" not in styles
 
 
-def test_statistics_snapshot_cache_covers_all_four_fixed_quick_ranges():
+def test_statistics_quick_ranges_use_summary_cache_not_four_range_snapshots():
     root = Path(__file__).resolve().parents[2]
     source = (root / "worktrace" / "services" / "statistics_snapshot_provider.py").read_text(encoding="utf-8")
 
-    assert "_MAX_SLOTS = 4" in source
+    # Today/week/month/all summaries may all remain reusable, but the heavier
+    # compact range projection is deliberately limited to two stable LRU slots.
+    assert "_MAX_RANGE_SLOTS = 2" in source
+    assert "_MAX_SUMMARY_SLOTS = 32" in source
+    assert "cached_summary = _get_cached_summary" in source
+    assert source.index("cached_summary = _get_cached_summary") < source.index(
+        "range_projection = _get_range_with_context"
+    )
+    assert "_MAX_SLOTS = 4" not in source

@@ -202,6 +202,9 @@
     }
 
     function onFDWorkStatusChanged(status) {
+        if (operations && typeof operations.onFDWorkStatusChanged === "function") {
+            operations.onFDWorkStatusChanged(status);
+        }
         presentation.renderFDWorkToggle(
             settingsSnapshot || {},
             settingsViewState(status)

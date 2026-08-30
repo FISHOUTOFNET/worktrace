@@ -96,12 +96,13 @@ def test_custom_dates_validate_without_reviving_legacy_31_day_ui_limit() -> None
     assert "diffDays" not in body and "31" not in body
 
 
-def test_draft_dates_stay_local_while_project_and_quick_ranges_query_immediately() -> None:
+def test_draft_dates_stay_local_while_quick_range_controls_coalesce_queries() -> None:
     init = func_body(source(), "initStatisticsDefaults")
     quick = func_body(source(), "applyStatisticsQuickRange")
     draft = func_body(source(), "handleStatisticsDraftDateChange")
     apply = func_body(source(), "applyStatisticsDraftSelection")
     week = func_body(source(), "statisticsWeekRange")
+    buttons = func_body(source(), "bindStatisticsEvents")
     assert 'statistics-range-mode' not in source()
     assert 'statistics-custom-range' not in source()
     assert 'statistics-project-filter' in init
@@ -111,15 +112,19 @@ def test_draft_dates_stay_local_while_project_and_quick_ranges_query_immediately
     assert "setStatisticsSelection" not in draft
     assert "validateStatisticsDateRange" in apply
     assert "draft.allTime" in apply
-    assert 'setStatisticsSelection(true, "", "")' in apply
-    assert "setStatisticsSelection(false, draft.dateFrom, draft.dateTo)" in apply
-    assert "statisticsWeekRange(new Date())" in source()
+    assert 'setStatisticsSelection(true, "", "", "all")' in apply
+    assert "setStatisticsSelection(false, draft.dateFrom, draft.dateTo, null)" in apply
+    assert "statisticsWeekRange(today)" in source()
     assert "start.getDay() + 6" in week
     assert 'type === "all"' in quick
+    assert "queryDelay === undefined" in quick
     assert "beginStatisticsQuery(0)" in quick
-    buttons = func_body(source(), "bindStatisticsEvents")
+    assert "STATISTICS_QUICK_RANGE_QUERY_DELAY_MS = 120" in source()
     for name in ("today", "week", "month", "all"):
-        assert f'App.applyStatisticsQuickRange("{name}")' in buttons
+        assert (
+            f'App.applyStatisticsQuickRange("{name}", '
+            "STATISTICS_QUICK_RANGE_QUERY_DELAY_MS)"
+        ) in buttons
 
 
 def test_statistics_tabs_share_keyboard_activation_path() -> None:

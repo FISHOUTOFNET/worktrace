@@ -489,35 +489,49 @@ def test_deleted_project_anchor():
 # --- Complexity test ---
 
 
-def test_anchor_lookup_grows_linearly_not_quadratically():
-    """1000→2000 rows should show ~2x growth in context build, not ~4x.
+def test_anchor_lookup_grows_linearly_not_quadratically(monkeypatch):
+    """Doubling rows must keep context-role work linear, not quadratic.
 
-    Uses wall-clock ratio as a proxy. The hard gate is that the ratio must
-    be well below 4x, confirming O(N) rather than O(N²).
+    Count the production role-classification calls directly instead of using
+    one-shot wall-clock timings. The former O(N²) neighbour scan repeatedly
+    called ``_context_role`` while walking transparent rows, whereas the
+    linearized algorithm performs only a bounded number of role checks per row.
+    This keeps the complexity contract deterministic across shared CI runners.
     """
 
-    import time
+    original_context_role = _context_role
+    role_calls = 0
 
-    def _build(count: int) -> float:
+    def counted_context_role(*args, **kwargs):
+        nonlocal role_calls
+        role_calls += 1
+        return original_context_role(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "worktrace.services.context_service._context_role",
+        counted_context_role,
+    )
+
+    def _build_role_calls(count: int) -> int:
+        nonlocal role_calls
         rows = [_row(1, f"{DATE} 09:00:00", seconds=5)]
         for i in range(2, count + 1):
             prev_start = datetime.strptime(rows[-1]["start_time"], TIME_FORMAT)
             start = prev_start + timedelta(seconds=5)
             rows.append(_row(i, start.strftime(TIME_FORMAT), seconds=5))
-        t0 = time.perf_counter()
+        role_calls = 0
         ReportContextProjection.build(rows, carry_minutes=15)
-        return time.perf_counter() - t0
+        return role_calls
 
-    # Warm up to stabilize timings.
-    _build(100)
+    calls_1000 = _build_role_calls(1000)
+    calls_2000 = _build_role_calls(2000)
+    ratio = calls_2000 / calls_1000 if calls_1000 > 0 else 0
 
-    t_1000 = _build(1000)
-    t_2000 = _build(2000)
-    ratio = t_2000 / t_1000 if t_1000 > 0 else 0
-    # O(N) → ratio ≈ 2; O(N²) → ratio ≈ 4. Allow generous slack for noise.
-    assert ratio < 3.5, (
-        f"Context projection growth ratio {ratio:.2f} suggests super-linear "
-        f"complexity (1000: {t_1000:.4f}s, 2000: {t_2000:.4f}s)"
+    assert calls_1000 <= 4 * 1000
+    assert calls_2000 <= 4 * 2000
+    assert ratio < 2.2, (
+        f"Context role lookup growth ratio {ratio:.2f} suggests super-linear "
+        f"complexity (1000: {calls_1000}, 2000: {calls_2000})"
     )
 
 

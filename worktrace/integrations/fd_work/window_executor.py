@@ -33,13 +33,18 @@ class _Request:
         self.command = command
         self.guard = guard
         self.timeout = max(0.01, float(timeout))
+        self.deadline = time.monotonic() + self.timeout
         self.callback_event = threading.Event()
+        self.command_returned = threading.Event()
         self.finished = threading.Event()
         self.lock = threading.Lock()
         self.callback_executed = False
         self.callback_value: Any = None
         self.terminal = False
         self.result: FDWorkWindowCommandResult | None = None
+
+    def remaining(self) -> float:
+        return max(0.0, self.deadline - time.monotonic())
 
     def accept_callback(self, value: Any) -> None:
         with self.lock:
@@ -49,18 +54,30 @@ class _Request:
             self.callback_value = value
             self.callback_event.set()
 
-    def finish(self, result: FDWorkWindowCommandResult) -> None:
+    def finish(self, result: FDWorkWindowCommandResult) -> bool:
         with self.lock:
             if self.terminal:
-                return
+                return False
             self.terminal = True
             self.result = result
             self.callback_event.set()
             self.finished.set()
+            return True
+
+    def is_terminal(self) -> bool:
+        with self.lock:
+            return self.terminal
 
 
 class FDWorkWindowExecutor:
-    """Run callback-based window commands on one bounded FIFO worker."""
+    """Run callback-based window commands on one bounded FIFO worker.
+
+    A command that returns but never invokes its callback is a recoverable
+    callback timeout. A synchronous window command that itself never returns is
+    different: Python cannot safely cancel that pywebview mutation. The executor
+    therefore latches ``stalled`` and fails closed instead of starting a second
+    worker that could mutate the same window concurrently.
+    """
 
     def __init__(
         self,
@@ -75,6 +92,7 @@ class FDWorkWindowExecutor:
         self._lock = threading.Lock()
         self._pending_condition = threading.Condition(self._lock)
         self._shutdown = False
+        self._stalled = False
         self._current: _Request | None = None
         self._worker = threading.Thread(target=self._run, name=name, daemon=True)
         self._worker.start()
@@ -91,13 +109,71 @@ class FDWorkWindowExecutor:
         with self._pending_condition:
             if self._shutdown:
                 return self._rejected()
+            if self._stalled:
+                return self._stalled_result()
             try:
                 self._queue.put_nowait(request)
             except queue.Full:
                 return self._rejected()
             self._pending_condition.notify_all()
-        request.finished.wait()
+
+        if not request.finished.wait(timeout=request.remaining()):
+            self._expire_request(request)
         return request.result or self._rejected()
+
+    def _expire_request(self, request: _Request) -> None:
+        with self._pending_condition:
+            if request.finished.is_set():
+                return
+            is_current = self._current is request
+            command_returned = request.command_returned.is_set()
+            if is_current and not command_returned:
+                # The synchronous pywebview mutation (or its guard) is still on
+                # the owner thread. We cannot prove it stopped, so permanently
+                # fail this executor generation closed and reject queued work.
+                self._stalled = True
+                request.finish(self._stalled_result())
+                self._drain_queued_locked(self._stalled_result())
+                self._pending_condition.notify_all()
+                return
+            if is_current:
+                # The command returned; only callback settlement missed the
+                # absolute deadline. This is recoverable and must not poison
+                # the single owner for subsequent commands.
+                request.finish(
+                    FDWorkWindowCommandResult(
+                        ok=False,
+                        error_kind="callback_timeout",
+                    )
+                )
+                return
+
+            # The request exhausted its absolute budget while waiting in the FIFO.
+            # Leave its terminal shell in the queue; the worker will skip it without
+            # executing the mutation when it reaches the head.
+            request.finish(
+                FDWorkWindowCommandResult(
+                    ok=False,
+                    error_kind="request_timeout",
+                )
+            )
+
+    def _drain_queued_locked(self, result: FDWorkWindowCommandResult) -> None:
+        saw_sentinel = False
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                if item is self._sentinel:
+                    saw_sentinel = True
+                elif isinstance(item, _Request):
+                    item.finish(result)
+            finally:
+                self._queue.task_done()
+        if saw_sentinel:
+            self._queue.put_nowait(self._sentinel)
 
     def shutdown(self, *, timeout: float = 2.0) -> bool:
         with self._pending_condition:
@@ -106,20 +182,17 @@ class FDWorkWindowExecutor:
             if not self._shutdown:
                 self._shutdown = True
             current = self._current
-            queued: list[_Request] = []
-            while True:
-                try:
-                    item = self._queue.get_nowait()
-                except queue.Empty:
-                    break
-                if isinstance(item, _Request):
-                    queued.append(item)
-                self._queue.task_done()
-            for request in queued:
-                request.finish(self._rejected())
+            self._drain_queued_locked(self._rejected())
             if current is not None:
+                # Release the submitting thread even if the underlying native
+                # command cannot be interrupted. The owner worker is still never
+                # replaced while that command may be in flight.
+                current.finish(self._rejected())
                 current.callback_event.set()
-            self._queue.put_nowait(self._sentinel)
+            try:
+                self._queue.put_nowait(self._sentinel)
+            except queue.Full:
+                pass
             self._pending_condition.notify_all()
         self._worker.join(timeout=max(0.0, float(timeout)))
         return not self._worker.is_alive()
@@ -127,6 +200,11 @@ class FDWorkWindowExecutor:
     @property
     def worker_alive(self) -> bool:
         return self._worker.is_alive()
+
+    @property
+    def stalled(self) -> bool:
+        with self._lock:
+            return self._stalled
 
     def wait_for_pending_count(self, count: int, *, timeout: float) -> bool:
         expected = max(0, int(count))
@@ -149,12 +227,18 @@ class FDWorkWindowExecutor:
                     return
                 if not isinstance(item, _Request):
                     continue
+                if item.is_terminal():
+                    continue
                 with self._lock:
                     self._current = item
                     shutdown = self._shutdown
+                    stalled = self._stalled
                 if shutdown:
                     item.finish(self._rejected())
                     continue
+                if stalled:
+                    item.finish(self._stalled_result())
+                    return
                 if not self._guard_valid(item.guard):
                     item.finish(
                         FDWorkWindowCommandResult(
@@ -166,6 +250,7 @@ class FDWorkWindowExecutor:
                 try:
                     item.command(item.accept_callback)
                 except Exception:
+                    item.command_returned.set()
                     item.finish(
                         FDWorkWindowCommandResult(
                             ok=False,
@@ -173,7 +258,19 @@ class FDWorkWindowExecutor:
                         )
                     )
                     continue
-                if not item.callback_event.wait(timeout=item.timeout):
+                item.command_returned.set()
+
+                with self._lock:
+                    stalled = self._stalled
+                    shutdown = self._shutdown
+                if stalled:
+                    item.finish(self._stalled_result())
+                    return
+                if shutdown:
+                    item.finish(self._rejected())
+                    return
+
+                if not item.callback_event.wait(timeout=item.remaining()):
                     item.finish(
                         FDWorkWindowCommandResult(
                             ok=False,
@@ -189,6 +286,10 @@ class FDWorkWindowExecutor:
                     continue
                 with self._lock:
                     shutdown = self._shutdown
+                    stalled = self._stalled
+                if stalled:
+                    item.finish(self._stalled_result())
+                    return
                 if shutdown:
                     item.finish(self._rejected())
                 elif not self._guard_valid(item.guard):
@@ -223,6 +324,10 @@ class FDWorkWindowExecutor:
     @staticmethod
     def _rejected() -> FDWorkWindowCommandResult:
         return FDWorkWindowCommandResult(ok=False, error_kind="executor_rejected")
+
+    @staticmethod
+    def _stalled_result() -> FDWorkWindowCommandResult:
+        return FDWorkWindowCommandResult(ok=False, error_kind="executor_stalled")
 
 
 class FDWorkWindowCommandError(RuntimeError):

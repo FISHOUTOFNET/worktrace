@@ -61,6 +61,7 @@ def test_shipping_script_composition_contains_current_owners_in_order():
     scripts = [urlsplit(url).path for url in _local_assets(source) if url.startswith("js/")]
     required = [
         "js/core.js",
+        "js/application_metadata.js",
         "js/ui_components.js",
         "js/project_catalog.js",
         "js/timeline_delete_actions.js",
@@ -70,6 +71,7 @@ def test_shipping_script_composition_contains_current_owners_in_order():
         "js/rules_rule_actions.js",
         "js/rules_delete_actions.js",
         "js/init_fd_work_v5.js",
+        "js/shell_lifecycle.js",
         "js/ui_composition.js",
     ]
     assert [name for name in scripts if name in required] == required

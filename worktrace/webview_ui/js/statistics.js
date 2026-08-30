@@ -2,6 +2,12 @@
 (function () {
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
+    var statisticsQuickRangePreset = "week";
+    var statisticsQuickRangeResolvedDate = "";
+    var STATISTICS_QUICK_RANGE_QUERY_DELAY_MS = 120;
+    var statisticsRowIndex = null;
+    var statisticsRuntimeSyncState = null;
+    var statisticsRecoveryReason = "";
 
     function element(id) { return document.getElementById(id); }
 
@@ -10,6 +16,8 @@
         return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
     }
 
+    // Pure reference helper kept for deterministic math tests. Production live
+    // rendering below uses the indexed in-place projection path exclusively.
     function cloneGroups(groups) {
         return (Array.isArray(groups) ? groups : []).map(function (group) {
             return Object.assign({}, group || {});
@@ -84,19 +92,95 @@
     }
     App.statisticsLiveSummaryAtNow = statisticsLiveSummaryAtNow;
 
-    function statisticsLiveGroupPatch(tbodyId, groups) {
+    function liveTargetFresh(target, nowMs) {
+        if (!target || target.enabled !== true || target.ticking !== true) return true;
+        // Shipping init_fd_work_v5.js is the freshness authority. Narrow legacy
+        // harnesses that do not load the runtime owner retain static compatibility.
+        if (typeof App.liveSampleFresh !== "function") return true;
+        return App.liveSampleFresh(nonNegativeInt(target.sampled_at_epoch_ms), nowMs);
+    }
+
+    function liveTargetRebaseDue(target, nowMs) {
+        if (!target || target.enabled !== true || target.ticking !== true) return false;
+        if (typeof App.liveSampleRebaseDue !== "function") return false;
+        return App.liveSampleRebaseDue(nonNegativeInt(target.sampled_at_epoch_ms), nowMs);
+    }
+
+    function runtimeLiveEligibility() {
+        var store = App.liveRuntimeStore;
+        if (!store || typeof store.get !== "function") return null;
+        var runtime = store.get();
+        var collector = runtime && runtime.collector;
+        if (!collector || typeof collector.live_eligible !== "boolean") return null;
+        return collector.live_eligible;
+    }
+
+    function runtimeLiveEligible() {
+        var value = runtimeLiveEligibility();
+        return value === null ? true : value;
+    }
+
+    function normalizeStatisticsRuntimeSync(value) {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+        return {
+            runtimeConsistent: value.runtime_consistent === true,
+            needsFullRefresh: value.needs_full_refresh === true,
+            collectionLiveEligible: value.collection_live_eligible === true
+        };
+    }
+
+    function statisticsRuntimeSyncPending() {
+        return !!(
+            statisticsRuntimeSyncState
+            && statisticsRuntimeSyncState.needsFullRefresh === true
+        );
+    }
+
+    function invalidateStatisticsRowIndex() {
+        statisticsRowIndex = null;
+    }
+
+    function statisticsRecoveryRequest(reason) {
+        return {
+            refreshRequired: true,
+            reason: String(
+                reason || statisticsRecoveryReason || "statistics_live_projection_stale"
+            )
+        };
+    }
+
+    function suspendStatisticsProjection(reason) {
+        statisticsRecoveryReason = String(
+            reason || statisticsRecoveryReason || "statistics_live_projection_stale"
+        );
+        App.statisticsLiveTickerSuspended = true;
+        invalidateStatisticsRowIndex();
+    }
+
+    function acceptStatisticsRuntimeSync(value) {
+        var sync = normalizeStatisticsRuntimeSync(value);
+        statisticsRuntimeSyncState = sync;
+        if (sync && sync.needsFullRefresh) {
+            suspendStatisticsProjection("statistics_runtime_sync_pending");
+            return false;
+        }
+        statisticsRecoveryReason = "";
+        return !!sync;
+    }
+    App.acceptStatisticsRuntimeSync = acceptStatisticsRuntimeSync;
+
+    function buildStatisticsGroupIndex(tbodyId, groups) {
         var body = element(tbodyId);
         if (!body || typeof body.querySelectorAll !== "function") return null;
         var rows = body.querySelectorAll("tr");
         groups = Array.isArray(groups) ? groups : [];
         if (rows.length !== groups.length) return null;
-        var patch = [];
-        for (var i = 0; i < rows.length; i++) {
-            var row = rows[i];
-            var group = groups[i] || {};
+        var entries = [];
+        for (var index = 0; index < rows.length; index++) {
+            var row = rows[index];
+            var expectedKey = statisticsGroupKey(groups[index], index);
             if (typeof row.getAttribute === "function"
-                && String(row.getAttribute("data-statistics-key") || "")
-                !== statisticsGroupKey(group, i)) {
+                && String(row.getAttribute("data-statistics-key") || "") !== expectedKey) {
                 return null;
             }
             var cells = row.children;
@@ -104,57 +188,148 @@
                 ? row.querySelector(".stats-share-bar i")
                 : null;
             if (!cells || cells.length < 4 || !bar || !bar.style) return null;
-            patch.push({ cells: cells, bar: bar, group: group });
+            entries.push({ key: expectedKey, cells: cells, bar: bar });
         }
-        return patch;
+        return entries;
     }
 
-    function patchStatisticsLiveSummary(summary) {
+    function buildStatisticsRowIndex(summary, owner) {
+        var project = buildStatisticsGroupIndex("stats-by-project", summary.by_project || []);
+        var file = buildStatisticsGroupIndex("stats-by-file", summary.by_file || []);
+        var app = buildStatisticsGroupIndex("stats-by-app", summary.by_app || []);
+        if (!project || !file || !app) return null;
+        return { owner: owner, project: project, file: file, app: app };
+    }
+
+    function ensureStatisticsRowIndex(summary) {
+        var owner = App.statisticsAcceptedPayload || summary;
+        if (statisticsRowIndex && statisticsRowIndex.owner === owner) return statisticsRowIndex;
+        statisticsRowIndex = buildStatisticsRowIndex(summary, owner);
+        return statisticsRowIndex;
+    }
+
+    function writeStatisticsText(target, value) {
+        if (target && target.textContent !== value) target.textContent = value;
+    }
+
+    function writeStatisticsWidth(target, value) {
+        if (target && target.style && target.style.width !== value) target.style.width = value;
+    }
+
+    function patchStatisticsGroup(entries, groups, liveKey, delta, totalSeconds) {
+        groups = Array.isArray(groups) ? groups : [];
+        if (!entries || entries.length !== groups.length) return false;
+        var normalizedLiveKey = String(liveKey || "");
+        var matchedLiveKey = !normalizedLiveKey;
+        for (var index = 0; index < groups.length; index++) {
+            var group = groups[index] || {};
+            var expectedKey = statisticsGroupKey(group, index);
+            var entry = entries[index];
+            if (!entry || entry.key !== expectedKey) return false;
+
+            var rawKey = String(group.key || "");
+            var isLive = !!normalizedLiveKey && rawKey === normalizedLiveKey;
+            if (isLive) matchedLiveKey = true;
+            var seconds = nonNegativeInt(group.duration_seconds) + (isLive ? delta : 0);
+            var duration = isLive && delta > 0
+                ? App.formatDuration(seconds)
+                : String(group.duration || App.formatDuration(seconds));
+            var percentage = totalSeconds > 0
+                ? Math.round(seconds / totalSeconds * 1000) / 10
+                : 0;
+            var percentageText = String(percentage || 0) + "%";
+            var width = Math.max(0, Math.min(100, percentage)) + "%";
+
+            writeStatisticsText(entry.cells[1], duration);
+            writeStatisticsText(entry.cells[3], percentageText);
+            writeStatisticsWidth(entry.bar, width);
+        }
+        return matchedLiveKey;
+    }
+
+    function patchStatisticsLiveProjection(summary, target, delta) {
         if (!summary) return false;
         var total = element("stats-total");
-        var projectPatch = statisticsLiveGroupPatch("stats-by-project", summary.by_project || []);
-        var filePatch = statisticsLiveGroupPatch("stats-by-file", summary.by_file || []);
-        var appPatch = statisticsLiveGroupPatch("stats-by-app", summary.by_app || []);
-        if (!total || !projectPatch || !filePatch || !appPatch) return false;
-        total.textContent = summary.total_duration || "00:00:00";
-        [projectPatch, filePatch, appPatch].forEach(function (groupPatch) {
-            groupPatch.forEach(function (entry) {
-                var group = entry.group;
-                var duration = group.duration || App.formatDuration(group.duration_seconds || 0);
-                var percentage = Math.max(0, Math.min(100, parseFloat(group.percentage) || 0));
-                entry.cells[1].textContent = duration;
-                entry.cells[3].textContent = String(group.percentage || 0) + "%";
-                entry.bar.style.width = percentage + "%";
-            });
-        });
+        var index = ensureStatisticsRowIndex(summary);
+        if (!total || !index) return false;
+
+        var totalSeconds = nonNegativeInt(summary.total_duration_seconds) + delta;
+        writeStatisticsText(total, App.formatDuration(totalSeconds));
+        if (!patchStatisticsGroup(index.project, summary.by_project || [], target.project_key, delta, totalSeconds)) {
+            return false;
+        }
+        if (!patchStatisticsGroup(index.file, summary.by_file || [], target.file_key, delta, totalSeconds)) {
+            return false;
+        }
+        if (!patchStatisticsGroup(index.app, summary.by_app || [], target.app_key, delta, totalSeconds)) {
+            return false;
+        }
         return true;
     }
-    App.patchStatisticsLiveSummary = patchStatisticsLiveSummary;
+
+    function statisticsRuntimeLivenessChanged() {
+        if (!statisticsRuntimeSyncState || statisticsRuntimeSyncState.needsFullRefresh) return false;
+        var current = runtimeLiveEligibility();
+        return current !== null
+            && current !== statisticsRuntimeSyncState.collectionLiveEligible;
+    }
 
     function applyStatisticsLocalTicker() {
-        if (App.currentPage !== "statistics" || App.statisticsLiveTickerSuspended === true) return null;
+        if (App.currentPage !== "statistics") return null;
+        if (statisticsRuntimeSyncPending()) {
+            return statisticsRecoveryRequest("statistics_runtime_sync_pending");
+        }
+        if (statisticsRuntimeLivenessChanged()) {
+            suspendStatisticsProjection("statistics_runtime_liveness_changed");
+            return statisticsRecoveryRequest("statistics_runtime_liveness_changed");
+        }
+        if (App.statisticsLiveTickerSuspended === true) {
+            return statisticsRecoveryRequest("statistics_projection_blocked");
+        }
         var accepted = App.statisticsAcceptedPayload;
         if (!accepted || !accepted.summary || !accepted.filters) return null;
         var liveTarget = accepted.exportTicket && accepted.exportTicket.live_target;
-        var summary = statisticsLiveSummaryAtNow(accepted.summary, Date.now(), liveTarget);
-        var delta = nonNegativeInt(summary && summary._live_delta_seconds);
+        if (!liveTarget || liveTarget.enabled !== true) return null;
+
+        var nowMs = Date.now();
+        if (liveTarget.ticking === true && runtimeLiveEligible() !== true) {
+            suspendStatisticsProjection("statistics_runtime_not_live");
+            return statisticsRecoveryRequest("statistics_runtime_not_live");
+        }
+        if (!liveTargetFresh(liveTarget, nowMs)) {
+            suspendStatisticsProjection("statistics_live_target_stale");
+            return statisticsRecoveryRequest("statistics_live_target_stale");
+        }
+
+        var rebaseDue = liveTargetRebaseDue(liveTarget, nowMs);
+        var sampledSeconds = nonNegativeInt(liveTarget.elapsed_seconds_at_sample);
+        var currentSeconds = liveTargetElapsedSeconds(liveTarget, nowMs);
+        var delta = Math.max(0, currentSeconds - sampledSeconds);
         var renderKey = [
             String(accepted.summary.snapshot_revision
                 || accepted.exportTicket && accepted.exportTicket.revision || ""),
             String(delta)
         ].join("|");
-        if (App.statisticsLastLiveRenderKey === renderKey) return null;
-        if (patchStatisticsLiveSummary(summary)) {
+        if (App.statisticsLastLiveRenderKey === renderKey) {
+            return rebaseDue
+                ? statisticsRecoveryRequest("statistics_live_target_rebase_due")
+                : null;
+        }
+
+        if (patchStatisticsLiveProjection(accepted.summary, liveTarget, delta)) {
             App.statisticsLastLiveRenderKey = renderKey;
-            return null;
+            return rebaseDue
+                ? statisticsRecoveryRequest("statistics_live_target_rebase_due")
+                : null;
         }
-        if (liveTarget && liveTarget.enabled === true && delta > 0) {
-            return {
-                refreshRequired: true,
-                reason: "statistics_live_projection_mismatch"
-            };
+        invalidateStatisticsRowIndex();
+        if (delta > 0) {
+            suspendStatisticsProjection("statistics_live_projection_mismatch");
+            return statisticsRecoveryRequest("statistics_live_projection_mismatch");
         }
-        return null;
+        return rebaseDue
+            ? statisticsRecoveryRequest("statistics_live_target_rebase_due")
+            : null;
     }
     App.applyStatisticsLocalTicker = applyStatisticsLocalTicker;
 
@@ -180,23 +355,33 @@
         App.statisticsLiveTickerSuspended = false;
     }
 
-    function suspendStatisticsLiveTicker() {
-        if (App.statisticsLiveTickerSuspended === true) return;
-        applyStatisticsLocalTicker();
-        App.statisticsLiveTickerSuspended = true;
+    function suspendStatisticsLiveTicker(reason) {
+        suspendStatisticsProjection(reason || "statistics_live_projection_suspended");
     }
     App.suspendStatisticsLiveTicker = suspendStatisticsLiveTicker;
 
     function resumeStatisticsLiveTicker() {
+        if (statisticsRuntimeSyncPending()) {
+            App.statisticsLiveTickerSuspended = true;
+            return false;
+        }
         App.statisticsLiveTickerSuspended = false;
         App.statisticsLastLiveRenderKey = "";
+        statisticsRecoveryReason = "";
+        return true;
     }
     App.resumeStatisticsLiveTicker = resumeStatisticsLiveTicker;
 
     function onStatisticsRuntimeTransition(change) {
         change = change || {};
-        if (change.source !== "refresh-state" || change.reportStructureChanged !== true) return;
-        suspendStatisticsLiveTicker();
+        if (change.source !== "refresh-state") return;
+        if (change.reportStructureChanged === true) {
+            suspendStatisticsProjection("statistics_report_structure_changed");
+            return;
+        }
+        if (change.liveChanged === true) {
+            suspendStatisticsProjection("statistics_runtime_identity_changed");
+        }
     }
 
     function validateStatisticsDateRange(dateFrom, dateTo) {
@@ -244,9 +429,16 @@
         return null;
     }
 
+    function normalizeStatisticsQuickRangePreset(type) {
+        return ["today", "week", "month", "all"].indexOf(type) >= 0 ? type : null;
+    }
+
     function currentSelection() {
         if (!App.statisticsSelection) {
-            var range = statisticsWeekRange(new Date());
+            var today = new Date();
+            var range = statisticsWeekRange(today);
+            statisticsQuickRangePreset = "week";
+            statisticsQuickRangeResolvedDate = localDate(today);
             App.statisticsSelection = {
                 allTime: false,
                 dateFrom: range.dateFrom,
@@ -286,7 +478,13 @@
         return App.statisticsDraftSelection;
     }
 
-    function setStatisticsSelection(allTime, dateFrom, dateTo) {
+    function setStatisticsSelection(allTime, dateFrom, dateTo, quickRangePreset) {
+        statisticsQuickRangePreset = normalizeStatisticsQuickRangePreset(quickRangePreset);
+        if (allTime && !statisticsQuickRangePreset) statisticsQuickRangePreset = "all";
+        statisticsQuickRangeResolvedDate = statisticsQuickRangePreset
+            && statisticsQuickRangePreset !== "all"
+            ? localDate(new Date())
+            : "";
         App.statisticsSelection = {
             allTime: !!allTime,
             dateFrom: allTime ? "" : String(dateFrom || ""),
@@ -313,20 +511,37 @@
     }
 
     function syncStatisticsSelection() {
-        var selection = currentSelection();
-        var today = new Date();
+        currentSelection();
         ["today", "week", "month", "all"].forEach(function (type) {
-            var range = shortcutRange(type, today);
-            var pressed = type === "all"
-                ? selection.allTime
-                : !selection.allTime
-                    && selection.dateFrom === range.dateFrom
-                    && selection.dateTo === range.dateTo;
+            var pressed = statisticsQuickRangePreset === type;
             var button = element("statistics-" + type + "-btn");
             if (button) button.setAttribute("aria-pressed", pressed ? "true" : "false");
         });
     }
     App.syncStatisticsSelection = syncStatisticsSelection;
+
+    function refreshStatisticsQuickRangeForToday() {
+        var preset = statisticsQuickRangePreset;
+        if (!preset || preset === "all") return false;
+        var today = new Date();
+        var resolvedDate = localDate(today);
+        if (statisticsQuickRangeResolvedDate === resolvedDate) return false;
+        var range = shortcutRange(preset, today);
+        if (!range) return false;
+        App.statisticsSelection = {
+            allTime: false,
+            dateFrom: range.dateFrom,
+            dateTo: range.dateTo
+        };
+        App.statisticsSelectionInitialized = true;
+        statisticsQuickRangeResolvedDate = resolvedDate;
+        if (!App.statisticsDraftDirty) {
+            App.statisticsDraftSelection = cloneStatisticsSelection(App.statisticsSelection);
+        }
+        syncStatisticsSelection();
+        if (!App.statisticsDraftDirty) syncStatisticsDraftSelection();
+        return true;
+    }
 
     function syncStatisticsDateInputPresentation(input) {
         if (!input) return;
@@ -350,7 +565,9 @@
     App.syncStatisticsDraftSelection = syncStatisticsDraftSelection;
 
     function selectedFilters() {
-        var selection = currentSelection();
+        currentSelection();
+        refreshStatisticsQuickRangeForToday();
+        var selection = App.statisticsSelection;
         return {
             dateFrom: selection.allTime ? "" : selection.dateFrom,
             dateTo: selection.allTime ? "" : selection.dateTo,
@@ -380,6 +597,9 @@
         App.statisticsLoaded = false;
         App.statisticsAcceptedPayload = null;
         App.statisticsSnapshotRevision = "";
+        statisticsRuntimeSyncState = null;
+        statisticsRecoveryReason = "";
+        invalidateStatisticsRowIndex();
         setStatisticsExportStatus("", "");
         clearStatisticsPresentation();
         setStatisticsLoading(false);
@@ -509,11 +729,13 @@
                 showStatisticsError("加载统计失败");
                 return null;
             }
+            acceptStatisticsRuntimeSync(data.runtime_sync);
             App.statisticsAcceptedPayload = {
                 summary: data.summary,
                 exportTicket: data.export_ticket,
                 filters: filters
             };
+            invalidateStatisticsRowIndex();
             App.statisticsSnapshotRevision = String(data.export_ticket.revision || "");
             if (owner.preservePresentation === true && App.statisticsLoaded === true) {
                 reconcileStatisticsPresentation(data.summary);
@@ -659,12 +881,13 @@
     }
     App.handleStatisticsTabKeydown = handleStatisticsTabKeydown;
 
-    function applyStatisticsQuickRange(type) {
+    function applyStatisticsQuickRange(type, queryDelay) {
         var today = new Date();
         var range = shortcutRange(type, today);
         if (!range) return Promise.resolve(null);
-        setStatisticsSelection(type === "all", range.dateFrom, range.dateTo);
-        return beginStatisticsQuery(0);
+        setStatisticsSelection(type === "all", range.dateFrom, range.dateTo, type);
+        if (queryDelay === undefined) return beginStatisticsQuery(0);
+        return beginStatisticsQuery(nonNegativeInt(queryDelay));
     }
     App.applyStatisticsQuickRange = applyStatisticsQuickRange;
 
@@ -687,7 +910,7 @@
     function applyStatisticsDraftSelection() {
         var draft = currentDraftSelection();
         if (draft.allTime) {
-            setStatisticsSelection(true, "", "");
+            setStatisticsSelection(true, "", "", "all");
             return beginStatisticsQuery(0);
         }
         var message = validateStatisticsDateRange(draft.dateFrom, draft.dateTo);
@@ -695,7 +918,7 @@
             setStatisticsDraftStatus(message, true);
             return Promise.resolve(null);
         }
-        setStatisticsSelection(false, draft.dateFrom, draft.dateTo);
+        setStatisticsSelection(false, draft.dateFrom, draft.dateTo, null);
         return beginStatisticsQuery(0);
     }
     App.applyStatisticsDraftSelection = applyStatisticsDraftSelection;
@@ -765,16 +988,16 @@
 
     function bindStatisticsEvents() {
         bindStatisticsControl("statistics-today-btn", "click", function () {
-            App.applyStatisticsQuickRange("today");
+            App.applyStatisticsQuickRange("today", STATISTICS_QUICK_RANGE_QUERY_DELAY_MS);
         });
         bindStatisticsControl("statistics-week-btn", "click", function () {
-            App.applyStatisticsQuickRange("week");
+            App.applyStatisticsQuickRange("week", STATISTICS_QUICK_RANGE_QUERY_DELAY_MS);
         });
         bindStatisticsControl("statistics-month-btn", "click", function () {
-            App.applyStatisticsQuickRange("month");
+            App.applyStatisticsQuickRange("month", STATISTICS_QUICK_RANGE_QUERY_DELAY_MS);
         });
         bindStatisticsControl("statistics-all-btn", "click", function () {
-            App.applyStatisticsQuickRange("all");
+            App.applyStatisticsQuickRange("all", STATISTICS_QUICK_RANGE_QUERY_DELAY_MS);
         });
         bindStatisticsControl(
             "statistics-apply-range-btn", "click", App.applyStatisticsDraftSelection
@@ -785,6 +1008,7 @@
     function onStatisticsRefreshRequested(options) {
         options = options || {};
         if (App.statisticsLoaded !== true) initStatisticsDefaults();
+        refreshStatisticsQuickRangeForToday();
         return loadStatisticsExportSummary(
             options.preservePresentation === true ? { preservePresentation: true } : undefined
         );
@@ -836,6 +1060,16 @@
     }
     App.exportStatisticsCsv = exportStatisticsCsv;
 
+    function statisticsSelectionIncludesDate(date) {
+        date = String(date || "");
+        if (!date) return false;
+        var selection = App.statisticsSelection;
+        if (!selection || selection.allTime === true || statisticsQuickRangePreset) return true;
+        var from = String(selection.dateFrom || "");
+        var to = String(selection.dateTo || "");
+        return !!from && !!to && from <= date && to >= date;
+    }
+
     function resetStatisticsGeneration() {
         App.statisticsLoaded = false;
         App.statisticsAcceptedPayload = null;
@@ -844,9 +1078,14 @@
         App.statisticsDraftSelection = null;
         App.statisticsDraftDirty = false;
         App.statisticsSelectionInitialized = false;
+        statisticsQuickRangePreset = "week";
+        statisticsQuickRangeResolvedDate = "";
         App.statisticsRequestToken = (App.statisticsRequestToken || 0) + 1;
         App.statisticsLiveTickerSuspended = false;
         App.statisticsLastLiveRenderKey = "";
+        statisticsRuntimeSyncState = null;
+        statisticsRecoveryReason = "";
+        invalidateStatisticsRowIndex();
         if (App.statisticsQueryTimer) window.clearTimeout(App.statisticsQueryTimer);
         App.statisticsQueryTimer = null;
         clearStatisticsPresentation();
@@ -855,21 +1094,17 @@
     }
     App.statistics = Object.freeze({
         applyLocalTick: applyStatisticsLocalTicker,
-        automaticRefreshAllowed: function (today) {
-            var selection = App.statisticsSelection;
-            if (!selection || selection.allTime === true) return true;
-            var from = String(selection.dateFrom || "");
-            var to = String(selection.dateTo || "");
-            return !!from && !!to && from <= today && to >= today;
-        },
+        automaticRefreshAllowed: statisticsSelectionIncludesDate,
         bindEvents: bindStatisticsEvents,
         refreshPolicy: Object.freeze({
             entryGenerations: Object.freeze(["report_structure"]),
             automaticGenerations: Object.freeze(["report_structure"]),
-            deferred: true,
+            deferred: false,
             preservePresentation: true
         }),
-        hasLoadedData: function () { return App.statisticsLoaded === true; },
+        hasLoadedData: function () {
+            return App.statisticsLoaded === true && !statisticsRuntimeSyncPending();
+        },
         onPageEntered: onStatisticsRefreshRequested,
         onPageLeft: resetStatisticsTransientUi,
         onRefreshRequested: onStatisticsRefreshRequested,
@@ -886,6 +1121,18 @@
                 filter ? String(filter.value || "") : ""
             ].join("|");
         },
+        runtimeRefreshIdentity: function (runtime) {
+            if (!runtime) return "";
+            return statisticsSelectionIncludesDate(runtime.liveReportDate)
+                ? String(runtime.liveRevision || "")
+                : "";
+        },
         resetGeneration: resetStatisticsGeneration
+    });
+    App.statisticsLiveProjection = Object.freeze({
+        invalidateRowIndex: invalidateStatisticsRowIndex,
+        runtimeSyncPending: statisticsRuntimeSyncPending,
+        runtimeSyncState: function () { return statisticsRuntimeSyncState; },
+        recoveryReason: function () { return statisticsRecoveryReason; }
     });
 })();
