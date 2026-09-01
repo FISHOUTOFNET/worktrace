@@ -179,11 +179,7 @@ class WindowsTrayHost:
     def _add_icon(self) -> None:
         import win32gui
 
-        # Serialize registration with desired-state changes. Otherwise a
-        # collection transition can arrive after NIM_ADD data is built but before
-        # _icon_registered becomes true, leaving Explorer with the previous icon
-        # indefinitely because the transition correctly skipped NIM_MODIFY while
-        # the registration was unavailable.
+        # Keep desired state and NIM_ADD atomic so Explorer cannot get a stale variant.
         with self._lock:
             self._deleted = False
             self._icon_registered = False
