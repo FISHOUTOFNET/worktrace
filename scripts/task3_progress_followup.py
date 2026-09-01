@@ -25,8 +25,13 @@ replace_once(
     '''    def progressed(self) -> None:\n        self._registry.mark_progress(self.name)\n\n    def succeeded(self) -> None:\n        self._registry.mark_success(self.name)\n\n    def failed(self, code: str | WorkerFailure) -> None:\n''',
 )
 
-# AppRuntime owns the serving handshake. A partial/degraded iteration is still proof
-# that the worker is serving; ordinary hard failures remain non-serving until recovery.
+# AppRuntime owns lifecycle composition. The runtime service is the worker-loop owner,
+# while the core service remains the command/wake capability used during shutdown.
+replace_once(
+    "worktrace/runtime/app_runtime.py",
+    '''    folder_index_runtime_service,\n    history_mutation_job_service,\n''',
+    '''    folder_index_runtime_service,\n    folder_index_service,\n    history_mutation_job_service,\n''',
+)
 replace_once(
     "worktrace/runtime/app_runtime.py",
     '''from ..worker_health import WorkerHealthRegistry, WorkerHealthReporter\n''',
