@@ -22,7 +22,9 @@ jobs:
           python-version: "3.12"
 
       - name: Apply source patch
-        run: python scripts/task3_patch.py
+        run: |
+          python scripts/task3_patch_fix.py
+          python scripts/task3_patch.py
 
       - name: Install test dependencies
         run: python -m pip install -r requirements-dev.txt
