@@ -1,0 +1,1054 @@
+name: Apply launch-at-login repair fix
+
+on:
+  push:
+    branches: [fix/tray-capability-recovery]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out current branch
+        uses: actions/checkout@v6
+        with:
+          ref: fix/tray-capability-recovery
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11.9'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            constraints-release.txt
+
+      - name: Install test dependencies
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt -c constraints-release.txt
+
+      - name: Apply architecture patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          ROOT = Path('.')
+
+          def read(path: str) -> str:
+              return (ROOT / path).read_text(encoding='utf-8')
+
+          def write(path: str, content: str) -> None:
+              target = ROOT / path
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_text(content, encoding='utf-8')
+
+          def replace_one(path: str, old: str, new: str) -> None:
+              text = read(path)
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'{path}: expected one replacement, found {count}: {old[:100]!r}')
+              write(path, text.replace(old, new, 1))
+
+          write(
+              'worktrace/platforms/startup.py',
+              dedent('''\
+              """Platform-neutral launch-at-login repair contracts."""
+              from __future__ import annotations
+
+              from enum import Enum
+              from typing import Protocol, runtime_checkable
+
+
+              class LaunchAtLoginRepairOutcome(str, Enum):
+                  UNSUPPORTED = "unsupported"
+                  DISABLED = "disabled"
+                  CANONICAL = "canonical"
+                  REPAIRED = "repaired"
+
+
+              class LaunchAtLoginRepairError(RuntimeError):
+                  """Classified repair failure safe for runtime retry policy."""
+
+                  def __init__(
+                      self,
+                      code: str,
+                      *,
+                      retryable: bool,
+                      native_codes: tuple[int, ...] = (),
+                      operation: str = "repair",
+                  ) -> None:
+                      normalized = str(code or "launch_at_login_repair_failed").strip()
+                      super().__init__(normalized)
+                      self.code = normalized
+                      self.retryable = bool(retryable)
+                      self.native_codes = tuple(int(value) for value in native_codes)
+                      self.operation = str(operation or "repair")
+
+
+              @runtime_checkable
+              class LaunchAtLoginRepairCapability(Protocol):
+                  def repair_once(self) -> LaunchAtLoginRepairOutcome: ...
+
+
+              __all__ = [
+                  "LaunchAtLoginRepairCapability",
+                  "LaunchAtLoginRepairError",
+                  "LaunchAtLoginRepairOutcome",
+              ]
+              '''),
+          )
+
+          write(
+              'worktrace/runtime/launch_at_login_repair.py',
+              dedent('''\
+              """Runtime-owned bounded launch-at-login repair worker."""
+              from __future__ import annotations
+
+              import logging
+              import threading
+
+              from ..platforms.startup import (
+                  LaunchAtLoginRepairCapability,
+                  LaunchAtLoginRepairError,
+              )
+              from ..worker_health import WorkerHealthReporter
+
+              _MAX_ATTEMPTS = 5
+              _INITIAL_DELAY_SECONDS = 1.0
+              _MAX_DELAY_SECONDS = 8.0
+
+
+              def run_launch_at_login_repair_worker(
+                  stop_event: threading.Event,
+                  repair: LaunchAtLoginRepairCapability,
+                  *,
+                  health: WorkerHealthReporter,
+                  max_attempts: int = _MAX_ATTEMPTS,
+                  initial_delay_seconds: float = _INITIAL_DELAY_SECONDS,
+                  max_delay_seconds: float = _MAX_DELAY_SECONDS,
+              ) -> None:
+                  """Repair existing OS startup intent, then remain idle until shutdown."""
+
+                  attempt_limit = max(1, int(max_attempts))
+                  initial_delay = max(0.0, float(initial_delay_seconds))
+                  max_delay = max(initial_delay, float(max_delay_seconds))
+                  attempts = 0
+
+                  while not stop_event.is_set():
+                      attempts += 1
+                      logging.info("launch_at_login repair attempt attempt=%s", attempts)
+                      try:
+                          outcome = repair.repair_once()
+                      except LaunchAtLoginRepairError as exc:
+                          health.failed(exc.code)
+                          if exc.retryable and attempts < attempt_limit:
+                              delay = min(
+                                  max_delay,
+                                  initial_delay * (2 ** min(attempts - 1, 30)),
+                              )
+                              logging.warning(
+                                  "launch_at_login repair retry scheduled "
+                                  "attempt=%s next_attempt=%s delay_seconds=%.1f "
+                                  "code=%s operation=%s native_codes=%s",
+                                  attempts,
+                                  attempts + 1,
+                                  delay,
+                                  exc.code,
+                                  exc.operation,
+                                  list(exc.native_codes),
+                                  exc_info=attempts == 1,
+                              )
+                              if stop_event.wait(delay):
+                                  logging.info(
+                                      "launch_at_login repair terminal "
+                                      "outcome=cancelled attempts=%s",
+                                      attempts,
+                                  )
+                                  return
+                              continue
+
+                          terminal = (
+                              "retry_exhausted" if exc.retryable else "permanent_failure"
+                          )
+                          logging.error(
+                              "launch_at_login repair terminal outcome=%s attempts=%s "
+                              "code=%s operation=%s native_codes=%s",
+                              terminal,
+                              attempts,
+                              exc.code,
+                              exc.operation,
+                              list(exc.native_codes),
+                          )
+                          stop_event.wait()
+                          return
+                      except Exception:
+                          health.failed("launch_at_login_repair_unexpected_failure")
+                          logging.exception(
+                              "launch_at_login repair terminal "
+                              "outcome=permanent_failure attempts=%s "
+                              "code=launch_at_login_repair_unexpected_failure",
+                              attempts,
+                          )
+                          stop_event.wait()
+                          return
+
+                      health.succeeded()
+                      logging.info(
+                          "launch_at_login repair terminal outcome=%s attempts=%s",
+                          outcome.value,
+                          attempts,
+                      )
+                      stop_event.wait()
+                      return
+
+
+              __all__ = ["run_launch_at_login_repair_worker"]
+              '''),
+          )
+
+          # Windows platform layer: native error extraction/classification and shared owner lock.
+          replace_one(
+              'worktrace/platforms/windows_startup.py',
+              'import ntpath\nimport sys\nfrom dataclasses import dataclass\nfrom pathlib import Path\nfrom typing import Protocol\n',
+              'import ntpath\nimport sys\nimport threading\nfrom dataclasses import dataclass\nfrom pathlib import Path\nfrom typing import Protocol\n\nfrom .startup import (\n    LaunchAtLoginRepairError,\n    LaunchAtLoginRepairOutcome,\n)\n',
+          )
+          replace_one(
+              'worktrace/platforms/windows_startup.py',
+              '_TASK_NOT_FOUND_HRESULTS = {-2147024894, -2147024893}\n',
+              '_TASK_NOT_FOUND_HRESULTS = {-2147024894, -2147024893}\n_TASK_ACCESS_DENIED_HRESULTS = {-2147024891}\n_TASK_TRANSIENT_HRESULTS = {\n    -2147418111,  # RPC_E_CALL_REJECTED\n    -2147417846,  # RPC_E_SERVERCALL_RETRYLATER\n    -2147216619,  # SCHED_E_SERVICE_NOT_RUNNING\n    -2147023174,  # HRESULT_FROM_WIN32(RPC_S_SERVER_UNAVAILABLE)\n    -2147023170,  # HRESULT_FROM_WIN32(RPC_S_CALL_FAILED)\n    -2147023169,  # HRESULT_FROM_WIN32(RPC_S_CALL_FAILED_DNE)\n    -2146959355,  # CO_E_SERVER_EXEC_FAILURE\n}\n',
+          )
+          replace_one(
+              'worktrace/platforms/windows_startup.py',
+              dedent('''\
+              def _exception_contains_hresult(exc: BaseException, expected: set[int]) -> bool:
+                  pending: list[object] = [getattr(exc, "hresult", None), getattr(exc, "args", ())]
+                  while pending:
+                      value = pending.pop()
+                      if isinstance(value, int) and value in expected:
+                          return True
+                      if isinstance(value, (tuple, list)):
+                          pending.extend(value)
+                  return False
+              '''),
+              dedent('''\
+              def _normalize_native_error_code(value: int) -> int:
+                  if 0x80000000 <= value <= 0xFFFFFFFF:
+                      return value - (1 << 32)
+                  return value
+
+
+              def _exception_native_error_codes(exc: BaseException) -> tuple[int, ...]:
+                  pending: list[object] = [
+                      getattr(exc, "hresult", None),
+                      getattr(exc, "winerror", None),
+                      getattr(exc, "args", ()),
+                  ]
+                  found: list[int] = []
+                  while pending:
+                      value = pending.pop()
+                      if isinstance(value, bool):
+                          continue
+                      if isinstance(value, int):
+                          normalized = _normalize_native_error_code(value)
+                          if normalized not in found:
+                              found.append(normalized)
+                          continue
+                      if isinstance(value, (tuple, list)):
+                          pending.extend(value)
+                  return tuple(found)
+
+
+              def _exception_contains_hresult(exc: BaseException, expected: set[int]) -> bool:
+                  return bool(set(_exception_native_error_codes(exc)).intersection(expected))
+
+
+              def _classify_launch_at_login_failure(
+                  exc: BaseException,
+                  *,
+                  operation: str,
+              ) -> LaunchAtLoginRepairError:
+                  native_codes = _exception_native_error_codes(exc)
+                  native_set = set(native_codes)
+                  if native_set.intersection(_TASK_TRANSIENT_HRESULTS):
+                      code = "launch_at_login_task_scheduler_transient"
+                      retryable = True
+                  elif native_set.intersection(_TASK_ACCESS_DENIED_HRESULTS):
+                      code = "launch_at_login_access_denied"
+                      retryable = False
+                  elif str(exc) == "launch_at_login_task_verification_failed":
+                      code = "launch_at_login_task_verification_failed"
+                      retryable = False
+                  else:
+                      code = "launch_at_login_repair_failed"
+                      retryable = False
+                  return LaunchAtLoginRepairError(
+                      code,
+                      retryable=retryable,
+                      native_codes=native_codes,
+                      operation=operation,
+                  )
+              '''),
+          )
+
+          startup_path = ROOT / 'worktrace/platforms/windows_startup.py'
+          startup_text = startup_path.read_text(encoding='utf-8')
+          class_start = startup_text.index('class WindowsStartupRegistration:')
+          helper_start = startup_text.index('\n\ndef repair_launch_at_login_for_current_user')
+          all_start = startup_text.index('\n\n__all__ = [', helper_start)
+          replacement = dedent('''\
+              class WindowsStartupRegistration:
+                  """Authoritative current-user Task Scheduler launch-at-login registration."""
+
+                  def __init__(
+                      self,
+                      executable_path: Path | None = None,
+                      registry: StartupRegistry | None = None,
+                      scheduler: StartupTaskScheduler | None = None,
+                  ) -> None:
+                      self._executable_path = (
+                          Path(executable_path).resolve()
+                          if executable_path is not None
+                          else installed_executable_path()
+                      )
+                      self._registry = registry if registry is not None else WinregStartupRegistry()
+                      self._scheduler = scheduler if scheduler is not None else WindowsTaskScheduler()
+                      self._lock = threading.RLock()
+
+                  @property
+                  def supported(self) -> bool:
+                      return self._executable_path is not None and sys.platform.startswith("win")
+
+                  def expected_command(self) -> str:
+                      with self._lock:
+                          if self._executable_path is None:
+                              raise RuntimeError("launch_at_login_unsupported")
+                          return f'"{self._executable_path}" {BACKGROUND_ARGUMENT}'
+
+                  def _task_spec(self) -> StartupTaskSpec:
+                      if self._executable_path is None:
+                          raise RuntimeError("launch_at_login_unsupported")
+                      return StartupTaskSpec(
+                          executable_path=self._executable_path,
+                          arguments=BACKGROUND_ARGUMENT,
+                          working_directory=self._executable_path.parent,
+                      )
+
+                  def _legacy_value(self) -> str | None:
+                      return self._registry.read_run_value(RUN_VALUE_NAME)
+
+                  def _legacy_is_enabled(self) -> bool:
+                      value = self._legacy_value()
+                      return isinstance(value, str) and bool(value.strip())
+
+                  def _legacy_is_configured(self) -> bool:
+                      try:
+                          value = self._legacy_value()
+                      except OSError:
+                          return False
+                      if not isinstance(value, str):
+                          return False
+                      return ntpath.normcase(value.strip()) == ntpath.normcase(
+                          self.expected_command()
+                      )
+
+                  def is_canonical(self) -> bool:
+                      with self._lock:
+                          if not self.supported:
+                              return False
+                          try:
+                              return self._scheduler.is_configured(
+                                  TASK_NAME,
+                                  self._task_spec(),
+                              )
+                          except Exception:
+                              return False
+
+                  def is_configured(self) -> bool:
+                      with self._lock:
+                          if not self.supported:
+                              return False
+                          if self.is_canonical():
+                              return True
+                          return self._legacy_is_configured()
+
+                  def enable(self, executable_path: Path | None = None) -> None:
+                      with self._lock:
+                          if executable_path is not None:
+                              self._executable_path = Path(executable_path).resolve()
+                          if not self.supported:
+                              raise RuntimeError("launch_at_login_unsupported")
+
+                          spec = self._task_spec()
+                          if not self._scheduler.is_configured(TASK_NAME, spec):
+                              self._scheduler.register(TASK_NAME, spec)
+                          if not self._scheduler.is_configured(TASK_NAME, spec):
+                              raise OSError("launch_at_login_task_verification_failed")
+
+                          # Delete the retired Run entry only after the scheduled task is
+                          # verified, so registration failure cannot remove a working path.
+                          self._registry.delete_run_value(RUN_VALUE_NAME)
+
+                  def repair_if_needed(self) -> LaunchAtLoginRepairOutcome:
+                      """Repair existing launch-at-login intent without creating new intent."""
+
+                      with self._lock:
+                          if not self.supported:
+                              return LaunchAtLoginRepairOutcome.UNSUPPORTED
+
+                          task_exists = self._scheduler.exists(TASK_NAME)
+                          legacy_enabled = self._legacy_is_enabled()
+                          if not task_exists and not legacy_enabled:
+                              return LaunchAtLoginRepairOutcome.DISABLED
+
+                          if self._scheduler.is_configured(TASK_NAME, self._task_spec()):
+                              if legacy_enabled:
+                                  self._registry.delete_run_value(RUN_VALUE_NAME)
+                                  return LaunchAtLoginRepairOutcome.REPAIRED
+                              return LaunchAtLoginRepairOutcome.CANONICAL
+
+                          self.enable()
+                          return LaunchAtLoginRepairOutcome.REPAIRED
+
+                  def migrate_legacy_registration(self) -> None:
+                      with self._lock:
+                          if not self.supported:
+                              raise RuntimeError("launch_at_login_unsupported")
+                          self.repair_if_needed()
+
+                  def disable(self) -> None:
+                      with self._lock:
+                          if not self.supported:
+                              raise RuntimeError("launch_at_login_unsupported")
+
+                          first_error: Exception | None = None
+                          try:
+                              self._scheduler.delete(TASK_NAME)
+                          except Exception as exc:
+                              first_error = exc
+                          try:
+                              self._registry.delete_run_value(RUN_VALUE_NAME)
+                          except Exception as exc:
+                              if first_error is None:
+                                  first_error = exc
+                          if first_error is not None:
+                              raise first_error
+
+
+              class WindowsLaunchAtLoginRepair:
+                  """COM apartment adapter for one classified startup repair attempt."""
+
+                  def __init__(self, registration: WindowsStartupRegistration) -> None:
+                      self._registration = registration
+
+                  def repair_once(self) -> LaunchAtLoginRepairOutcome:
+                      if not self._registration.supported:
+                          return LaunchAtLoginRepairOutcome.UNSUPPORTED
+
+                      try:
+                          import pythoncom
+
+                          pythoncom.CoInitialize()
+                      except Exception as exc:
+                          raise _classify_launch_at_login_failure(
+                              exc,
+                              operation="com_initialize",
+                          ) from exc
+
+                      try:
+                          try:
+                              return self._registration.repair_if_needed()
+                          except LaunchAtLoginRepairError:
+                              raise
+                          except Exception as exc:
+                              raise _classify_launch_at_login_failure(
+                                  exc,
+                                  operation="repair",
+                              ) from exc
+                      finally:
+                          pythoncom.CoUninitialize()
+              ''')
+          new_all = dedent('''\
+
+              __all__ = [
+                  "BACKGROUND_ARGUMENT",
+                  "RUN_KEY",
+                  "RUN_VALUE_NAME",
+                  "TASK_NAME",
+                  "StartupTaskSpec",
+                  "WindowsLaunchAtLoginRepair",
+                  "WindowsStartupRegistration",
+                  "WindowsTaskScheduler",
+                  "installed_executable_path",
+              ]
+              ''')
+          startup_path.write_text(
+              startup_text[:class_start] + replacement + new_all,
+              encoding='utf-8',
+          )
+
+          # AppRuntime owns initialize-phase repair worker lifecycle without coupling
+          # Task Scheduler health to Collector runtime health.
+          replace_one(
+              'worktrace/runtime/app_runtime.py',
+              'from ..platforms.base import RuntimePlatformAdapter\nfrom ..platforms.windows_adapter import WindowsAdapter\n',
+              'from ..platforms.base import RuntimePlatformAdapter\nfrom ..platforms.startup import LaunchAtLoginRepairCapability\nfrom ..platforms.windows_adapter import WindowsAdapter\n',
+          )
+          replace_one(
+              'worktrace/runtime/app_runtime.py',
+              'from .collector_supervisor import CollectorSupervisor\n',
+              'from .collector_supervisor import CollectorSupervisor\nfrom .launch_at_login_repair import run_launch_at_login_repair_worker\n',
+          )
+          replace_one(
+              'worktrace/runtime/app_runtime.py',
+              'class RuntimePhase(str, Enum):\n    NEW = "new"\n    INITIALIZED = "initialized"\n    STARTING = "starting"\n    RUNNING = "running"\n    DEGRADED = "degraded"\n    RECOVERABLE_FAILURE = "recoverable_failure"\n    STOPPING = "stopping"\n    STOPPED = "stopped"\n    FAILED = "failed"\n\n\n@dataclass(frozen=True)\nclass WorkerSpec:\n',
+              'class RuntimePhase(str, Enum):\n    NEW = "new"\n    INITIALIZED = "initialized"\n    STARTING = "starting"\n    RUNNING = "running"\n    DEGRADED = "degraded"\n    RECOVERABLE_FAILURE = "recoverable_failure"\n    STOPPING = "stopping"\n    STOPPED = "stopped"\n    FAILED = "failed"\n\n\nclass WorkerStartPhase(str, Enum):\n    INITIALIZE = "initialize"\n    AUTHORIZED = "authorized"\n\n\n@dataclass(frozen=True)\nclass WorkerSpec:\n',
+          )
+          replace_one(
+              'worktrace/runtime/app_runtime.py',
+              '    startup_timeout_seconds: float = 5.0\n    critical: bool = False\n    progress_timeout_seconds: float = 0.0\n',
+              '    startup_timeout_seconds: float = 5.0\n    critical: bool = False\n    progress_timeout_seconds: float = 0.0\n    start_phase: WorkerStartPhase = WorkerStartPhase.AUTHORIZED\n    runtime_relevant: bool = True\n',
+          )
+          replace_one(
+              'worktrace/runtime/app_runtime.py',
+              '    def __init__(\n        self,\n        paths: "_Paths",\n        adapter: RuntimePlatformAdapter | None = None,\n    ) -> None:\n',
+              '    def __init__(\n        self,\n        paths: "_Paths",\n        adapter: RuntimePlatformAdapter | None = None,\n        *,\n        launch_at_login_repair: LaunchAtLoginRepairCapability | None = None,\n    ) -> None:\n',
+          )
+          replace_one(
+              'worktrace/runtime/app_runtime.py',
+              '        self._adapter = adapter if adapter is not None else _choose_adapter()\n        self._worker_health = WorkerHealthRegistry()\n',
+              '        self._adapter = adapter if adapter is not None else _choose_adapter()\n        self._launch_at_login_repair = launch_at_login_repair\n        self._worker_health = WorkerHealthRegistry()\n',
+          )
+          replace_one(
+              'worktrace/runtime/app_runtime.py',
+              '    def _build_worker_specs(self) -> dict[str, WorkerSpec]:\n        return {\n',
+              '    def _build_worker_specs(self) -> dict[str, WorkerSpec]:\n        specs = {\n',
+          )
+          replace_one(
+              'worktrace/runtime/app_runtime.py',
+              '            "collector_supervisor": WorkerSpec(\n                name="collector_supervisor",\n                thread_name="WorkTraceCollectorSupervisor",\n                target=self.collector_supervisor.run_worker,\n                args_factory=lambda stop: (stop,),\n                progress_timeout_seconds=30.0,\n            ),\n        }\n\n    def initialize(self) -> bool:\n',
+              '            "collector_supervisor": WorkerSpec(\n                name="collector_supervisor",\n                thread_name="WorkTraceCollectorSupervisor",\n                target=self.collector_supervisor.run_worker,\n                args_factory=lambda stop: (stop,),\n                progress_timeout_seconds=30.0,\n            ),\n        }\n        if self._launch_at_login_repair is not None:\n            specs["launch_at_login_repair"] = WorkerSpec(\n                name="launch_at_login_repair",\n                thread_name="WorkTraceLaunchAtLoginRepair",\n                target=run_launch_at_login_repair_worker,\n                args_factory=lambda stop: (stop, self._launch_at_login_repair),\n                start_phase=WorkerStartPhase.INITIALIZE,\n                runtime_relevant=False,\n            )\n        return specs\n\n    def initialize(self) -> bool:\n',
+          )
+          replace_one(
+              'worktrace/runtime/app_runtime.py',
+              '            self.phase = (\n                RuntimePhase.RECOVERABLE_FAILURE\n                if blocked\n                else RuntimePhase.INITIALIZED\n            )\n            return True\n\n    def _run_owned_worker(self, handle: WorkerHandle) -> None:\n',
+              '            self.phase = (\n                RuntimePhase.RECOVERABLE_FAILURE\n                if blocked\n                else RuntimePhase.INITIALIZED\n            )\n            self._start_initialize_workers()\n            return True\n\n    def _worker_specs_for_phase(\n        self,\n        phase: WorkerStartPhase,\n    ) -> tuple[tuple[str, WorkerSpec], ...]:\n        return tuple(\n            (name, spec)\n            for name, spec in self._worker_specs.items()\n            if spec.start_phase is phase\n        )\n\n    def _start_initialize_workers(self) -> None:\n        for name, spec in self._worker_specs_for_phase(WorkerStartPhase.INITIALIZE):\n            handle, _started, immediate_status = self._start_worker(spec)\n            if immediate_status is not None or handle is None:\n                logging.error(\n                    "initialize worker start failed worker=%s error=%s",\n                    name,\n                    getattr(immediate_status, "error_code", None),\n                )\n\n    def _run_owned_worker(self, handle: WorkerHandle) -> None:\n',
+          )
+          replace_one(
+              'worktrace/runtime/app_runtime.py',
+              '                self._mark_worker_runtime_degraded()\n',
+              '                if spec.runtime_relevant:\n                    self._mark_worker_runtime_degraded()\n',
+          )
+          replace_one(
+              'worktrace/runtime/app_runtime.py',
+              '            if self.phase in {RuntimePhase.RUNNING, RuntimePhase.STARTING}:\n                self.phase = RuntimePhase.DEGRADED\n\n    def _owned_worker_restart_allowed',
+              '            if (\n                spec.runtime_relevant\n                and self.phase in {RuntimePhase.RUNNING, RuntimePhase.STARTING}\n            ):\n                self.phase = RuntimePhase.DEGRADED\n\n    def _owned_worker_restart_allowed',
+          )
+          replace_one(
+              'worktrace/runtime/app_runtime.py',
+              '    def _degraded_workers(self) -> tuple[str, ...]:\n        degraded = set(self._worker_health.degraded_workers())\n        degraded.update(\n            self._worker_health.stalled_workers(self._worker_progress_timeouts())\n        )\n        return tuple(sorted(degraded))\n\n    def _run_worker_progress_watchdog',
+              '    def _degraded_workers(self) -> tuple[str, ...]:\n        degraded = set(self._worker_health.degraded_workers())\n        degraded.update(\n            self._worker_health.stalled_workers(self._worker_progress_timeouts())\n        )\n        return tuple(sorted(degraded))\n\n    def _runtime_degraded_workers(self) -> tuple[str, ...]:\n        relevant = {\n            name\n            for name, spec in self._worker_specs.items()\n            if spec.runtime_relevant\n        }\n        return tuple(name for name in self._degraded_workers() if name in relevant)\n\n    def _run_worker_progress_watchdog',
+          )
+          replace_one(
+              'worktrace/runtime/app_runtime.py',
+              '            handles = tuple(self._worker_handles.values())\n',
+              '            handles = tuple(\n                handle\n                for handle in self._worker_handles.values()\n                if handle.spec.runtime_relevant\n            )\n',
+          )
+          replace_one(
+              'worktrace/runtime/app_runtime.py',
+              '            if self._degraded_workers():\n                self.phase = RuntimePhase.DEGRADED\n                return\n',
+              '            if self._runtime_degraded_workers():\n                self.phase = RuntimePhase.DEGRADED\n                return\n',
+          )
+
+          runtime_path = ROOT / 'worktrace/runtime/app_runtime.py'
+          runtime_text = runtime_path.read_text(encoding='utf-8')
+          blocked_start = runtime_text.index('    def _blocked_worker_report(self) -> WorkerStartupReport:')
+          startup_marker = runtime_text.index('        startup_started_at = time.monotonic()\n', blocked_start)
+          replacement_block = dedent('''\
+                  def _blocked_worker_report(self) -> WorkerStartupReport:
+                      worker_specs = self._worker_specs_for_phase(WorkerStartPhase.AUTHORIZED)
+                      statuses = {
+                          name: _WorkerStartupStatus(
+                              _WorkerStartupState.FAILED,
+                              False,
+                              error_code="database_maintenance_recovery_required",
+                          )
+                          for name, _spec in worker_specs
+                      }
+                      return WorkerStartupReport(
+                          statuses,
+                          "database_maintenance_recovery_required",
+                      )
+
+                  def start_background_workers(self) -> WorkerStartupReport:
+                      with self._lifecycle_lock:
+                          worker_specs = self._worker_specs_for_phase(
+                              WorkerStartPhase.AUTHORIZED
+                          )
+                          if database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked():
+                              self.phase = RuntimePhase.RECOVERABLE_FAILURE
+                              return self._blocked_worker_report()
+                          if not self._initialized or not self.owns_application_instance:
+                              statuses = {
+                                  name: _WorkerStartupStatus(
+                                      _WorkerStartupState.FAILED,
+                                      False,
+                                      error_code="runtime_not_owned",
+                                  )
+                                  for name, _spec in worker_specs
+                              }
+                              return WorkerStartupReport(statuses, "runtime_not_owned")
+                          if self._shutdown or self.stop_event.is_set():
+                              statuses = {
+                                  name: _WorkerStartupStatus(
+                                      _WorkerStartupState.STOPPED,
+                                      False,
+                                      error_code="runtime_stopping",
+                                  )
+                                  for name, _spec in worker_specs
+                              }
+                              return WorkerStartupReport(statuses, "runtime_stopping")
+
+              ''')
+          runtime_path.write_text(
+              runtime_text[:blocked_start] + replacement_block + runtime_text[startup_marker:],
+              encoding='utf-8',
+          )
+          replace_one(
+              'worktrace/runtime/app_runtime.py',
+              '    "WorkerSpec",\n    "WorkerStartupReport",\n',
+              '    "WorkerSpec",\n    "WorkerStartPhase",\n    "WorkerStartupReport",\n',
+          )
+
+          # Explicit production composition shares one registration owner.
+          replace_one(
+              'worktrace/runtime/application_services.py',
+              'from ..integrations.fd_work.integration_service import FDWorkIntegrationService\nfrom .app_runtime import AppRuntime\n',
+              'from ..integrations.fd_work.integration_service import FDWorkIntegrationService\nfrom ..platforms.windows_startup import WindowsStartupRegistration\nfrom .app_runtime import AppRuntime\n',
+          )
+          replace_one(
+              'worktrace/runtime/application_services.py',
+              '    fd_work_interaction_coordinator=None,\n    paths=None,\n) -> ApplicationServices:\n',
+              '    fd_work_interaction_coordinator=None,\n    paths=None,\n    startup_registration: WindowsStartupRegistration | None = None,\n) -> ApplicationServices:\n',
+          )
+          replace_one(
+              'worktrace/runtime/application_services.py',
+              '        settings=WarningAwareSettingsApplicationService(\n            data_lifecycle=data_lifecycle\n        ),\n',
+              '        settings=WarningAwareSettingsApplicationService(\n            startup_registration=startup_registration,\n            data_lifecycle=data_lifecycle,\n        ),\n',
+          )
+
+          replace_one(
+              'worktrace/webview_main.py',
+              'from .platforms.window_activation import grant_foreground_permission\n',
+              'from .platforms.window_activation import grant_foreground_permission\nfrom .platforms.windows_startup import (\n    WindowsLaunchAtLoginRepair,\n    WindowsStartupRegistration,\n)\n',
+          )
+          replace_one(
+              'worktrace/webview_main.py',
+              '    runtime = AppRuntime(paths)\n    services = None\n',
+              '    startup_registration = WindowsStartupRegistration()\n    runtime = AppRuntime(\n        paths,\n        launch_at_login_repair=WindowsLaunchAtLoginRepair(startup_registration),\n    )\n    services = None\n',
+          )
+          replace_one(
+              'worktrace/webview_main.py',
+              '                fd_work_interaction_coordinator=deferred_fd_work,\n                paths=paths,\n            )\n',
+              '                fd_work_interaction_coordinator=deferred_fd_work,\n                paths=paths,\n                startup_registration=startup_registration,\n            )\n',
+          )
+          replace_one(
+              'worktrace/webview_main.py',
+              '                fd_work_interaction_coordinator=fd_work_coordinator,\n                paths=paths,\n            )\n',
+              '                fd_work_interaction_coordinator=fd_work_coordinator,\n                paths=paths,\n                startup_registration=startup_registration,\n            )\n',
+          )
+
+          # Frozen bootstrap keeps only explicit installer control; normal repair is Runtime-owned.
+          replace_one('scripts/pyinstaller_entry.py', 'import threading\n', '')
+          entry_path = ROOT / 'scripts/pyinstaller_entry.py'
+          entry_text = entry_path.read_text(encoding='utf-8')
+          repair_start = entry_text.index('\n\ndef _start_launch_at_login_repair')
+          run_start = entry_text.index('\n\ndef _run_application', repair_start)
+          entry_text = entry_text[:repair_start] + entry_text[run_start:]
+          entry_text = entry_text.replace(
+              '        if not maintenance_control:\n            _start_launch_at_login_repair(stream)\n        exit_code = int(main(argv))\n',
+              '        exit_code = int(main(argv))\n',
+              1,
+          )
+          entry_path.write_text(entry_text, encoding='utf-8')
+
+          # Tests: constructor fakes accept the new explicit dependency.
+          replace_one(
+              'tests/test_background_headless_startup.py',
+              '    def __init__(self, paths) -> None:\n',
+              '    def __init__(self, paths, **_kwargs) -> None:\n',
+          )
+          replace_one(
+              'tests/test_webview_entry.py',
+              'monkeypatch.setattr(webview_main, "AppRuntime", lambda _paths: fake_runtime)',
+              'monkeypatch.setattr(\n        webview_main, "AppRuntime", lambda _paths, **_kwargs: fake_runtime\n    )',
+          )
+
+          self_heal = ROOT / 'tests/test_windows_startup_self_heal.py'
+          self_text = self_heal.read_text(encoding='utf-8')
+          old_test_start = self_text.index('def test_frozen_entry_repairs_startup_off_the_main_startup_path() -> None:')
+          next_test = self_text.index('\n\ndef test_installer_applies_selected_startup_intent', old_test_start)
+          new_test = dedent('''\
+              def test_frozen_entry_does_not_own_launch_at_login_repair_thread() -> None:
+                  root = Path(__file__).resolve().parents[1]
+                  source = (root / "scripts" / "pyinstaller_entry.py").read_text(
+                      encoding="utf-8"
+                  )
+
+                  assert "_start_launch_at_login_repair" not in source
+                  assert "repair_launch_at_login_for_current_user" not in source
+                  assert "worktrace-launch-at-login-repair" not in source
+              ''')
+          self_heal.write_text(
+              self_text[:old_test_start] + new_test + self_text[next_test:],
+              encoding='utf-8',
+          )
+
+          write(
+              'tests/test_launch_at_login_repair_reliability.py',
+              dedent('''\
+              from __future__ import annotations
+
+              import sys
+              import threading
+              import time
+              from pathlib import Path
+              from types import SimpleNamespace
+
+              import pytest
+
+              import worktrace.platforms.windows_startup as windows_startup
+              from worktrace.platforms.startup import (
+                  LaunchAtLoginRepairError,
+                  LaunchAtLoginRepairOutcome,
+              )
+              from worktrace.platforms.windows_startup import (
+                  TASK_NAME,
+                  StartupTaskSpec,
+                  WindowsLaunchAtLoginRepair,
+                  WindowsStartupRegistration,
+              )
+              from worktrace.runtime.app_runtime import AppRuntime, WorkerStartPhase
+              from worktrace.runtime.launch_at_login_repair import (
+                  run_launch_at_login_repair_worker,
+              )
+
+              pytestmark = [pytest.mark.unit, pytest.mark.contract]
+
+
+              class _Health:
+                  def __init__(self) -> None:
+                      self.failures: list[str] = []
+                      self.successes = 0
+
+                  def failed(self, code: str) -> None:
+                      self.failures.append(code)
+
+                  def succeeded(self) -> None:
+                      self.successes += 1
+
+                  def maintenance_paused(self, _paused: bool) -> None: pass
+
+
+              class _SequenceRepair:
+                  def __init__(self, results) -> None:
+                      self.results = list(results)
+                      self.calls = 0
+
+                  def repair_once(self):
+                      self.calls += 1
+                      result = self.results.pop(0)
+                      if isinstance(result, BaseException):
+                          raise result
+                      return result
+
+
+              def _run_until_calls(repair, expected: int, **kwargs):
+                  stop = threading.Event()
+                  health = _Health()
+                  thread = threading.Thread(
+                      target=run_launch_at_login_repair_worker,
+                      args=(stop, repair),
+                      kwargs={"health": health, **kwargs},
+                      daemon=True,
+                  )
+                  thread.start()
+                  deadline = time.monotonic() + 2.0
+                  while repair.calls < expected and time.monotonic() < deadline:
+                      time.sleep(0.005)
+                  assert repair.calls == expected
+                  return stop, health, thread
+
+
+              def test_repair_worker_recovers_after_transient_failure() -> None:
+                  repair = _SequenceRepair(
+                      [
+                          LaunchAtLoginRepairError(
+                              "launch_at_login_task_scheduler_transient",
+                              retryable=True,
+                              native_codes=(-2147023174,),
+                          ),
+                          LaunchAtLoginRepairOutcome.REPAIRED,
+                      ]
+                  )
+                  stop, health, thread = _run_until_calls(
+                      repair,
+                      2,
+                      initial_delay_seconds=0.0,
+                      max_delay_seconds=0.0,
+                  )
+                  deadline = time.monotonic() + 1.0
+                  while health.successes < 1 and time.monotonic() < deadline:
+                      time.sleep(0.005)
+                  stop.set()
+                  thread.join(timeout=1.0)
+
+                  assert not thread.is_alive()
+                  assert health.failures == ["launch_at_login_task_scheduler_transient"]
+                  assert health.successes == 1
+
+
+              def test_repair_worker_stops_after_retry_limit() -> None:
+                  failures = [
+                      LaunchAtLoginRepairError(
+                          "launch_at_login_task_scheduler_transient",
+                          retryable=True,
+                      )
+                      for _ in range(3)
+                  ]
+                  repair = _SequenceRepair(failures)
+                  stop, health, thread = _run_until_calls(
+                      repair,
+                      3,
+                      max_attempts=3,
+                      initial_delay_seconds=0.0,
+                      max_delay_seconds=0.0,
+                  )
+                  time.sleep(0.03)
+                  assert repair.calls == 3
+                  stop.set()
+                  thread.join(timeout=1.0)
+
+                  assert not thread.is_alive()
+                  assert len(health.failures) == 3
+                  assert health.successes == 0
+
+
+              def test_repair_worker_does_not_retry_permanent_failure() -> None:
+                  repair = _SequenceRepair(
+                      [
+                          LaunchAtLoginRepairError(
+                              "launch_at_login_access_denied",
+                              retryable=False,
+                              native_codes=(-2147024891,),
+                          )
+                      ]
+                  )
+                  stop, health, thread = _run_until_calls(repair, 1)
+                  time.sleep(0.03)
+                  assert repair.calls == 1
+                  stop.set()
+                  thread.join(timeout=1.0)
+
+                  assert health.failures == ["launch_at_login_access_denied"]
+                  assert health.successes == 0
+
+
+              def test_repair_backoff_is_shutdown_cancellable() -> None:
+                  repair = _SequenceRepair(
+                      [
+                          LaunchAtLoginRepairError(
+                              "launch_at_login_task_scheduler_transient",
+                              retryable=True,
+                          )
+                      ]
+                  )
+                  stop, _health, thread = _run_until_calls(
+                      repair,
+                      1,
+                      initial_delay_seconds=60.0,
+                      max_delay_seconds=60.0,
+                  )
+                  started = time.monotonic()
+                  stop.set()
+                  thread.join(timeout=1.0)
+
+                  assert not thread.is_alive()
+                  assert time.monotonic() - started < 1.0
+                  assert repair.calls == 1
+
+
+              class _NestedComError(Exception):
+                  def __init__(self, inner_hresult: int) -> None:
+                      self.hresult = -2147352567
+                      super().__init__(
+                          self.hresult,
+                          "Exception occurred.",
+                          (0, None, None, None, 0, inner_hresult),
+                          None,
+                      )
+
+
+              class _FailingRegistration:
+                  supported = True
+
+                  def __init__(self, exc: BaseException) -> None:
+                      self.exc = exc
+
+                  def repair_if_needed(self):
+                      raise self.exc
+
+
+              def test_windows_repair_classifies_nested_transient_hresult(monkeypatch) -> None:
+                  monkeypatch.setitem(
+                      sys.modules,
+                      "pythoncom",
+                      SimpleNamespace(CoInitialize=lambda: None, CoUninitialize=lambda: None),
+                  )
+                  repair = WindowsLaunchAtLoginRepair(
+                      _FailingRegistration(_NestedComError(-2147023174))
+                  )
+
+                  with pytest.raises(LaunchAtLoginRepairError) as caught:
+                      repair.repair_once()
+
+                  assert caught.value.retryable is True
+                  assert caught.value.code == "launch_at_login_task_scheduler_transient"
+                  assert -2147023174 in caught.value.native_codes
+
+
+              class _Registry:
+                  def __init__(self, value: str | None = None) -> None:
+                      self.value = value
+
+                  def read_run_value(self, _name: str) -> str | None:
+                      return self.value
+
+                  def delete_run_value(self, _name: str) -> None:
+                      self.value = None
+
+
+              class _BlockingScheduler:
+                  def __init__(self) -> None:
+                      self.task_exists = True
+                      self.configured = False
+                      self.exists_entered = threading.Event()
+                      self.release_exists = threading.Event()
+                      self.deleted = threading.Event()
+
+                  def exists(self, _name: str) -> bool:
+                      self.exists_entered.set()
+                      assert self.release_exists.wait(1.0)
+                      return self.task_exists
+
+                  def is_configured(self, _name: str, _spec: StartupTaskSpec) -> bool:
+                      return self.task_exists and self.configured
+
+                  def register(self, _name: str, _spec: StartupTaskSpec) -> None:
+                      self.task_exists = True
+                      self.configured = True
+
+                  def delete(self, _name: str) -> None:
+                      self.task_exists = False
+                      self.configured = False
+                      self.deleted.set()
+
+
+              def test_repair_and_user_disable_are_serialized(monkeypatch, tmp_path) -> None:
+                  monkeypatch.setattr(sys, "platform", "win32")
+                  scheduler = _BlockingScheduler()
+                  registration = WindowsStartupRegistration(
+                      executable_path=tmp_path / "Trace.exe",
+                      registry=_Registry(),
+                      scheduler=scheduler,
+                  )
+                  repair_done = threading.Event()
+                  disable_done = threading.Event()
+
+                  def repair() -> None:
+                      registration.repair_if_needed()
+                      repair_done.set()
+
+                  def disable() -> None:
+                      registration.disable()
+                      disable_done.set()
+
+                  repair_thread = threading.Thread(target=repair)
+                  repair_thread.start()
+                  assert scheduler.exists_entered.wait(1.0)
+                  disable_thread = threading.Thread(target=disable)
+                  disable_thread.start()
+                  time.sleep(0.03)
+                  assert scheduler.deleted.is_set() is False
+
+                  scheduler.release_exists.set()
+                  repair_thread.join(timeout=1.0)
+                  disable_thread.join(timeout=1.0)
+
+                  assert repair_done.is_set()
+                  assert disable_done.is_set()
+                  assert scheduler.task_exists is False
+                  assert scheduler.configured is False
+
+
+              class _Adapter:
+                  def shutdown(self) -> None: pass
+
+
+              def test_launch_repair_worker_is_initialize_phase_and_not_runtime_relevant() -> None:
+                  repair = _SequenceRepair([LaunchAtLoginRepairOutcome.DISABLED])
+                  paths = SimpleNamespace(db_path="unused", log_path="unused")
+                  runtime = AppRuntime(
+                      paths,
+                      adapter=_Adapter(),
+                      launch_at_login_repair=repair,
+                  )
+                  spec = runtime._worker_specs["launch_at_login_repair"]
+
+                  assert spec.start_phase is WorkerStartPhase.INITIALIZE
+                  assert spec.runtime_relevant is False
+                  assert spec.thread_name == "WorkTraceLaunchAtLoginRepair"
+              '''),
+          )
+
+          # Architecture contract records the auxiliary worker semantics explicitly.
+          replace_one(
+              'architecture.md',
+              'Non-critical worker targets that fail after READY degrade the runtime and are re-entered by the same owned thread with bounded exponential backoff; shutdown cancels any pending restart. Worker functions continue to own their domain iteration success/failure, maintenance-paused state and stable health codes, and they never create parallel worker threads.\n',
+              'Non-critical worker targets that fail after READY degrade the runtime and are re-entered by the same owned thread with bounded exponential backoff; shutdown cancels any pending restart. Worker functions continue to own their domain iteration success/failure, maintenance-paused state and stable health codes, and they never create parallel worker threads. Launch-at-login repair is an initialize-phase auxiliary worker: `AppRuntime` owns its thread and shutdown, the worker owns only a bounded retry episode, and Task Scheduler capability failure is reported in worker health without degrading Collector/runtime health.\n',
+          )
+          PY
+
+      - name: Compile patched Python
+        shell: pwsh
+        run: python -m compileall -q worktrace scripts tests/test_launch_at_login_repair_reliability.py
+
+      - name: Run focused regression tests
+        shell: pwsh
+        run: |
+          python -m pytest -q --tb=short `
+            tests/test_windows_startup_self_heal.py `
+            tests/test_windows_startup_registration.py `
+            tests/test_launch_at_login_settings.py `
+            tests/test_launch_at_login_repair_reliability.py `
+            tests/test_runtime_ownership_convergence_contract.py `
+            tests/test_background_headless_startup.py `
+            tests/test_webview_entry.py
+
+      - name: Commit validated patch and remove staging workflow
+        shell: bash
+        run: |
+          rm .github/workflows/apply-launch-at-login-repair-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: harden launch-at-login self-repair"
+          git push origin HEAD:fix/tray-capability-recovery
