@@ -7,6 +7,7 @@ import threading
 from typing import Any
 
 from ..constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_PAUSED
+from ..database_failure_policy import classify_database_failure
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
@@ -219,7 +220,7 @@ def run_activity_resource_repair_worker(
     batch_size: int = DEFAULT_BATCH_SIZE,
     poll_seconds: float = _WORKER_IDLE_SECONDS,
 ) -> None:
-    """Run iterations only; AppRuntime owns thread started/stopped state."""
+    """Run repair iterations with shared database failure classification."""
 
     size = max(1, int(batch_size))
     interval = max(0.1, float(poll_seconds))
@@ -233,17 +234,25 @@ def run_activity_resource_repair_worker(
         health.maintenance_paused(False)
         try:
             repaired = repair_missing_activity_resources(size)
-        except Exception:
-            retry = retry_episode.failed("activity_resource_repair_iteration_failed")
-            health.failed("activity_resource_repair_iteration_failed")
+        except Exception as exc:
+            database_failure = classify_database_failure(exc)
+            code = (
+                database_failure.value
+                if database_failure is not None
+                else "activity_resource_repair_iteration_failed"
+            )
+            retry = retry_episode.failed(code)
+            health.failed(code)
             if retry.detail_log_due:
                 logging.warning(
-                    "activity resource repair worker iteration failed",
+                    "activity resource repair worker iteration failed code=%s",
+                    code,
                     exc_info=True,
                 )
             elif retry.summary_log_due:
                 logging.warning(
-                    "activity resource repair worker failure continues consecutive=%s elapsed_seconds=%.1f",
+                    "activity resource repair worker failure continues code=%s consecutive=%s elapsed_seconds=%.1f",
+                    code,
                     retry.attempt,
                     retry.elapsed_seconds,
                 )
@@ -253,7 +262,8 @@ def run_activity_resource_repair_worker(
         health.succeeded()
         if recovery.recovered:
             logging.info(
-                "activity resource repair worker recovered attempts=%s elapsed_seconds=%.1f",
+                "activity resource repair worker recovered code=%s attempts=%s elapsed_seconds=%.1f",
+                recovery.code,
                 recovery.attempts,
                 recovery.elapsed_seconds,
             )
@@ -261,6 +271,7 @@ def run_activity_resource_repair_worker(
             continue
         stop_event.wait(interval)
     logging.info("activity resource repair worker loop exit")
+
 
 
 def require_activity_fact_repair_complete() -> dict[str, Any]:

@@ -20,7 +20,7 @@ from ..services import (
     activity_fact_repair_service,
     activity_inference_job_service,
     database_maintenance_service,
-    folder_index_service,
+    folder_index_runtime_service,
     history_mutation_job_service,
     project_inference_service,
     recovery_service,
@@ -214,7 +214,7 @@ class AppRuntime:
             "folder_index": WorkerSpec(
                 name="folder_index",
                 thread_name="WorkTraceFolderIndex",
-                target=folder_index_service.run_folder_index_worker,
+                target=folder_index_runtime_service.run_folder_index_worker,
                 args_factory=lambda stop: (stop,),
                 progress_timeout_seconds=300.0,
             ),

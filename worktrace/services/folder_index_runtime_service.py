@@ -12,7 +12,10 @@ import threading
 import time
 
 from ..constants import EXCLUDED_PROJECT
+from ..database_failure_policy import classify_database_failure
 from ..db import get_connection
+from ..retry_state import RetryEpisode
+from ..worker_health import degraded_failure
 from ..write_gate import DATABASE_WRITE_GATE
 from . import folder_index_service as _core
 from . import folder_index_maintenance_service, folder_index_state_repository
@@ -139,11 +142,17 @@ def run_folder_index_worker(
     *,
     health,
 ) -> None:
-    """Run retryable folder-index iterations on the AppRuntime-owned thread."""
+    """Own folder-index retry, interrupted-build recovery and truthful health."""
 
+    retry_episode = RetryEpisode(
+        initial_delay_seconds=_core._WORKER_IDLE_SECONDS,
+        max_delay_seconds=30.0,
+    )
     logging.info("folder index worker loop enter")
     next_hot_refresh_at = 0.0
     startup_reconciliation_pending = True
+    interrupted_index_recovery_pending = False
+    reconciliation_pending = False
 
     while not stop_event.is_set():
         if DATABASE_WRITE_GATE.writes_blocked():
@@ -160,53 +169,123 @@ def run_folder_index_worker(
 
         try:
             if startup_reconciliation_pending:
-                # Startup reconciliation is ordinary retryable worker work. It
-                # must observe the same write/privacy gates and exception
-                # boundary as later iterations so transient SQLite contention
-                # cannot escape to the AppRuntime wrapper.
                 ensure_index_states_for_folder_rules()
                 _core.recover_interrupted_indexes()
                 reconcile_index_eligibility()
                 validate_ready_indexes(stop_event)
                 startup_reconciliation_pending = False
-                health.succeeded()
-                _core._wait_for_worker()
-                continue
-
-            ensure_index_states_for_folder_rules()
-            _core._retry_pending_gc()
-            folder_index_maintenance_service.request_refresh_for_unresolved_file_misses()
-
-            monotonic_now = time.monotonic()
-            if monotonic_now >= next_hot_refresh_at:
-                folder_index_maintenance_service.request_refresh_for_hot_projects()
-                next_hot_refresh_at = monotonic_now + _core._HOT_REFRESH_CHECK_SECONDS
-
-            rebuilt_any = False
-            for rule_id in _core._pending_rule_ids():
-                if stop_event.is_set() or DATABASE_WRITE_GATE.writes_blocked():
-                    break
-                if rebuild_folder_index(rule_id, stop_event):
-                    rebuilt_any = True
-            if rebuilt_any:
-                try:
-                    folder_index_maintenance_service.reconcile_open_unclassified_activities()
-                except Exception:
-                    logging.exception(
-                        "folder index post-refresh reconciliation failed"
-                    )
-            health.succeeded()
-            _core._wait_for_worker()
-        except Exception:
-            if startup_reconciliation_pending:
-                logging.exception("folder index startup reconciliation failed")
-                health.failed("folder_index_startup_failed")
+                reconciliation_pending = True
             else:
-                logging.exception("folder index worker error")
-                health.failed("folder_index_iteration_failed")
+                if interrupted_index_recovery_pending:
+                    _core.recover_interrupted_indexes()
+                    interrupted_index_recovery_pending = False
+                ensure_index_states_for_folder_rules()
+                _core._retry_pending_gc()
+                folder_index_maintenance_service.request_refresh_for_unresolved_file_misses()
+
+                monotonic_now = time.monotonic()
+                if monotonic_now >= next_hot_refresh_at:
+                    folder_index_maintenance_service.request_refresh_for_hot_projects()
+                    next_hot_refresh_at = monotonic_now + _core._HOT_REFRESH_CHECK_SECONDS
+
+                rebuilt_any = False
+                for rule_id in _core._pending_rule_ids():
+                    if stop_event.is_set() or DATABASE_WRITE_GATE.writes_blocked():
+                        break
+                    if rebuild_folder_index(rule_id, stop_event):
+                        rebuilt_any = True
+                if rebuilt_any:
+                    reconciliation_pending = True
+
+            if reconciliation_pending:
+                outcome = (
+                    folder_index_maintenance_service.reconcile_open_unclassified_activities_outcome()
+                )
+                if outcome.infrastructure_failure is not None:
+                    code = outcome.infrastructure_failure.value
+                    retry = retry_episode.failed(code)
+                    health.failed(
+                        degraded_failure(code) if outcome.reconciled > 0 else code
+                    )
+                    if retry.detail_log_due:
+                        logging.warning(
+                            "folder index reconciliation interrupted code=%s reconciled=%s attempted=%s",
+                            code,
+                            outcome.reconciled,
+                            outcome.attempted,
+                        )
+                    elif retry.summary_log_due:
+                        logging.warning(
+                            "folder index reconciliation failure continues code=%s consecutive=%s elapsed_seconds=%.1f",
+                            code,
+                            retry.attempt,
+                            retry.elapsed_seconds,
+                        )
+                    stop_event.wait(
+                        max(_core._WORKER_IDLE_SECONDS, retry.delay_seconds)
+                    )
+                    continue
+
+                recovery = retry_episode.succeeded()
+                if outcome.failed:
+                    health.failed(
+                        degraded_failure("folder_index_reconciliation_partial")
+                    )
+                    if recovery.recovered:
+                        logging.info(
+                            "folder index worker infrastructure recovered code=%s attempts=%s elapsed_seconds=%.1f",
+                            recovery.code,
+                            recovery.attempts,
+                            recovery.elapsed_seconds,
+                        )
+                    _core._wait_for_worker()
+                    continue
+                reconciliation_pending = False
+            else:
+                recovery = retry_episode.succeeded()
+
+            health.succeeded()
+            if recovery.recovered:
+                logging.info(
+                    "folder index worker recovered code=%s attempts=%s elapsed_seconds=%.1f",
+                    recovery.code,
+                    recovery.attempts,
+                    recovery.elapsed_seconds,
+                )
             _core._wait_for_worker()
+        except Exception as exc:
+            database_failure = classify_database_failure(exc)
+            if database_failure is not None:
+                code = database_failure.value
+                if not startup_reconciliation_pending:
+                    interrupted_index_recovery_pending = True
+            else:
+                code = (
+                    "folder_index_startup_failed"
+                    if startup_reconciliation_pending
+                    else "folder_index_iteration_failed"
+                )
+            retry = retry_episode.failed(code)
+            health.failed(code)
+            if retry.detail_log_due:
+                logging.warning(
+                    "folder index worker failure code=%s",
+                    code,
+                    exc_info=True,
+                )
+            elif retry.summary_log_due:
+                logging.warning(
+                    "folder index worker failure continues code=%s consecutive=%s elapsed_seconds=%.1f",
+                    code,
+                    retry.attempt,
+                    retry.elapsed_seconds,
+                )
+            stop_event.wait(
+                max(_core._WORKER_IDLE_SECONDS, retry.delay_seconds)
+            )
 
     logging.info("folder index worker loop exit")
+
 
 
 __all__ = [

@@ -46,7 +46,7 @@ def _function_calls(relative: str, function_name: str) -> set[str]:
 
 def test_app_runtime_owns_worker_lifecycle_notifications() -> None:
     workers = (
-        ("worktrace/services/folder_index_service.py", "run_folder_index_worker"),
+        ("worktrace/services/folder_index_runtime_service.py", "run_folder_index_worker"),
         ("worktrace/services/history_mutation_job_service.py", "run_history_worker"),
         ("worktrace/services/activity_inference_job_service.py", "run_inference_worker"),
         (

@@ -19,6 +19,19 @@ def _timestamp() -> str:
 
 
 @dataclass(frozen=True)
+class WorkerFailure:
+    """Typed failure signal; immediate degradation is for proven partial failure."""
+
+    code: str
+    immediate_degraded: bool = False
+
+
+def degraded_failure(code: str) -> WorkerFailure:
+    normalized = str(code or "worker_iteration_degraded").strip()
+    return WorkerFailure(normalized or "worker_iteration_degraded", True)
+
+
+@dataclass(frozen=True)
 class WorkerHealthSnapshot:
     name: str
     started: bool = False
@@ -29,6 +42,7 @@ class WorkerHealthSnapshot:
     consecutive_failures: int = 0
     served: bool = False
     last_progress_monotonic: float = 0.0
+    explicit_degraded: bool = False
 
     def degraded(
         self,
@@ -37,7 +51,8 @@ class WorkerHealthSnapshot:
         return bool(
             self.started
             and (
-                not self.running
+                self.explicit_degraded
+                or not self.running
                 or self.consecutive_failures >= max(1, int(threshold))
             )
         )
@@ -108,10 +123,18 @@ class WorkerHealthRegistry:
             last_progress_monotonic=self._monotonic(),
             last_failure_code="",
             consecutive_failures=0,
+            explicit_degraded=False,
         )
 
-    def mark_failure(self, name: str, code: str) -> None:
-        normalized = str(code or "worker_iteration_failed").strip()
+    def mark_failure(self, name: str, code: str | WorkerFailure) -> None:
+        failure = (
+            code
+            if isinstance(code, WorkerFailure)
+            else WorkerFailure(str(code or ""))
+        )
+        normalized = str(
+            failure.code or "worker_iteration_failed"
+        ).strip() or "worker_iteration_failed"
         with self._lock:
             current = self._states.setdefault(name, WorkerHealthSnapshot(name))
             self._states[name] = replace(
@@ -121,6 +144,9 @@ class WorkerHealthRegistry:
                 last_progress_monotonic=self._monotonic(),
                 last_failure_code=normalized,
                 consecutive_failures=current.consecutive_failures + 1,
+                explicit_degraded=(
+                    current.explicit_degraded or failure.immediate_degraded
+                ),
             )
 
     def mark_maintenance_paused(self, name: str, paused: bool) -> None:
@@ -192,7 +218,7 @@ class WorkerHealthReporter:
     def succeeded(self) -> None:
         self._registry.mark_success(self.name)
 
-    def failed(self, code: str) -> None:
+    def failed(self, code: str | WorkerFailure) -> None:
         self._registry.mark_failure(self.name, code)
 
     def maintenance_paused(self, paused: bool) -> None:
@@ -204,7 +230,9 @@ class WorkerHealthReporter:
 
 __all__ = [
     "DEFAULT_CONSECUTIVE_FAILURE_THRESHOLD",
+    "WorkerFailure",
     "WorkerHealthRegistry",
     "WorkerHealthReporter",
     "WorkerHealthSnapshot",
+    "degraded_failure",
 ]

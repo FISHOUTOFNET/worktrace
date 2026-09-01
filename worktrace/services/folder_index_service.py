@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Iterator
 
 from ..constants import EXCLUDED_PROJECT
+from ..database_failure_policy import classify_database_failure
 from ..data_generation_repository import (
     DataGenerationNamespace,
     DataGenerationRepository,
@@ -248,6 +249,14 @@ def rebuild_folder_index(
         _fail_generation(rule_id, generation, exc.code)
         return False
     except Exception as exc:
+        database_failure = classify_database_failure(exc)
+        if database_failure is not None:
+            logging.warning(
+                "folder index build interrupted rule=%s code=%s",
+                int(rule_id),
+                database_failure.value,
+            )
+            raise
         logging.warning(
             "folder index build failed rule=%s exception=%s",
             int(rule_id),

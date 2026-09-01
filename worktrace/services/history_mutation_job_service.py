@@ -14,6 +14,7 @@ import threading
 from typing import Any
 
 from ..constants import STATUS_NORMAL
+from ..database_failure_policy import classify_database_failure
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
@@ -274,7 +275,7 @@ def run_job_to_completion(
 
 
 def run_job_batch(job_id: int, batch_size: int = _BATCH_SIZE) -> dict[str, Any]:
-    """Run one bounded batch; progress and durable facts commit together."""
+    """Run one bounded batch; transient infrastructure failures remain retryable."""
 
     with _JOB_EXECUTION_LOCK:
         job = _load_job(job_id)
@@ -296,12 +297,22 @@ def run_job_batch(job_id: int, batch_size: int = _BATCH_SIZE) -> dict[str, Any]:
             else:
                 _run_reinference_batch(job, batch_size)
         except Exception as exc:
+            database_failure = classify_database_failure(exc)
+            if database_failure is not None:
+                logging.warning(
+                    "history mutation job infrastructure failure id=%s code=%s",
+                    job_id,
+                    database_failure.value,
+                    exc_info=True,
+                )
+                raise
             logging.exception("history mutation job failed id=%s", job_id)
             _fail_job(job_id, str(exc))
         latest = _load_job(job_id)
         if latest is None:
             raise ValueError("history_job_not_found")
         return _result_for_job(job_id, _payload(latest))
+
 
 
 def job_result(job_id: int) -> dict[str, Any]:
@@ -391,7 +402,7 @@ def run_history_worker(
     *,
     health: WorkerHealthReporter,
 ) -> None:
-    """Run iterations only; AppRuntime owns thread started/stopped state."""
+    """Run retryable history iterations without terminalizing DB contention."""
 
     retry_episode = RetryEpisode()
     logging.info("history mutation worker loop enter")
@@ -403,14 +414,25 @@ def run_history_worker(
         health.maintenance_paused(False)
         try:
             processed = run_pending_jobs(limit=1)
-        except Exception:
-            retry = retry_episode.failed("history_iteration_failed")
-            health.failed("history_iteration_failed")
+        except Exception as exc:
+            database_failure = classify_database_failure(exc)
+            code = (
+                database_failure.value
+                if database_failure is not None
+                else "history_iteration_failed"
+            )
+            retry = retry_episode.failed(code)
+            health.failed(code)
             if retry.detail_log_due:
-                logging.warning("history mutation worker error", exc_info=True)
+                logging.warning(
+                    "history mutation worker error code=%s",
+                    code,
+                    exc_info=True,
+                )
             elif retry.summary_log_due:
                 logging.warning(
-                    "history mutation worker failure continues consecutive=%s elapsed_seconds=%.1f",
+                    "history mutation worker failure continues code=%s consecutive=%s elapsed_seconds=%.1f",
+                    code,
                     retry.attempt,
                     retry.elapsed_seconds,
                 )
@@ -420,7 +442,8 @@ def run_history_worker(
         health.succeeded()
         if recovery.recovered:
             logging.info(
-                "history mutation worker recovered attempts=%s elapsed_seconds=%.1f",
+                "history mutation worker recovered code=%s attempts=%s elapsed_seconds=%.1f",
+                recovery.code,
                 recovery.attempts,
                 recovery.elapsed_seconds,
             )
@@ -428,6 +451,7 @@ def run_history_worker(
             continue
         stop_event.wait(_WORKER_IDLE_SECONDS)
     logging.info("history mutation worker loop exit")
+
 
 
 def clear_all_jobs_in_transaction(conn) -> int:

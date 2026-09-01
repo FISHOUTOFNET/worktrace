@@ -128,7 +128,7 @@ def test_folder_worker_retries_startup_database_busy_inside_same_target(
     )
 
     def validate(_stop) -> None:
-        stop.set()
+        return None
 
     monkeypatch.setattr(
         folder_index_runtime_service,
@@ -136,10 +136,22 @@ def test_folder_worker_retries_startup_database_busy_inside_same_target(
         validate,
     )
 
+    def reconcile():
+        stop.set()
+        return (
+            folder_index_runtime_service.folder_index_maintenance_service.FolderReconciliationOutcome()
+        )
+
+    monkeypatch.setattr(
+        folder_index_runtime_service.folder_index_maintenance_service,
+        "reconcile_open_unclassified_activities_outcome",
+        reconcile,
+    )
+
     folder_index_runtime_service.run_folder_index_worker(stop, health=health)
 
     assert ensure_attempts == 2
-    assert health.failures == ["folder_index_startup_failed"]
+    assert health.failures == ["database_busy"]
     assert health.successes == 1
 
 
