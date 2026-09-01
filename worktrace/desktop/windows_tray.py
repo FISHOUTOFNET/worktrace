@@ -119,17 +119,19 @@ class WindowsTrayHost:
 
         with self._lock:
             active = bool(active)
-            if self._collection_active is active and self._icon_handle is not None:
-                return
+            icon = self._active_icon_handle if active else self._inactive_icon_handle
+            changed = self._collection_active != active or self._icon_handle is not icon
             self._collection_active = active
+            # Desired collection state is generation-independent. Keep the
+            # generation-local handle aligned even while Explorer registration
+            # is temporarily unavailable so the next add/restart replays the
+            # newest state without needing a second projection owner.
+            if icon is not None:
+                self._icon_handle = icon
             hwnd = self._hwnd
             registered = self._icon_registered
-            icon = (
-                self._active_icon_handle if active else self._inactive_icon_handle
-            )
-            if not hwnd or not icon or not registered:
+            if not changed or not hwnd or not icon or not registered:
                 return
-            self._icon_handle = icon
         try:
             import win32gui
 
@@ -177,11 +179,22 @@ class WindowsTrayHost:
     def _add_icon(self) -> None:
         import win32gui
 
+        # Serialize registration with desired-state changes. Otherwise a
+        # collection transition can arrive after NIM_ADD data is built but before
+        # _icon_registered becomes true, leaving Explorer with the previous icon
+        # indefinitely because the transition correctly skipped NIM_MODIFY while
+        # the registration was unavailable.
         with self._lock:
             self._deleted = False
             self._icon_registered = False
-        win32gui.Shell_NotifyIcon(win32gui.NIM_ADD, self._notify_data())
-        with self._lock:
+            icon = (
+                self._active_icon_handle
+                if self._collection_active
+                else self._inactive_icon_handle
+            )
+            if icon is not None:
+                self._icon_handle = icon
+            win32gui.Shell_NotifyIcon(win32gui.NIM_ADD, self._notify_data())
             self._icon_registered = True
 
     def _delete_icon(self) -> None:
@@ -215,6 +228,27 @@ class WindowsTrayHost:
                     logger.debug("tray icon handle cleanup failed", exc_info=True)
         except Exception:
             logger.debug("tray icon cleanup unavailable", exc_info=True)
+
+    def _request_generation_restart(self, hwnd: int) -> None:
+        """Terminate one invalid native generation; _run owns every restart."""
+
+        with self._lock:
+            if self._hwnd != hwnd:
+                return
+            self._icon_registered = False
+        try:
+            import win32gui
+
+            win32gui.DestroyWindow(hwnd)
+        except Exception:
+            logger.exception("tray generation restart destroy failed")
+            try:
+                # The callback runs on the tray thread. If native destruction
+                # itself fails, still end this message loop so _run can perform
+                # the same bounded generation recovery path.
+                win32gui.PostQuitMessage(0)
+            except Exception:
+                logger.exception("tray generation restart quit failed")
 
     def _run(self) -> None:
         restart_delay = self._RESTART_INITIAL_SECONDS
@@ -401,7 +435,7 @@ class WindowsTrayHost:
             self._request_session_end()
         return 0
 
-    def _on_taskbar_created(self, _hwnd, _msg, _wparam, _lparam):
+    def _on_taskbar_created(self, hwnd, _msg, _wparam, _lparam):
         with self._lock:
             # Explorer has rebuilt the notification area, so the previous
             # registration is no longer a valid restore entry point.
@@ -409,7 +443,8 @@ class WindowsTrayHost:
         try:
             self._add_icon()
         except Exception:
-            logger.exception("tray icon re-registration failed")
+            logger.exception("tray icon re-registration failed; restarting generation")
+            self._request_generation_restart(hwnd)
         return 0
 
     def _on_stop(self, hwnd, _msg, _wparam, _lparam):
