@@ -406,10 +406,7 @@ def run_collector(
 
             now = now_str()
 
-            # A discontinuity recovery that hit transient durable/platform I/O
-            # remains authoritative until every phase completes. ClockTracker
-            # already advanced its observation cursor, so never rely on it to
-            # rediscover the same discontinuity on the retry iteration.
+            # Retry incomplete discontinuity recovery before sampling new facts.
             if pending_discontinuity is not None:
                 phase = "runtime_recovery"
                 recovery_monotonic = time.monotonic()
@@ -822,11 +819,10 @@ def _recover_runtime_discontinuity(
     )
     try:
         adapter.reset_runtime_state()
-    except Exception as exc:
+    except Exception:
         logging.error(
-            "platform runtime reset platform_reset_completed=false discontinuity_reason=%s exception_type=%s",
+            "platform runtime reset platform_reset_completed=false discontinuity_reason=%s",
             discontinuity.reason,
-            type(exc).__name__,
         )
         raise
     logging.info(
