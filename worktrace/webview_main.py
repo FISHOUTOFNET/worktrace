@@ -22,6 +22,10 @@ from .integrations.fd_work.deferred_interaction import (
     DeferredFDWorkInteractionCoordinator,
 )
 from .platforms.window_activation import grant_foreground_permission
+from .platforms.windows_startup import (
+    WindowsLaunchAtLoginRepair,
+    WindowsStartupRegistration,
+)
 from .runtime.app_runtime import AppRuntime
 from .runtime.application_services import build_application_services
 from .webview_ui.runtime_check import (
@@ -492,7 +496,11 @@ def main(*, background: bool = False) -> int:
             return 2
         ui = _load_ui_components()
 
-    runtime = AppRuntime(paths)
+    startup_registration = WindowsStartupRegistration()
+    runtime = AppRuntime(
+        paths,
+        launch_at_login_repair=WindowsLaunchAtLoginRepair(startup_registration),
+    )
     services = None
     shell_holder: dict[str, Any] = {}
     tray = None
@@ -565,6 +573,7 @@ def main(*, background: bool = False) -> int:
                 runtime,
                 fd_work_interaction_coordinator=deferred_fd_work,
                 paths=paths,
+                startup_registration=startup_registration,
             )
         else:
             fd_work_controller, fd_work_coordinator = _create_fd_work_interaction(
@@ -576,6 +585,7 @@ def main(*, background: bool = False) -> int:
                 runtime,
                 fd_work_interaction_coordinator=fd_work_coordinator,
                 paths=paths,
+                startup_registration=startup_registration,
             )
         if consume_fd_work_install_intent(services.fd_work):
             logging.info("FD Work enabled from installer bootstrap")

@@ -37,7 +37,7 @@ class _Runtime:
     instances: list["_Runtime"] = []
     order: list[str] = []
 
-    def __init__(self, paths) -> None:
+    def __init__(self, paths, **_kwargs) -> None:
         self.paths = paths
         self.initialize_calls = 0
         self.shutdown_calls = 0

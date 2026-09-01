@@ -291,16 +291,15 @@ def test_canonical_task_requires_zero_delay_and_normal_priority(
     assert scheduler.is_configured(TASK_NAME, spec) is False
 
 
-def test_frozen_entry_repairs_startup_off_the_main_startup_path() -> None:
+def test_frozen_entry_does_not_own_launch_at_login_repair_thread() -> None:
     root = Path(__file__).resolve().parents[1]
-    source = (root / "scripts" / "pyinstaller_entry.py").read_text(encoding="utf-8")
+    source = (root / "scripts" / "pyinstaller_entry.py").read_text(
+        encoding="utf-8"
+    )
 
-    assert "def _start_launch_at_login_repair" in source
-    assert "repair_launch_at_login_for_current_user" in source
-    assert 'name="worktrace-launch-at-login-repair"' in source
-    assert "daemon=True" in source
-    assert "launch_at_login background repair failed" in source
-    assert "if not maintenance_control:" in source
+    assert "_start_launch_at_login_repair" not in source
+    assert "repair_launch_at_login_for_current_user" not in source
+    assert "worktrace-launch-at-login-repair" not in source
 
 
 def test_installer_applies_selected_startup_intent_without_unconditional_migration() -> None:

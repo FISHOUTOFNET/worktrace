@@ -106,7 +106,7 @@ handle cleanup. Non-critical worker targets that fail after READY degrade the
 runtime and are re-entered by the same owned thread with bounded exponential
 backoff; shutdown cancels any pending restart. Worker functions continue to own
 their domain iteration success/failure, maintenance-paused state and stable
-health codes, and they never create parallel worker threads.
+health codes, and they never create parallel worker threads. Launch-at-login repair is an initialize-phase auxiliary worker: `AppRuntime` owns its thread and shutdown, the worker owns only a bounded retry episode, and Task Scheduler capability failure is reported in worker health without degrading Collector/runtime health.
 
 Shutdown sets the runtime stop signal, wakes blocking workers, signals each
 handle, joins Collector and every registered worker and records any surviving

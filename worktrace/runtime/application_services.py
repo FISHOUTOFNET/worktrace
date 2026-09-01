@@ -20,6 +20,7 @@ from ..integrations.fd_work.binding_repository import FDWorkBindingRepository
 from ..integrations.fd_work.guarded_binding_service import GuardedFDWorkBindingService
 from ..integrations.fd_work.draft_builder import FDWorkEntryDraftBuilder
 from ..integrations.fd_work.integration_service import FDWorkIntegrationService
+from ..platforms.windows_startup import WindowsStartupRegistration
 from .app_runtime import AppRuntime
 from .external_state_warning_services import (
     WarningAwareBackupApplicationService,
@@ -34,6 +35,7 @@ def build_application_services(
     *,
     fd_work_interaction_coordinator=None,
     paths=None,
+    startup_registration: WindowsStartupRegistration | None = None,
 ) -> ApplicationServices:
     maintenance = database_maintenance_service.MAINTENANCE_COORDINATOR
     app_paths = paths if paths is not None else runtime.paths
@@ -72,7 +74,8 @@ def build_application_services(
         runtime_view=runtime,
         overview=OverviewApplicationService(),
         settings=WarningAwareSettingsApplicationService(
-            data_lifecycle=data_lifecycle
+            startup_registration=startup_registration,
+            data_lifecycle=data_lifecycle,
         ),
         backup=WarningAwareBackupApplicationService(data_lifecycle),
         statistics=RealtimeStatisticsApplicationService(),

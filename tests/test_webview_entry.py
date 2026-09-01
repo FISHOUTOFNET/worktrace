@@ -330,7 +330,9 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
             shutdown_calls["count"] += 1
 
     fake_runtime = _FakeRuntime()
-    monkeypatch.setattr(webview_main, "AppRuntime", lambda _paths: fake_runtime)
+    monkeypatch.setattr(
+        webview_main, "AppRuntime", lambda _paths, **_kwargs: fake_runtime
+    )
 
     gate_calls = {"count": 0}
 
