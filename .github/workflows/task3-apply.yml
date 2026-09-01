@@ -1,0 +1,1432 @@
+name: Task 3 patch bootstrap
+
+on:
+  push:
+    branches:
+      - fix/worker-retry-health-contract
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.head_commit.message == 'chore: bootstrap task3 patch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Apply worker retry and health contract patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import ast
+          from pathlib import Path
+
+          ROOT = Path('.')
+
+          def read(path: str) -> str:
+              return (ROOT / path).read_text(encoding='utf-8')
+
+          def write(path: str, text: str) -> None:
+              target = ROOT / path
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_text(text, encoding='utf-8')
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              source = read(path)
+              count = source.count(old)
+              if count != 1:
+                  raise RuntimeError(f'{path}: expected one replacement, found {count}: {old!r}')
+              write(path, source.replace(old, new, 1))
+
+          def replace_function(path: str, name: str, replacement: str) -> None:
+              source = read(path)
+              tree = ast.parse(source, filename=path)
+              matches = [
+                  node for node in tree.body
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                  and node.name == name
+              ]
+              if len(matches) != 1:
+                  raise RuntimeError(f'{path}: expected one top-level function {name}, found {len(matches)}')
+              node = matches[0]
+              lines = source.splitlines(keepends=True)
+              start = node.lineno - 1
+              end = node.end_lineno
+              normalized = replacement.strip('\n') + '\n\n'
+              lines[start:end] = [normalized]
+              write(path, ''.join(lines))
+
+          database_policy = '''\
+          """Shared classification for transient database infrastructure failures."""
+
+          from __future__ import annotations
+
+          import sqlite3
+          from enum import StrEnum
+
+          from .write_gate import DATABASE_MAINTENANCE_ERROR, DATABASE_RECOVERY_ERROR
+
+
+          class DatabaseFailureKind(StrEnum):
+              BUSY = "database_busy"
+              MAINTENANCE = DATABASE_MAINTENANCE_ERROR
+              GENERATION_CHANGED = "database_generation_changed"
+              RECOVERY_REQUIRED = DATABASE_RECOVERY_ERROR
+
+
+          def classify_database_failure(
+              exc: BaseException,
+          ) -> DatabaseFailureKind | None:
+              """Return a stable infrastructure failure kind, or ``None`` for domain errors."""
+
+              if not isinstance(exc, sqlite3.Error):
+                  return None
+              message = str(exc).strip().lower()
+              sqlite_code = getattr(exc, "sqlite_errorcode", None)
+              sqlite_name = str(getattr(exc, "sqlite_errorname", "") or "").upper()
+              try:
+                  primary_code = int(sqlite_code) & 0xFF
+              except (TypeError, ValueError):
+                  primary_code = None
+
+              if (
+                  primary_code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+                  or sqlite_name.startswith("SQLITE_BUSY")
+                  or sqlite_name.startswith("SQLITE_LOCKED")
+                  or message in {
+                      "database is locked",
+                      "database table is locked",
+                      "database is busy",
+                  }
+              ):
+                  return DatabaseFailureKind.BUSY
+              if message == DATABASE_MAINTENANCE_ERROR:
+                  return DatabaseFailureKind.MAINTENANCE
+              if message == "database_generation_changed":
+                  return DatabaseFailureKind.GENERATION_CHANGED
+              if message == DATABASE_RECOVERY_ERROR:
+                  return DatabaseFailureKind.RECOVERY_REQUIRED
+              return None
+
+
+          __all__ = ["DatabaseFailureKind", "classify_database_failure"]
+          '''
+          write('worktrace/database_failure_policy.py', database_policy)
+
+          worker_health = '''\
+          """Small process-local health model for AppRuntime-owned derived workers."""
+
+          from __future__ import annotations
+
+          import threading
+          import time
+          from dataclasses import dataclass, replace
+          from datetime import datetime, timezone
+          from typing import Callable
+
+          DEFAULT_CONSECUTIVE_FAILURE_THRESHOLD = 3
+
+
+          def _timestamp() -> str:
+              return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+                  "+00:00",
+                  "Z",
+              )
+
+
+          @dataclass(frozen=True)
+          class WorkerFailure:
+              """Typed failure signal; immediate degradation is reserved for proven partial failure."""
+
+              code: str
+              immediate_degraded: bool = False
+
+
+          def degraded_failure(code: str) -> WorkerFailure:
+              normalized = str(code or "worker_iteration_degraded").strip()
+              return WorkerFailure(normalized or "worker_iteration_degraded", True)
+
+
+          @dataclass(frozen=True)
+          class WorkerHealthSnapshot:
+              name: str
+              started: bool = False
+              running: bool = False
+              maintenance_paused: bool = False
+              last_successful_iteration_at: str = ""
+              last_failure_code: str = ""
+              consecutive_failures: int = 0
+              served: bool = False
+              last_progress_monotonic: float = 0.0
+              explicit_degraded: bool = False
+
+              def degraded(
+                  self,
+                  threshold: int = DEFAULT_CONSECUTIVE_FAILURE_THRESHOLD,
+              ) -> bool:
+                  return bool(
+                      self.started
+                      and (
+                          self.explicit_degraded
+                          or not self.running
+                          or self.consecutive_failures >= max(1, int(threshold))
+                      )
+                  )
+
+              def stalled(self, now_monotonic: float, timeout_seconds: float) -> bool:
+                  timeout = max(0.0, float(timeout_seconds or 0.0))
+                  if timeout <= 0.0:
+                      return False
+                  return bool(
+                      self.started
+                      and self.running
+                      and not self.maintenance_paused
+                      and self.last_progress_monotonic > 0.0
+                      and max(0.0, float(now_monotonic) - self.last_progress_monotonic)
+                      > timeout
+                  )
+
+              def to_public_dict(self) -> dict[str, object]:
+                  return {
+                      "running": self.running,
+                      "maintenance_paused": self.maintenance_paused,
+                      "last_successful_iteration_at": self.last_successful_iteration_at,
+                      "last_failure_code": self.last_failure_code,
+                      "consecutive_failures": self.consecutive_failures,
+                  }
+
+
+          class WorkerHealthRegistry:
+              """Thread-safe health state owned by one ``AppRuntime`` instance."""
+
+              def __init__(
+                  self,
+                  *,
+                  monotonic_func: Callable[[], float] = time.monotonic,
+              ) -> None:
+                  self._lock = threading.RLock()
+                  self._states: dict[str, WorkerHealthSnapshot] = {}
+                  self._monotonic = monotonic_func
+
+              def reporter(self, name: str) -> "WorkerHealthReporter":
+                  normalized = str(name or "").strip()
+                  if not normalized:
+                      raise ValueError("worker_name_required")
+                  with self._lock:
+                      self._states.setdefault(normalized, WorkerHealthSnapshot(normalized))
+                  return WorkerHealthReporter(self, normalized)
+
+              def _change(self, name: str, **changes: object) -> None:
+                  with self._lock:
+                      current = self._states.setdefault(name, WorkerHealthSnapshot(name))
+                      self._states[name] = replace(current, **changes)
+
+              def mark_started(self, name: str) -> None:
+                  self._change(
+                      name,
+                      started=True,
+                      running=True,
+                      maintenance_paused=False,
+                      last_progress_monotonic=self._monotonic(),
+                  )
+
+              def mark_success(self, name: str) -> None:
+                  self._change(
+                      name,
+                      running=True,
+                      served=True,
+                      last_successful_iteration_at=_timestamp(),
+                      last_progress_monotonic=self._monotonic(),
+                      last_failure_code="",
+                      consecutive_failures=0,
+                      explicit_degraded=False,
+                  )
+
+              def mark_failure(self, name: str, code: str | WorkerFailure) -> None:
+                  failure = code if isinstance(code, WorkerFailure) else WorkerFailure(str(code or ""))
+                  normalized = str(failure.code or "worker_iteration_failed").strip()
+                  if not normalized:
+                      normalized = "worker_iteration_failed"
+                  with self._lock:
+                      current = self._states.setdefault(name, WorkerHealthSnapshot(name))
+                      self._states[name] = replace(
+                          current,
+                          started=True,
+                          running=True,
+                          last_progress_monotonic=self._monotonic(),
+                          last_failure_code=normalized,
+                          consecutive_failures=current.consecutive_failures + 1,
+                          explicit_degraded=(
+                              current.explicit_degraded or failure.immediate_degraded
+                          ),
+                      )
+
+              def mark_maintenance_paused(self, name: str, paused: bool) -> None:
+                  paused = bool(paused)
+                  with self._lock:
+                      current = self._states.setdefault(name, WorkerHealthSnapshot(name))
+                      self._states[name] = replace(
+                          current,
+                          started=True,
+                          running=True,
+                          served=current.served or paused,
+                          maintenance_paused=paused,
+                          last_progress_monotonic=self._monotonic(),
+                      )
+
+              def mark_stopped(self, name: str) -> None:
+                  self._change(
+                      name,
+                      running=False,
+                      maintenance_paused=False,
+                      last_progress_monotonic=self._monotonic(),
+                  )
+
+              def snapshots(self) -> dict[str, WorkerHealthSnapshot]:
+                  with self._lock:
+                      return dict(self._states)
+
+              def public_snapshot(self) -> dict[str, dict[str, object]]:
+                  return {
+                      name: state.to_public_dict()
+                      for name, state in sorted(self.snapshots().items())
+                  }
+
+              def degraded_workers(
+                  self,
+                  threshold: int = DEFAULT_CONSECUTIVE_FAILURE_THRESHOLD,
+              ) -> tuple[str, ...]:
+                  return tuple(
+                      name
+                      for name, state in sorted(self.snapshots().items())
+                      if state.degraded(threshold)
+                  )
+
+              def stalled_workers(
+                  self,
+                  progress_timeouts: dict[str, float],
+                  *,
+                  now_monotonic: float | None = None,
+              ) -> tuple[str, ...]:
+                  now = self._monotonic() if now_monotonic is None else float(now_monotonic)
+                  timeouts = dict(progress_timeouts or {})
+                  return tuple(
+                      name
+                      for name, state in sorted(self.snapshots().items())
+                      if state.stalled(now, float(timeouts.get(name, 0.0) or 0.0))
+                  )
+
+
+          class WorkerHealthReporter:
+              """Narrow capability passed to one blocking worker entrypoint."""
+
+              def __init__(self, registry: WorkerHealthRegistry, name: str) -> None:
+                  self._registry = registry
+                  self.name = name
+
+              def started(self) -> None:
+                  self._registry.mark_started(self.name)
+
+              def succeeded(self) -> None:
+                  self._registry.mark_success(self.name)
+
+              def failed(self, code: str | WorkerFailure) -> None:
+                  self._registry.mark_failure(self.name, code)
+
+              def maintenance_paused(self, paused: bool) -> None:
+                  self._registry.mark_maintenance_paused(self.name, paused)
+
+              def stopped(self) -> None:
+                  self._registry.mark_stopped(self.name)
+
+
+          __all__ = [
+              "DEFAULT_CONSECUTIVE_FAILURE_THRESHOLD",
+              "WorkerFailure",
+              "WorkerHealthRegistry",
+              "WorkerHealthReporter",
+              "WorkerHealthSnapshot",
+              "degraded_failure",
+          ]
+          '''
+          write('worktrace/worker_health.py', worker_health)
+
+          # Inference: preserve the existing public integer API while exposing a truthful
+          # internal batch outcome to the worker loop.
+          path = 'worktrace/services/activity_inference_job_service.py'
+          source = read(path)
+          source = source.replace('import logging\nimport sqlite3\nimport threading\n', 'import logging\nimport threading\nfrom dataclasses import dataclass\n')
+          source = source.replace(
+              'from ..data_generation_repository import DataGenerationNamespace\n',
+              'from ..data_generation_repository import DataGenerationNamespace\nfrom ..database_failure_policy import DatabaseFailureKind, classify_database_failure\n',
+          )
+          source = source.replace(
+              'from ..worker_health import WorkerHealthReporter\n',
+              'from ..worker_health import WorkerHealthReporter, degraded_failure\n',
+          )
+          write(path, source)
+
+          inference_batch = '''
+          @dataclass(frozen=True)
+          class InferenceBatchResult:
+              attempted: int = 0
+              processed: int = 0
+              failed: int = 0
+              infrastructure_failure: DatabaseFailureKind | None = None
+
+
+          def _process_pending_inference_batch(
+              infer_activity: InferenceCommand,
+              limit: int = 100,
+              *,
+              activity_ids: Iterable[int] | None = None,
+          ) -> InferenceBatchResult:
+              normalized_limit = max(0, int(limit))
+              if normalized_limit == 0:
+                  return InferenceBatchResult()
+              requested_ids = (
+                  sorted({int(activity_id) for activity_id in activity_ids})
+                  if activity_ids is not None
+                  else None
+              )
+              if requested_ids == []:
+                  return InferenceBatchResult()
+
+              with get_connection() as conn:
+                  runnable = jobs.list_runnable_jobs(
+                      conn,
+                      limit=normalized_limit,
+                      activity_ids=requested_ids,
+                  )
+
+              attempted = 0
+              processed = 0
+              failed = 0
+              for job in runnable:
+                  activity_id = int(job["activity_id"])
+                  attempted += 1
+                  try:
+                      with DomainUnitOfWork(
+                          (DataGenerationNamespace.REPORT_STRUCTURE,)
+                      ) as uow:
+                          conn = uow.connection
+                          current = jobs.list_runnable_jobs(
+                              conn,
+                              limit=1,
+                              activity_ids=[activity_id],
+                          )
+                          if not current:
+                              continue
+                          state = jobs.read_activity_and_assignment(conn, activity_id)
+                          assignment = (
+                              None
+                              if state is None or state["assignment_activity_id"] is None
+                              else state
+                          )
+                          if not is_closed_activity_inference_eligible(state, assignment):
+                              jobs.delete_job(conn, activity_id)
+                              processed += 1
+                              continue
+
+                          before = _assignment_state(conn, activity_id)
+                          result = infer_activity(conn, activity_id)
+                          after = _assignment_state(conn, activity_id)
+                          if before != after:
+                              uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
+                          if str(result.get("_defer_reason") or "") == "folder_index_refresh":
+                              jobs.defer_job(
+                                  conn,
+                                  activity_id,
+                                  delay_seconds=_FOLDER_INDEX_DEFER_SECONDS,
+                              )
+                          else:
+                              jobs.delete_job(conn, activity_id)
+                          processed += 1
+                  except Exception as exc:
+                      infrastructure_failure = classify_database_failure(exc)
+                      if infrastructure_failure is not None:
+                          logging.warning(
+                              "activity inference batch paused activity_id=%s code=%s",
+                              activity_id,
+                              infrastructure_failure.value,
+                          )
+                          return InferenceBatchResult(
+                              attempted=attempted,
+                              processed=processed,
+                              failed=failed,
+                              infrastructure_failure=infrastructure_failure,
+                          )
+                      code = _classify_failure(exc)
+                      logging.exception(
+                          "activity inference job failed activity_id=%s code=%s",
+                          activity_id,
+                          code.value,
+                      )
+                      persistence_failure = _record_failure_safely(activity_id, code)
+                      if persistence_failure is not None:
+                          return InferenceBatchResult(
+                              attempted=attempted,
+                              processed=processed,
+                              failed=failed,
+                              infrastructure_failure=persistence_failure,
+                          )
+                      failed += 1
+              return InferenceBatchResult(
+                  attempted=attempted,
+                  processed=processed,
+                  failed=failed,
+              )
+
+
+          def process_pending_inference_jobs(
+              infer_activity: InferenceCommand,
+              limit: int = 100,
+              *,
+              activity_ids: Iterable[int] | None = None,
+          ) -> int:
+              """Consume a bounded job set while preserving the historical processed count API."""
+
+              return _process_pending_inference_batch(
+                  infer_activity,
+                  limit=limit,
+                  activity_ids=activity_ids,
+              ).processed
+          '''
+          replace_function(path, 'process_pending_inference_jobs', inference_batch)
+
+          inference_worker = '''
+          def run_inference_worker(
+              stop_event: threading.Event,
+              infer_activity: InferenceCommand,
+              *,
+              health: WorkerHealthReporter,
+              batch_size: int = 50,
+              poll_seconds: float = 1.0,
+          ) -> None:
+              """Run bounded inference batches with separate job and infrastructure retry."""
+
+              size = max(1, int(batch_size))
+              interval = max(0.1, float(poll_seconds))
+              retry_episode = RetryEpisode()
+              backlog_degraded = False
+              logging.info("activity inference worker loop enter")
+              while not stop_event.is_set():
+                  if DATABASE_WRITE_GATE.writes_blocked():
+                      health.maintenance_paused(True)
+                      stop_event.wait(interval)
+                      continue
+                  health.maintenance_paused(False)
+                  try:
+                      batch = _process_pending_inference_batch(
+                          infer_activity,
+                          limit=size,
+                      )
+                  except Exception as exc:
+                      database_failure = classify_database_failure(exc)
+                      code = (
+                          database_failure.value
+                          if database_failure is not None
+                          else "inference_iteration_failed"
+                      )
+                      retry = retry_episode.failed(code)
+                      health.failed(code)
+                      if retry.detail_log_due:
+                          logging.warning(
+                              "activity inference worker iteration failed code=%s",
+                              code,
+                              exc_info=True,
+                          )
+                      elif retry.summary_log_due:
+                          logging.warning(
+                              "activity inference worker failure continues code=%s consecutive=%s elapsed_seconds=%.1f",
+                              code,
+                              retry.attempt,
+                              retry.elapsed_seconds,
+                          )
+                      stop_event.wait(max(interval, retry.delay_seconds))
+                      continue
+
+                  if batch.infrastructure_failure is not None:
+                      code = batch.infrastructure_failure.value
+                      retry = retry_episode.failed(code)
+                      health.failed(
+                          degraded_failure(code) if batch.processed > 0 else code
+                      )
+                      if retry.detail_log_due:
+                          logging.warning(
+                              "activity inference worker batch interrupted code=%s processed=%s attempted=%s",
+                              code,
+                              batch.processed,
+                              batch.attempted,
+                          )
+                      elif retry.summary_log_due:
+                          logging.warning(
+                              "activity inference worker infrastructure failure continues code=%s consecutive=%s elapsed_seconds=%.1f",
+                              code,
+                              retry.attempt,
+                              retry.elapsed_seconds,
+                          )
+                      stop_event.wait(max(interval, retry.delay_seconds))
+                      continue
+
+                  recovery = retry_episode.succeeded()
+                  if batch.failed:
+                      health.failed(degraded_failure("inference_job_failures"))
+                      backlog_degraded = True
+                  else:
+                      try:
+                          with get_connection() as conn:
+                              failed_backlog = jobs.has_failed_jobs(conn)
+                      except Exception as exc:
+                          database_failure = classify_database_failure(exc)
+                          code = (
+                              database_failure.value
+                              if database_failure is not None
+                              else "inference_iteration_failed"
+                          )
+                          retry = retry_episode.failed(code)
+                          health.failed(code)
+                          stop_event.wait(max(interval, retry.delay_seconds))
+                          continue
+                      if failed_backlog:
+                          if not backlog_degraded:
+                              health.failed(degraded_failure("inference_job_failures"))
+                              backlog_degraded = True
+                      else:
+                          health.succeeded()
+                          backlog_degraded = False
+
+                  if recovery.recovered:
+                      logging.info(
+                          "activity inference worker recovered code=%s attempts=%s elapsed_seconds=%.1f",
+                          recovery.code,
+                          recovery.attempts,
+                          recovery.elapsed_seconds,
+                      )
+                  if batch.attempted >= size:
+                      continue
+                  stop_event.wait(interval)
+              logging.info("activity inference worker loop exit")
+          '''
+          replace_function(path, 'run_inference_worker', inference_worker)
+
+          classify_inference = '''
+          def _classify_failure(exc: BaseException) -> jobs.InferenceFailureCode:
+              if isinstance(exc, ValueError) and str(exc) == "data_repair_required":
+                  return jobs.InferenceFailureCode.DATA_REPAIR_REQUIRED
+              return jobs.InferenceFailureCode.UNEXPECTED_FAILURE
+          '''
+          replace_function(path, '_classify_failure', classify_inference)
+
+          record_failure = '''
+          def _record_failure_safely(
+              activity_id: int,
+              code: jobs.InferenceFailureCode,
+          ) -> DatabaseFailureKind | None:
+              try:
+                  with DomainUnitOfWork() as uow:
+                      jobs.record_failure(
+                          uow.connection,
+                          activity_id,
+                          code,
+                          at_time=now_str(),
+                      )
+              except Exception as exc:
+                  database_failure = classify_database_failure(exc)
+                  logging.exception(
+                      "activity inference failure state could not be persisted activity_id=%s",
+                      activity_id,
+                  )
+                  return database_failure
+              return None
+          '''
+          replace_function(path, '_record_failure_safely', record_failure)
+
+          repo_path = 'worktrace/services/activity_inference_job_repository.py'
+          repo = read(repo_path)
+          marker = '\n\ndef clear_all_jobs(conn) -> int:\n'
+          if marker not in repo:
+              raise RuntimeError('inference repository insertion marker missing')
+          has_failed = '''
+
+          def has_failed_jobs(conn) -> bool:
+              """Return whether durable inference failures still await retry."""
+
+              return conn.execute(
+                  "SELECT 1 FROM activity_inference_job WHERE status = 'failed' LIMIT 1"
+              ).fetchone() is not None
+          '''
+          repo = repo.replace(marker, has_failed + marker, 1)
+          repo = repo.replace(
+              '    "enqueue_closed_activity_ids",\n',
+              '    "enqueue_closed_activity_ids",\n    "has_failed_jobs",\n',
+              1,
+          )
+          write(repo_path, repo)
+
+          # Folder index core: transient database failures must never be persisted as
+          # permanent index-build failures.
+          path = 'worktrace/services/folder_index_service.py'
+          source = read(path)
+          source = source.replace(
+              'from ..constants import EXCLUDED_PROJECT\n',
+              'from ..constants import EXCLUDED_PROJECT\nfrom ..database_failure_policy import classify_database_failure\n',
+              1,
+          )
+          old = '''\
+              except Exception as exc:
+                  logging.warning(
+                      "folder index build failed rule=%s exception=%s",
+                      int(rule_id),
+                      type(exc).__name__,
+                  )
+                  _fail_generation(rule_id, generation, "folder_index_build_failed")
+                  return False
+          '''
+          new = '''\
+              except Exception as exc:
+                  database_failure = classify_database_failure(exc)
+                  if database_failure is not None:
+                      logging.warning(
+                          "folder index build interrupted rule=%s code=%s",
+                          int(rule_id),
+                          database_failure.value,
+                      )
+                      raise
+                  logging.warning(
+                      "folder index build failed rule=%s exception=%s",
+                      int(rule_id),
+                      type(exc).__name__,
+                  )
+                  _fail_generation(rule_id, generation, "folder_index_build_failed")
+                  return False
+          '''
+          if old not in source:
+              raise RuntimeError('folder index build exception block missing')
+          write(path, source.replace(old, new, 1))
+
+          # Folder reconciliation now has a result-bearing API while keeping the old
+          # integer-returning function for existing callers.
+          path = 'worktrace/services/folder_index_maintenance_service.py'
+          source = read(path)
+          source = source.replace(
+              'import time\nfrom datetime import datetime, timedelta\n',
+              'import time\nfrom dataclasses import dataclass\nfrom datetime import datetime, timedelta\n',
+              1,
+          )
+          source = source.replace(
+              'from ..constants import (\n',
+              'from ..database_failure_policy import DatabaseFailureKind, classify_database_failure\nfrom ..constants import (\n',
+              1,
+          )
+          write(path, source)
+
+          reconciliation = '''
+          @dataclass(frozen=True)
+          class FolderReconciliationOutcome:
+              attempted: int = 0
+              reconciled: int = 0
+              failed: int = 0
+              infrastructure_failure: DatabaseFailureKind | None = None
+
+
+          def reconcile_open_unclassified_activities_outcome() -> FolderReconciliationOutcome:
+              """Converge open auto-unclassified rows and report partial/infrastructure failure."""
+
+              with get_connection() as conn:
+                  rows = conn.execute(
+                      """
+                      SELECT al.id
+                      FROM activity_log al
+                      LEFT JOIN activity_project_assignment apa
+                        ON apa.activity_id = al.id
+                      WHERE al.end_time IS NULL
+                        AND al.status = ?
+                        AND COALESCE(al.is_hidden, 0) = 0
+                        AND COALESCE(al.is_deleted, 0) = 0
+                        AND (
+                              apa.activity_id IS NULL
+                              OR (
+                                  COALESCE(apa.is_manual, 0) = 0
+                                  AND COALESCE(apa.source, '') IN (
+                                      '', 'uncategorized', 'suggested_project_name'
+                                  )
+                              )
+                        )
+                      ORDER BY al.id
+                      """,
+                      (STATUS_NORMAL,),
+                  ).fetchall()
+              if not rows:
+                  return FolderReconciliationOutcome()
+
+              from . import project_inference_service
+
+              attempted = 0
+              reconciled = 0
+              failed = 0
+              for row in rows:
+                  activity_id = int(row["id"])
+                  attempted += 1
+                  try:
+                      project_inference_service.sync_persisted_open_activity_from_current_folder_index(
+                          activity_id
+                      )
+                      reconciled += 1
+                  except Exception as exc:
+                      database_failure = classify_database_failure(exc)
+                      if database_failure is not None:
+                          logging.warning(
+                              "open activity convergence paused activity_id=%s code=%s",
+                              activity_id,
+                              database_failure.value,
+                              exc_info=True,
+                          )
+                          return FolderReconciliationOutcome(
+                              attempted=attempted,
+                              reconciled=reconciled,
+                              failed=failed,
+                              infrastructure_failure=database_failure,
+                          )
+                      failed += 1
+                      logging.exception(
+                          "open activity convergence after folder index refresh failed activity_id=%s",
+                          activity_id,
+                      )
+              return FolderReconciliationOutcome(
+                  attempted=attempted,
+                  reconciled=reconciled,
+                  failed=failed,
+              )
+
+
+          def reconcile_open_unclassified_activities() -> int:
+              """Compatibility API returning the number of reconciled activities."""
+
+              return reconcile_open_unclassified_activities_outcome().reconciled
+          '''
+          replace_function(path, 'reconcile_open_unclassified_activities', reconciliation)
+          source = read(path)
+          source = source.replace(
+              '    "HOT_INDEX_FRESHNESS_MINUTES",\n',
+              '    "FolderReconciliationOutcome",\n    "HOT_INDEX_FRESHNESS_MINUTES",\n',
+              1,
+          )
+          source = source.replace(
+              '    "reconcile_open_unclassified_activities",\n',
+              '    "reconcile_open_unclassified_activities",\n    "reconcile_open_unclassified_activities_outcome",\n',
+              1,
+          )
+          write(path, source)
+
+          path = 'worktrace/services/folder_index_runtime_service.py'
+          source = read(path)
+          source = source.replace(
+              'from ..constants import EXCLUDED_PROJECT\n',
+              'from ..constants import EXCLUDED_PROJECT\nfrom ..database_failure_policy import classify_database_failure\n',
+              1,
+          )
+          source = source.replace(
+              'from ..db import get_connection\n',
+              'from ..db import get_connection\nfrom ..retry_state import RetryEpisode\nfrom ..worker_health import degraded_failure\n',
+              1,
+          )
+          write(path, source)
+
+          folder_worker = '''
+          def run_folder_index_worker(
+              stop_event: threading.Event,
+              *,
+              health,
+          ) -> None:
+              """Own folder-index retry, recovery and truthful capability health."""
+
+              retry_episode = RetryEpisode(
+                  initial_delay_seconds=_core._WORKER_IDLE_SECONDS,
+                  max_delay_seconds=30.0,
+              )
+              logging.info("folder index worker loop enter")
+              next_hot_refresh_at = 0.0
+              startup_reconciliation_pending = True
+              interrupted_index_recovery_pending = False
+              reconciliation_pending = False
+
+              while not stop_event.is_set():
+                  if DATABASE_WRITE_GATE.writes_blocked():
+                      health.maintenance_paused(True)
+                      _core._wait_for_worker()
+                      continue
+                  health.maintenance_paused(False)
+
+                  if not privacy_gate_service.is_sensitive_runtime_allowed():
+                      health.maintenance_paused(True)
+                      _core._wait_for_worker()
+                      continue
+                  health.maintenance_paused(False)
+
+                  try:
+                      if startup_reconciliation_pending:
+                          ensure_index_states_for_folder_rules()
+                          _core.recover_interrupted_indexes()
+                          reconcile_index_eligibility()
+                          validate_ready_indexes(stop_event)
+                          startup_reconciliation_pending = False
+                          reconciliation_pending = True
+                      else:
+                          if interrupted_index_recovery_pending:
+                              _core.recover_interrupted_indexes()
+                              interrupted_index_recovery_pending = False
+                          ensure_index_states_for_folder_rules()
+                          _core._retry_pending_gc()
+                          folder_index_maintenance_service.request_refresh_for_unresolved_file_misses()
+
+                          monotonic_now = time.monotonic()
+                          if monotonic_now >= next_hot_refresh_at:
+                              folder_index_maintenance_service.request_refresh_for_hot_projects()
+                              next_hot_refresh_at = monotonic_now + _core._HOT_REFRESH_CHECK_SECONDS
+
+                          rebuilt_any = False
+                          for rule_id in _core._pending_rule_ids():
+                              if stop_event.is_set() or DATABASE_WRITE_GATE.writes_blocked():
+                                  break
+                              if rebuild_folder_index(rule_id, stop_event):
+                                  rebuilt_any = True
+                          if rebuilt_any:
+                              reconciliation_pending = True
+
+                      if reconciliation_pending:
+                          outcome = (
+                              folder_index_maintenance_service.reconcile_open_unclassified_activities_outcome()
+                          )
+                          if outcome.infrastructure_failure is not None:
+                              code = outcome.infrastructure_failure.value
+                              retry = retry_episode.failed(code)
+                              health.failed(
+                                  degraded_failure(code)
+                                  if outcome.reconciled > 0
+                                  else code
+                              )
+                              if retry.detail_log_due:
+                                  logging.warning(
+                                      "folder index reconciliation interrupted code=%s reconciled=%s attempted=%s",
+                                      code,
+                                      outcome.reconciled,
+                                      outcome.attempted,
+                                  )
+                              elif retry.summary_log_due:
+                                  logging.warning(
+                                      "folder index reconciliation failure continues code=%s consecutive=%s elapsed_seconds=%.1f",
+                                      code,
+                                      retry.attempt,
+                                      retry.elapsed_seconds,
+                                  )
+                              _core._wait_for_worker(
+                                  max(_core._WORKER_IDLE_SECONDS, retry.delay_seconds)
+                              )
+                              continue
+
+                          recovery = retry_episode.succeeded()
+                          if outcome.failed:
+                              health.failed(
+                                  degraded_failure("folder_index_reconciliation_partial")
+                              )
+                              if recovery.recovered:
+                                  logging.info(
+                                      "folder index worker infrastructure recovered code=%s attempts=%s elapsed_seconds=%.1f",
+                                      recovery.code,
+                                      recovery.attempts,
+                                      recovery.elapsed_seconds,
+                                  )
+                              _core._wait_for_worker()
+                              continue
+                          reconciliation_pending = False
+                      else:
+                          recovery = retry_episode.succeeded()
+
+                      health.succeeded()
+                      if recovery.recovered:
+                          logging.info(
+                              "folder index worker recovered code=%s attempts=%s elapsed_seconds=%.1f",
+                              recovery.code,
+                              recovery.attempts,
+                              recovery.elapsed_seconds,
+                          )
+                      _core._wait_for_worker()
+                  except Exception as exc:
+                      database_failure = classify_database_failure(exc)
+                      if database_failure is not None:
+                          code = database_failure.value
+                          if not startup_reconciliation_pending:
+                              interrupted_index_recovery_pending = True
+                      else:
+                          code = (
+                              "folder_index_startup_failed"
+                              if startup_reconciliation_pending
+                              else "folder_index_iteration_failed"
+                          )
+                      retry = retry_episode.failed(code)
+                      health.failed(code)
+                      if retry.detail_log_due:
+                          logging.warning(
+                              "folder index worker failure code=%s",
+                              code,
+                              exc_info=True,
+                          )
+                      elif retry.summary_log_due:
+                          logging.warning(
+                              "folder index worker failure continues code=%s consecutive=%s elapsed_seconds=%.1f",
+                              code,
+                              retry.attempt,
+                              retry.elapsed_seconds,
+                          )
+                      _core._wait_for_worker(
+                          max(_core._WORKER_IDLE_SECONDS, retry.delay_seconds)
+                      )
+
+              logging.info("folder index worker loop exit")
+          '''
+          replace_function(path, 'run_folder_index_worker', folder_worker)
+
+          # Lifecycle ownership is explicit in AppRuntime. Keep the remaining package
+          # compatibility facade temporarily, but it may not replace the worker entrypoint.
+          path = 'worktrace/services/__init__.py'
+          source = read(path)
+          source = source.replace('    "run_folder_index_worker",\n', '', 1)
+          write(path, source)
+
+          path = 'worktrace/runtime/app_runtime.py'
+          source = read(path)
+          if source.count('folder_index_service,') != 1 or source.count('folder_index_service.run_folder_index_worker') != 1:
+              raise RuntimeError('AppRuntime folder-index dependency shape changed')
+          source = source.replace('    folder_index_service,\n', '    folder_index_runtime_service,\n', 1)
+          source = source.replace(
+              'target=folder_index_service.run_folder_index_worker,',
+              'target=folder_index_runtime_service.run_folder_index_worker,',
+              1,
+          )
+          write(path, source)
+
+          # History: database infrastructure failures stay retryable instead of becoming
+          # terminal durable job failures.
+          path = 'worktrace/services/history_mutation_job_service.py'
+          source = read(path)
+          source = source.replace(
+              'from ..constants import STATUS_NORMAL\n',
+              'from ..constants import STATUS_NORMAL\nfrom ..database_failure_policy import classify_database_failure\n',
+              1,
+          )
+          write(path, source)
+
+          history_batch = '''
+          def run_job_batch(job_id: int, batch_size: int = _BATCH_SIZE) -> dict[str, Any]:
+              """Run one bounded batch; transient infrastructure failures remain retryable."""
+
+              with _JOB_EXECUTION_LOCK:
+                  job = _load_job(job_id)
+                  if job is None:
+                      raise ValueError("history_job_not_found")
+                  payload = _payload(job)
+                  if job["status"] not in {"pending", "running"}:
+                      return _result_for_job(job_id, payload)
+                  try:
+                      folder_index_gate = _folder_index_gate(job)
+                      if folder_index_gate == "waiting":
+                          return _result_for_job(job_id, payload)
+                      if folder_index_gate == "error":
+                          raise ValueError("folder_index_unavailable")
+                      if payload.get("mode") == _BATCH_MODE:
+                          _run_ordered_batch_plan(job, payload, batch_size)
+                      elif job["kind"] == "rule_backfill":
+                          _run_backfill_batch(job, batch_size)
+                      else:
+                          _run_reinference_batch(job, batch_size)
+                  except Exception as exc:
+                      database_failure = classify_database_failure(exc)
+                      if database_failure is not None:
+                          logging.warning(
+                              "history mutation job infrastructure failure id=%s code=%s",
+                              job_id,
+                              database_failure.value,
+                              exc_info=True,
+                          )
+                          raise
+                      logging.exception("history mutation job failed id=%s", job_id)
+                      _fail_job(job_id, str(exc))
+                  latest = _load_job(job_id)
+                  if latest is None:
+                      raise ValueError("history_job_not_found")
+                  return _result_for_job(job_id, _payload(latest))
+          '''
+          replace_function(path, 'run_job_batch', history_batch)
+
+          history_worker = '''
+          def run_history_worker(
+              stop_event: threading.Event,
+              *,
+              health: WorkerHealthReporter,
+          ) -> None:
+              """Run retryable history iterations without terminalizing database contention."""
+
+              retry_episode = RetryEpisode()
+              logging.info("history mutation worker loop enter")
+              while not stop_event.is_set():
+                  if DATABASE_WRITE_GATE.writes_blocked():
+                      health.maintenance_paused(True)
+                      stop_event.wait(_WORKER_IDLE_SECONDS)
+                      continue
+                  health.maintenance_paused(False)
+                  try:
+                      processed = run_pending_jobs(limit=1)
+                  except Exception as exc:
+                      database_failure = classify_database_failure(exc)
+                      code = (
+                          database_failure.value
+                          if database_failure is not None
+                          else "history_iteration_failed"
+                      )
+                      retry = retry_episode.failed(code)
+                      health.failed(code)
+                      if retry.detail_log_due:
+                          logging.warning(
+                              "history mutation worker error code=%s",
+                              code,
+                              exc_info=True,
+                          )
+                      elif retry.summary_log_due:
+                          logging.warning(
+                              "history mutation worker failure continues code=%s consecutive=%s elapsed_seconds=%.1f",
+                              code,
+                              retry.attempt,
+                              retry.elapsed_seconds,
+                          )
+                      stop_event.wait(max(_WORKER_IDLE_SECONDS, retry.delay_seconds))
+                      continue
+                  recovery = retry_episode.succeeded()
+                  health.succeeded()
+                  if recovery.recovered:
+                      logging.info(
+                          "history mutation worker recovered code=%s attempts=%s elapsed_seconds=%.1f",
+                          recovery.code,
+                          recovery.attempts,
+                          recovery.elapsed_seconds,
+                      )
+                  if processed:
+                      continue
+                  stop_event.wait(_WORKER_IDLE_SECONDS)
+              logging.info("history mutation worker loop exit")
+          '''
+          replace_function(path, 'run_history_worker', history_worker)
+
+          # Recovery uses the same DB classifier; its durable enum remains the domain API.
+          path = 'worktrace/services/recovery_service.py'
+          source = read(path)
+          source = source.replace(
+              'from ..constants import STATUS_ERROR, TIME_FORMAT\n',
+              'from ..constants import STATUS_ERROR, TIME_FORMAT\nfrom ..database_failure_policy import DatabaseFailureKind, classify_database_failure\n',
+              1,
+          )
+          write(path, source)
+          recovery_classifier = '''
+          def _classify_recovery_failure(
+              exc: BaseException,
+          ) -> startup_recovery_job_repository.RecoveryFailureCode:
+              database_failure = classify_database_failure(exc)
+              if database_failure is DatabaseFailureKind.BUSY:
+                  return startup_recovery_job_repository.RecoveryFailureCode.DATABASE_BUSY
+              if database_failure in {
+                  DatabaseFailureKind.MAINTENANCE,
+                  DatabaseFailureKind.RECOVERY_REQUIRED,
+              }:
+                  return startup_recovery_job_repository.RecoveryFailureCode.DATABASE_MAINTENANCE_IN_PROGRESS
+              if database_failure is DatabaseFailureKind.GENERATION_CHANGED:
+                  return startup_recovery_job_repository.RecoveryFailureCode.DATABASE_GENERATION_CHANGED
+              return startup_recovery_job_repository.RecoveryFailureCode.UNEXPECTED_FAILURE
+          '''
+          replace_function(path, '_classify_recovery_failure', recovery_classifier)
+
+          # Resource repair already propagates iteration errors; give its retry/health the
+          # same truthful database code.
+          path = 'worktrace/services/activity_fact_repair_service.py'
+          source = read(path)
+          source = source.replace(
+              'from ..constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_PAUSED\n',
+              'from ..constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_PAUSED\nfrom ..database_failure_policy import classify_database_failure\n',
+              1,
+          )
+          write(path, source)
+          repair_worker = '''
+          def run_activity_resource_repair_worker(
+              stop_event: threading.Event,
+              *,
+              health: WorkerHealthReporter,
+              batch_size: int = DEFAULT_BATCH_SIZE,
+              poll_seconds: float = _WORKER_IDLE_SECONDS,
+          ) -> None:
+              """Run repair iterations with shared database failure classification."""
+
+              size = max(1, int(batch_size))
+              interval = max(0.1, float(poll_seconds))
+              retry_episode = RetryEpisode()
+              logging.info("activity resource repair worker loop enter")
+              while not stop_event.is_set():
+                  if DATABASE_WRITE_GATE.writes_blocked():
+                      health.maintenance_paused(True)
+                      stop_event.wait(interval)
+                      continue
+                  health.maintenance_paused(False)
+                  try:
+                      repaired = repair_missing_activity_resources(size)
+                  except Exception as exc:
+                      database_failure = classify_database_failure(exc)
+                      code = (
+                          database_failure.value
+                          if database_failure is not None
+                          else "activity_resource_repair_iteration_failed"
+                      )
+                      retry = retry_episode.failed(code)
+                      health.failed(code)
+                      if retry.detail_log_due:
+                          logging.warning(
+                              "activity resource repair worker iteration failed code=%s",
+                              code,
+                              exc_info=True,
+                          )
+                      elif retry.summary_log_due:
+                          logging.warning(
+                              "activity resource repair worker failure continues code=%s consecutive=%s elapsed_seconds=%.1f",
+                              code,
+                              retry.attempt,
+                              retry.elapsed_seconds,
+                          )
+                      stop_event.wait(max(interval, retry.delay_seconds))
+                      continue
+                  recovery = retry_episode.succeeded()
+                  health.succeeded()
+                  if recovery.recovered:
+                      logging.info(
+                          "activity resource repair worker recovered code=%s attempts=%s elapsed_seconds=%.1f",
+                          recovery.code,
+                          recovery.attempts,
+                          recovery.elapsed_seconds,
+                      )
+                  if repaired >= size:
+                      continue
+                  stop_event.wait(interval)
+              logging.info("activity resource repair worker loop exit")
+          '''
+          replace_function(path, 'run_activity_resource_repair_worker', repair_worker)
+
+          # Architecture governance now points at the actual folder-index worker owner.
+          for path in (
+              'tests/test_architecture_owner_governance.py',
+              'tests/test_final_architecture_governance.py',
+          ):
+              source = read(path)
+              source = source.replace(
+                  '("worktrace/services/folder_index_service.py", "run_folder_index_worker")',
+                  '("worktrace/services/folder_index_runtime_service.py", "run_folder_index_worker")',
+              )
+              source = source.replace(
+                  '"services/folder_index_service.py": "run_folder_index_worker"',
+                  '"services/folder_index_runtime_service.py": "run_folder_index_worker"',
+              )
+              write(path, source)
+
+          contract_tests = '''\
+          from __future__ import annotations
+
+          import sqlite3
+          from contextlib import contextmanager
+
+          import pytest
+
+          from worktrace.database_failure_policy import (
+              DatabaseFailureKind,
+              classify_database_failure,
+          )
+          from worktrace.services import activity_inference_job_service
+          from worktrace.services import folder_index_service
+          from worktrace.services import history_mutation_job_service
+          from worktrace.worker_health import WorkerHealthRegistry, degraded_failure
+
+
+          pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.db]
+
+
+          def test_database_failure_policy_classifies_busy_and_extended_busy() -> None:
+              locked = sqlite3.OperationalError("database is locked")
+              assert classify_database_failure(locked) is DatabaseFailureKind.BUSY
+
+              extended = sqlite3.OperationalError("busy snapshot")
+              extended.sqlite_errorcode = sqlite3.SQLITE_BUSY | (2 << 8)
+              extended.sqlite_errorname = "SQLITE_BUSY_SNAPSHOT"
+              assert classify_database_failure(extended) is DatabaseFailureKind.BUSY
+
+
+          def test_explicit_partial_failure_degrades_immediately_until_real_success() -> None:
+              registry = WorkerHealthRegistry()
+              reporter = registry.reporter("inference")
+              reporter.started()
+              reporter.succeeded()
+              reporter.failed(degraded_failure("inference_job_failures"))
+
+              assert registry.degraded_workers() == ("inference",)
+              assert registry.snapshots()["inference"].last_failure_code == "inference_job_failures"
+
+              reporter.maintenance_paused(False)
+              assert registry.degraded_workers() == ("inference",)
+              reporter.succeeded()
+              assert registry.degraded_workers() == ()
+
+
+          def test_inference_batch_stops_after_first_database_busy(monkeypatch) -> None:
+              runnable = [{"activity_id": value} for value in range(1, 51)]
+              list_calls: list[int] = []
+
+              @contextmanager
+              def fake_connection():
+                  yield object()
+
+              def fake_list(conn, *, limit, activity_ids=None):
+                  list_calls.append(limit)
+                  if activity_ids is None:
+                      return runnable
+                  raise AssertionError("per-job list should not run after UoW acquisition fails")
+
+              class BusyUow:
+                  def __enter__(self):
+                      raise sqlite3.OperationalError("database is locked")
+
+                  def __exit__(self, *_args):
+                      return False
+
+              monkeypatch.setattr(activity_inference_job_service, "get_connection", fake_connection)
+              monkeypatch.setattr(
+                  activity_inference_job_service.jobs,
+                  "list_runnable_jobs",
+                  fake_list,
+              )
+              monkeypatch.setattr(
+                  activity_inference_job_service,
+                  "DomainUnitOfWork",
+                  lambda *_args, **_kwargs: BusyUow(),
+              )
+
+              outcome = activity_inference_job_service._process_pending_inference_batch(
+                  lambda *_args: {},
+                  limit=50,
+              )
+
+              assert outcome.attempted == 1
+              assert outcome.processed == 0
+              assert outcome.infrastructure_failure is DatabaseFailureKind.BUSY
+              assert list_calls == [50]
+
+
+          def test_folder_build_database_busy_is_not_persisted_as_permanent_error(
+              monkeypatch,
+              tmp_path,
+          ) -> None:
+              folder = tmp_path / "indexed"
+              folder.mkdir()
+              failures: list[tuple[int, int, str]] = []
+
+              monkeypatch.setattr(
+                  folder_index_service,
+                  "_load_folder_rule",
+                  lambda _rule_id: {"folder_path": str(folder), "recursive": False},
+              )
+              monkeypatch.setattr(
+                  folder_index_service.privacy_gate_service,
+                  "is_sensitive_runtime_allowed",
+                  lambda: True,
+              )
+              monkeypatch.setattr(folder_index_service, "_begin_generation", lambda _rule_id: (7, "now"))
+
+              def busy_iter(*_args, **_kwargs):
+                  raise sqlite3.OperationalError("database is locked")
+                  yield
+
+              monkeypatch.setattr(folder_index_service, "_iter_files", busy_iter)
+              monkeypatch.setattr(
+                  folder_index_service,
+                  "_fail_generation",
+                  lambda rule_id, generation, code: failures.append((rule_id, generation, code)),
+              )
+
+              with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+                  folder_index_service.rebuild_folder_index(3)
+              assert failures == []
+
+
+          def test_history_database_busy_does_not_terminalize_job(monkeypatch) -> None:
+              job = {"id": 4, "status": "pending", "kind": "rule_backfill"}
+              terminal_failures: list[tuple[int, str]] = []
+
+              monkeypatch.setattr(history_mutation_job_service, "_load_job", lambda _job_id: job)
+              monkeypatch.setattr(history_mutation_job_service, "_payload", lambda _job: {})
+              monkeypatch.setattr(history_mutation_job_service, "_folder_index_gate", lambda _job: "ready")
+              monkeypatch.setattr(
+                  history_mutation_job_service,
+                  "_run_backfill_batch",
+                  lambda *_args: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked")),
+              )
+              monkeypatch.setattr(
+                  history_mutation_job_service,
+                  "_fail_job",
+                  lambda job_id, message: terminal_failures.append((job_id, message)),
+              )
+
+              with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+                  history_mutation_job_service.run_job_batch(4)
+              assert terminal_failures == []
+
+
+          def test_folder_worker_owner_is_explicit_and_not_package_monkeypatched() -> None:
+              runtime = (ROOT := __import__("pathlib").Path(__file__).resolve().parents[1]) / "worktrace/runtime/app_runtime.py"
+              services_init = ROOT / "worktrace/services/__init__.py"
+              runtime_source = runtime.read_text(encoding="utf-8")
+              init_source = services_init.read_text(encoding="utf-8")
+
+              assert "folder_index_runtime_service.run_folder_index_worker" in runtime_source
+              assert '"run_folder_index_worker"' not in init_source
+          '''
+          write('tests/test_worker_retry_health_contract.py', contract_tests)
+
+          # Ensure the repository still parses before spending time installing dependencies.
+          import compileall
+          if not compileall.compile_dir('worktrace', quiet=1):
+              raise SystemExit('compileall failed')
+          PY
+
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Run focused regression suite
+        run: >-
+          python -m pytest -q
+          tests/test_worker_retry_health_contract.py
+          tests/test_worker_health_contract.py
+          tests/test_database_worker_liveness_regressions.py
+          tests/test_activity_inference_job_contracts.py
+          tests/test_folder_index_refresh_policy.py
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add worktrace tests
+          git diff --cached --check
+          git commit -m "fix: unify worker retry and health semantics"
+          git push origin HEAD:${{ github.ref_name }}
