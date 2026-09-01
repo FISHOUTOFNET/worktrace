@@ -51,6 +51,8 @@ class RuntimePlatformAdapter(Protocol):
 
     def reset_runtime_state(self) -> None: ...
 
+    def capability_health_snapshot(self) -> dict[str, dict[str, object]]: ...
+
     def run_clipboard_capture(
         self,
         stop_event: threading.Event,

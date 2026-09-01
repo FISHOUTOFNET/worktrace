@@ -16,8 +16,13 @@ from .base import (
     ClipboardTextEvent,
     PlatformTemporarilyUnavailableError,
 )
+from .capability_health import PathCapabilityHealth
 from .windows_clipboard import ClipboardMonitor
-from .windows_path_resolver import WindowsPathResolver, resolve_title_file_path
+from .windows_path_resolver import (
+    PathResolutionResult,
+    WindowsPathResolver,
+    resolve_title_file_path,
+)
 
 _HOST_PROCESS_NAMES = frozenset({"applicationframehost.exe"})
 _GENERIC_PATH_PROBE_EXCLUDED_PROCESSES = frozenset({
@@ -46,6 +51,8 @@ class WindowsAdapter:
             capture_available=CLIPBOARD_CAPTURE_AVAILABLE,
         )
         self._generic_path_failures: dict[tuple[int, str, str], float] = {}
+        self._path_capability = PathCapabilityHealth()
+        self._recovery_probe_logged = False
 
     def get_active_window(self) -> ActiveWindow | None:
         import psutil
@@ -113,12 +120,14 @@ class WindowsAdapter:
             generic_probe = generic_file_candidate and not policy_probe
             probe_key = (pid, process_name.casefold(), title)
             if not generic_probe or self._generic_probe_due(probe_key):
-                file_path_hint = self._path_resolver.resolve(
+                diagnostic = self._resolve_path_with_diagnostics(
                     (hwnd, pid, process_name, title),
                     process_name,
                     title,
                     pid,
                 )
+                file_path_hint = diagnostic.path
+                self._observe_path_probe(diagnostic)
                 if generic_probe:
                     if file_path_hint:
                         self._generic_path_failures.pop(probe_key, None)
@@ -148,6 +157,51 @@ class WindowsAdapter:
             window_class=window_class,
             privacy_path_required=requires_path,
             path_resolution_uncertain=path_resolution_uncertain,
+        )
+
+    def _resolve_path_with_diagnostics(
+        self,
+        cache_key: tuple[int | None, int | None, str, str],
+        process_name: str,
+        title: str,
+        pid: int | None,
+    ) -> PathResolutionResult:
+        resolve_diagnostic = getattr(
+            self._path_resolver,
+            "resolve_with_diagnostics",
+            None,
+        )
+        if callable(resolve_diagnostic):
+            return resolve_diagnostic(cache_key, process_name, title, pid)
+        path = self._path_resolver.resolve(
+            cache_key,
+            process_name,
+            title,
+            pid,
+        )
+        return PathResolutionResult(
+            path,
+            route="legacy",
+            outcome="success" if path else "no_match",
+            attempted=True,
+        )
+
+    def _observe_path_probe(self, diagnostic: PathResolutionResult) -> None:
+        if diagnostic.attempted:
+            snapshot = self._path_capability.snapshot()
+            if snapshot.state == "recovering" and not self._recovery_probe_logged:
+                self._recovery_probe_logged = True
+                logging.info(
+                    "path probe path_probe_required=true "
+                    "path_probe_route=%s path_probe_result=%s recovery_probe=true",
+                    diagnostic.route,
+                    diagnostic.outcome,
+                )
+        self._path_capability.observe_probe(
+            route=diagnostic.route,
+            outcome=diagnostic.outcome,
+            attempted=diagnostic.attempted,
+            path_found=bool(diagnostic.path),
         )
 
     def _generic_probe_due(self, key: tuple[int, str, str]) -> bool:
@@ -199,11 +253,20 @@ class WindowsAdapter:
         self._clipboard.reset()
         self._generic_path_failures.clear()
         self._path_resolver.reset()
+        self._path_capability.mark_recovering()
+        self._recovery_probe_logged = False
+
+    def capability_health_snapshot(self) -> dict[str, dict[str, object]]:
+        return {
+            "path_resolution": self._path_capability.snapshot().to_public_dict(),
+        }
 
     def shutdown(self) -> None:
         self._clipboard.shutdown()
         self._generic_path_failures.clear()
         self._path_resolver.reset()
+        self._path_capability.mark_unknown()
+        self._recovery_probe_logged = False
 
 
 def _resolve_effective_process_identity(

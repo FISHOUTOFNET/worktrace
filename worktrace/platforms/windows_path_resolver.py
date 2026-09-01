@@ -43,6 +43,15 @@ _EXTRA_LOCAL_FILE_PROCESSES = {
 
 
 @dataclass(frozen=True)
+class PathResolutionResult:
+    path: str | None
+    route: str
+    outcome: str
+    attempted: bool = False
+    from_cache: bool = False
+
+
+@dataclass(frozen=True)
 class ComPathCatalogEntry:
     name: str
     process_names: tuple[str, ...]
@@ -205,19 +214,51 @@ class WindowsPathResolver:
         title: str,
         pid: int | None,
     ) -> str | None:
+        return self.resolve_with_diagnostics(
+            cache_key,
+            process_name,
+            title,
+            pid,
+        ).path
+
+    def resolve_with_diagnostics(
+        self,
+        cache_key: tuple[int | None, int | None, str, str],
+        process_name: str,
+        title: str,
+        pid: int | None,
+    ) -> PathResolutionResult:
         title_path = resolve_title_file_path(title)
         if title_path:
-            return title_path
+            return PathResolutionResult(
+                title_path,
+                route="title",
+                outcome="success",
+            )
         cached, found = self._cached(cache_key)
         if found:
-            return cached
+            return PathResolutionResult(
+                cached,
+                route="cache",
+                outcome="success" if cached else "no_match",
+                from_cache=True,
+            )
         try:
-            resolved = self.resolve_active_file_path(process_name, title, pid)
+            result = self._resolve_active_file_path_with_diagnostics(
+                process_name,
+                title,
+                pid,
+            )
         except Exception:
             logging.debug("synchronous active path resolution failed", exc_info=True)
-            resolved = None
-        self._store(cache_key, resolved)
-        return resolved
+            result = PathResolutionResult(
+                None,
+                route="resolver",
+                outcome="helper_error",
+                attempted=True,
+            )
+        self._store(cache_key, result.path)
+        return result
 
     def reset(self) -> None:
         self._path_cache.clear()
@@ -230,25 +271,89 @@ class WindowsPathResolver:
         window_title: str,
         pid: int | None = None,
     ) -> str | None:
+        return self._resolve_active_file_path_with_diagnostics(
+            process_name,
+            window_title,
+            pid,
+        ).path
+
+    def _resolve_active_file_path_with_diagnostics(
+        self,
+        process_name: str,
+        window_title: str,
+        pid: int | None = None,
+    ) -> PathResolutionResult:
         title_path = resolve_title_file_path(window_title)
         if title_path:
-            return title_path
+            return PathResolutionResult(
+                title_path,
+                route="title",
+                outcome="success",
+            )
 
+        fallback_result: PathResolutionResult | None = None
         for prog_id, expression in self._com_candidates(process_name):
             if not self._available(self._com_failure_times, prog_id):
+                if fallback_result is None:
+                    fallback_result = PathResolutionResult(
+                        None,
+                        route="com",
+                        outcome="cooldown",
+                    )
                 continue
             try:
                 path = _get_com_file_path_subprocess(prog_id, expression)
                 normalized = _normalize_com_file_path(path)
                 if _is_valid_com_path(normalized, window_title):
-                    return split_file_path(normalized)[0]
+                    return PathResolutionResult(
+                        split_file_path(normalized)[0],
+                        route="com",
+                        outcome="success",
+                        attempted=True,
+                    )
+                if fallback_result is None or fallback_result.outcome == "cooldown":
+                    fallback_result = PathResolutionResult(
+                        None,
+                        route="com",
+                        outcome="no_match",
+                        attempted=True,
+                    )
             except TimeoutError:
                 self._mark_failed(self._com_failure_times, prog_id)
                 logging.debug("active file path com lookup timed out for %s", prog_id)
+                fallback_result = PathResolutionResult(
+                    None,
+                    route="com",
+                    outcome="timeout",
+                    attempted=True,
+                )
             except Exception:
+                self._mark_failed(self._com_failure_times, prog_id)
                 logging.debug("active file path com lookup failed", exc_info=True)
+                fallback_result = PathResolutionResult(
+                    None,
+                    route="com",
+                    outcome="helper_error",
+                    attempted=True,
+                )
 
-        return self._resolve_open_file_path(pid, window_title)
+        open_files_result = self._resolve_open_file_path_with_diagnostics(
+            pid,
+            window_title,
+        )
+        if open_files_result.path:
+            return open_files_result
+        if open_files_result.attempted:
+            if open_files_result.outcome in {"timeout", "helper_error"}:
+                return open_files_result
+            if fallback_result is None or fallback_result.outcome in {
+                "cooldown",
+                "no_match",
+            }:
+                return open_files_result
+        if fallback_result is not None:
+            return fallback_result
+        return open_files_result
 
     def _com_candidates(self, process_name: str) -> list[tuple[str, str]]:
         return [
@@ -265,21 +370,50 @@ class WindowsPathResolver:
         pid: int | None,
         window_title: str | None,
     ) -> str | None:
+        return self._resolve_open_file_path_with_diagnostics(
+            pid,
+            window_title,
+        ).path
+
+    def _resolve_open_file_path_with_diagnostics(
+        self,
+        pid: int | None,
+        window_title: str | None,
+    ) -> PathResolutionResult:
         if pid is None:
-            return None
+            return PathResolutionResult(None, route="open_files", outcome="not_applicable")
         title_file = extract_file_name_from_title(window_title) or extract_anchor_file_name(window_title)
-        if not title_file or not self._available(self._open_files_failure_times, pid):
-            return None
+        if not title_file:
+            return PathResolutionResult(None, route="open_files", outcome="not_applicable")
+        if not self._available(self._open_files_failure_times, pid):
+            return PathResolutionResult(None, route="open_files", outcome="cooldown")
         try:
             paths = _get_process_open_file_paths(pid)
         except TimeoutError:
             self._mark_failed(self._open_files_failure_times, pid)
             logging.debug("active file path open-files lookup timed out")
-            return None
+            return PathResolutionResult(
+                None,
+                route="open_files",
+                outcome="timeout",
+                attempted=True,
+            )
         except Exception:
+            self._mark_failed(self._open_files_failure_times, pid)
             logging.debug("active file path open-files lookup failed", exc_info=True)
-            return None
-        return _match_open_file_path(title_file, paths)
+            return PathResolutionResult(
+                None,
+                route="open_files",
+                outcome="helper_error",
+                attempted=True,
+            )
+        path = _match_open_file_path(title_file, paths)
+        return PathResolutionResult(
+            path,
+            route="open_files",
+            outcome="success" if path else "no_match",
+            attempted=True,
+        )
 
     @staticmethod
     def _available(failures: dict, key) -> bool:
@@ -539,6 +673,7 @@ def _acrobat_device_path_to_windows_path(path: str) -> str | None:
 
 __all__ = [
     "ComPathCatalogEntry",
+    "PathResolutionResult",
     "WindowsPathResolver",
     "resolve_title_file_path",
 ]
