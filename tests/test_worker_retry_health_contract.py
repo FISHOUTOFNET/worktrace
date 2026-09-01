@@ -48,6 +48,26 @@ def test_explicit_partial_failure_degrades_until_real_success() -> None:
     assert registry.degraded_workers() == ()
 
 
+def test_progress_refreshes_lease_without_clearing_degraded_failure() -> None:
+    now = {"value": 10.0}
+    registry = WorkerHealthRegistry(monotonic_func=lambda: now["value"])
+    reporter = registry.reporter("inference")
+    reporter.started()
+    reporter.failed(degraded_failure("inference_job_failures"))
+
+    before = registry.snapshots()["inference"]
+    now["value"] = 25.0
+    reporter.progressed()
+    after = registry.snapshots()["inference"]
+
+    assert before.last_failure_code == "inference_job_failures"
+    assert after.last_failure_code == "inference_job_failures"
+    assert after.explicit_degraded is True
+    assert after.served is True
+    assert after.last_progress_monotonic == 25.0
+    assert registry.degraded_workers() == ("inference",)
+
+
 def test_inference_batch_stops_after_first_database_busy(monkeypatch) -> None:
     runnable = [{"activity_id": value} for value in range(1, 51)]
     list_calls: list[int] = []

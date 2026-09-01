@@ -114,6 +114,17 @@ class WorkerHealthRegistry:
             last_progress_monotonic=self._monotonic(),
         )
 
+    def mark_progress(self, name: str) -> None:
+        with self._lock:
+            current = self._states.setdefault(name, WorkerHealthSnapshot(name))
+            self._states[name] = replace(
+                current,
+                started=True,
+                running=True,
+                served=True,
+                last_progress_monotonic=self._monotonic(),
+            )
+
     def mark_success(self, name: str) -> None:
         self._change(
             name,
@@ -214,6 +225,9 @@ class WorkerHealthReporter:
 
     def started(self) -> None:
         self._registry.mark_started(self.name)
+
+    def progressed(self) -> None:
+        self._registry.mark_progress(self.name)
 
     def succeeded(self) -> None:
         self._registry.mark_success(self.name)

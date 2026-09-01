@@ -244,6 +244,8 @@ def run_inference_worker(
                 if not backlog_degraded:
                     health.failed(degraded_failure("inference_job_failures"))
                     backlog_degraded = True
+                else:
+                    health.progressed()
             else:
                 health.succeeded()
                 backlog_degraded = False
