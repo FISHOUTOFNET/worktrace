@@ -1,0 +1,42 @@
+name: Task 3 progress followup
+
+on:
+  push:
+    branches:
+      - fix/worker-retry-health-contract
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply followup
+        run: python scripts/task3_progress_followup.py
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Validate
+        run: >-
+          python -m pytest -q
+          tests/test_worker_retry_health_contract.py
+          tests/test_worker_health_contract.py
+          tests/test_runtime_worker_liveness_regressions.py
+          tests/test_database_worker_liveness_regressions.py
+          tests/test_activity_inference_job_contracts.py
+      - name: Commit followup
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add worktrace tests
+          git diff --cached --check
+          git commit -m "fix: keep degraded workers live during retry backoff"
+          git push origin HEAD:${{ github.ref_name }}
