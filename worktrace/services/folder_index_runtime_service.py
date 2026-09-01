@@ -15,7 +15,7 @@ from ..constants import EXCLUDED_PROJECT
 from ..database_failure_policy import classify_database_failure
 from ..db import get_connection
 from ..retry_state import RetryEpisode
-from ..worker_health import degraded_failure
+from ..worker_health import WorkerHealthReporter, degraded_failure
 from ..write_gate import DATABASE_WRITE_GATE
 from . import folder_index_service as _core
 from . import folder_index_maintenance_service, folder_index_state_repository
@@ -140,7 +140,7 @@ def request_refresh_for_enabled_rules(include_excluded: bool = False) -> None:
 def run_folder_index_worker(
     stop_event: threading.Event,
     *,
-    health,
+    health: WorkerHealthReporter,
 ) -> None:
     """Own folder-index retry, interrupted-build recovery and truthful health."""
 
