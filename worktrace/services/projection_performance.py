@@ -2,13 +2,22 @@
 
 This module is the single owner of stage timing for report projection reads.
 It records one :class:`ProjectionPerfRecord` per page request, accumulates
-stage durations via :func:`stage`, and emits a single structured warning log
-when the request exceeds the configured threshold. Fast requests pay only a
-pair of ``time.perf_counter`` calls per stage and never emit log output.
+stage elapsed durations via :func:`stage`, and emits a single structured
+warning log when the request exceeds the configured elapsed-time threshold.
+Fast requests pay only a pair of ``time.perf_counter`` calls per stage and
+never emit log output.
+
+Timing contract:
+* ``total_ms`` and ``*_ms`` stage fields are elapsed durations measured with
+  :func:`time.perf_counter`. They include time when the request thread is not
+  executing, including blocking, scheduling delays, and system suspend.
+* ``total_cpu_ms`` is measured with :func:`time.thread_time` and records CPU
+  actually consumed by the request thread. It is diagnostic only and never
+  changes slow-request classification.
 
 Privacy contract: only aggregate counts, cache-hit flag, source-version token
-and stage durations are recorded. Window titles, file paths, resource names
-and other payload fragments are never captured.
+and timing data are recorded. Window titles, file paths, resource names and
+other payload fragments are never captured.
 
 Testability: :func:`get_last_record` exposes the most recent record for direct
 assertion without relying on log capture, and :func:`set_threshold_ms` lets
@@ -49,6 +58,7 @@ class ProjectionPerfRecord:
     surface: str = ""
     stages: dict[str, float] = field(default_factory=dict)
     total_ms: float = 0.0
+    total_cpu_ms: float = 0.0
 
     def stage_total(self, name: str) -> float:
         return float(self.stages.get(name, 0.0))
@@ -63,6 +73,7 @@ class ProjectionPerfRecord:
             "cache_hit": self.cache_hit,
             "source_version": self.source_version,
             "total_ms": round(self.total_ms, 2),
+            "total_cpu_ms": round(self.total_cpu_ms, 2),
         }
         for name, value in self.stages.items():
             payload[f"{name}_ms"] = round(value, 2)
@@ -122,11 +133,13 @@ def projection_perf_scope(
 
     record = ProjectionPerfRecord(report_date=report_date, surface=surface)
     _local.record = record
-    start = time.perf_counter()
+    elapsed_start = time.perf_counter()
+    cpu_start = time.thread_time()
     try:
         yield record
     finally:
-        record.total_ms = (time.perf_counter() - start) * 1000.0
+        record.total_ms = (time.perf_counter() - elapsed_start) * 1000.0
+        record.total_cpu_ms = (time.thread_time() - cpu_start) * 1000.0
         _local.record = None
         with _last_record_lock:
             global _last_record
@@ -141,7 +154,7 @@ def projection_perf_scope(
 
 @contextmanager
 def stage(name: str) -> Iterator[None]:
-    """Accumulate duration of a code block under ``name`` on the active record.
+    """Accumulate elapsed duration under ``name`` on the active record.
 
     Outside a :func:`projection_perf_scope` the context manager is a no-op so
     production callers (mutation transactions, internal helpers) can instrument
