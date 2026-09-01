@@ -1,3 +1,4 @@
+# corrected staging trigger
 name: Apply launch-at-login repair fix v2
 
 on:
