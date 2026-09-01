@@ -54,6 +54,18 @@ jobs:
           script = script[: script.index(doc_marker)]
           script += '''\narch_path = ROOT / "architecture.md"\narch = arch_path.read_text(encoding="utf-8")\nneedle = "and they never create parallel worker threads."\nif arch.count(needle) != 1:\n    raise RuntimeError(f"architecture.md: expected one worker ownership anchor, found {arch.count(needle)}")\npos = arch.index(needle) + len(needle)\naddition = (\n    " Launch-at-login repair is an initialize-phase auxiliary worker: "\n    "`AppRuntime` owns its thread and shutdown, the worker owns only a bounded "\n    "retry episode, and Task Scheduler capability failure is reported in worker "\n    "health without degrading Collector/runtime health."\n)\narch_path.write_text(arch[:pos] + addition + arch[pos:], encoding="utf-8")\n'''
           exec(compile(script, '<launch-at-login-staging>', 'exec'), {})
+
+          test_path = Path('tests/test_launch_at_login_repair_reliability.py')
+          test_source = test_path.read_text(encoding='utf-8')
+          old = 'class _Adapter:\n    def shutdown(self) -> None: pass\n'
+          new = (
+              'class _Adapter:\n'
+              '    def run_clipboard_capture(self, *_args, **_kwargs) -> None: pass\n\n'
+              '    def shutdown(self) -> None: pass\n'
+          )
+          if test_source.count(old) != 1:
+              raise RuntimeError('repair reliability test adapter anchor mismatch')
+          test_path.write_text(test_source.replace(old, new, 1), encoding='utf-8')
           PY
 
       - name: Compile patched Python
