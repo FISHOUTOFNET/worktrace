@@ -3,9 +3,15 @@ from __future__ import annotations
 
 import ntpath
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+
+from .startup import (
+    LaunchAtLoginRepairError,
+    LaunchAtLoginRepairOutcome,
+)
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_VALUE_NAME = "WorkTrace"
@@ -21,6 +27,16 @@ _TASK_INSTANCES_IGNORE_NEW = 2
 _TASK_PRIORITY_NORMAL = 6
 _TASK_TRIGGER_DELAY = "PT0S"
 _TASK_NOT_FOUND_HRESULTS = {-2147024894, -2147024893}
+_TASK_ACCESS_DENIED_HRESULTS = {-2147024891}
+_TASK_TRANSIENT_HRESULTS = {
+    -2147418111,
+    -2147417846,
+    -2147216619,
+    -2147023174,
+    -2147023170,
+    -2147023169,
+    -2146959355,
+}
 
 
 @dataclass(frozen=True)
@@ -81,15 +97,62 @@ def _normalized_windows_path(value: object) -> str:
     return ntpath.normcase(ntpath.normpath(str(value or "").strip().strip('"')))
 
 
-def _exception_contains_hresult(exc: BaseException, expected: set[int]) -> bool:
-    pending: list[object] = [getattr(exc, "hresult", None), getattr(exc, "args", ())]
+def _normalize_native_error_code(value: int) -> int:
+    if 0x80000000 <= value <= 0xFFFFFFFF:
+        return value - (1 << 32)
+    return value
+
+
+def _exception_native_error_codes(exc: BaseException) -> tuple[int, ...]:
+    pending: list[object] = [
+        getattr(exc, "hresult", None),
+        getattr(exc, "winerror", None),
+        getattr(exc, "args", ()),
+    ]
+    found: list[int] = []
     while pending:
         value = pending.pop()
-        if isinstance(value, int) and value in expected:
-            return True
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            normalized = _normalize_native_error_code(value)
+            if normalized not in found:
+                found.append(normalized)
+            continue
         if isinstance(value, (tuple, list)):
             pending.extend(value)
-    return False
+    return tuple(found)
+
+
+def _exception_contains_hresult(exc: BaseException, expected: set[int]) -> bool:
+    return bool(set(_exception_native_error_codes(exc)).intersection(expected))
+
+
+def _classify_launch_at_login_failure(
+    exc: BaseException,
+    *,
+    operation: str,
+) -> LaunchAtLoginRepairError:
+    native_codes = _exception_native_error_codes(exc)
+    native_set = set(native_codes)
+    if native_set.intersection(_TASK_TRANSIENT_HRESULTS):
+        code = "launch_at_login_task_scheduler_transient"
+        retryable = True
+    elif native_set.intersection(_TASK_ACCESS_DENIED_HRESULTS):
+        code = "launch_at_login_access_denied"
+        retryable = False
+    elif str(exc) == "launch_at_login_task_verification_failed":
+        code = "launch_at_login_task_verification_failed"
+        retryable = False
+    else:
+        code = "launch_at_login_repair_failed"
+        retryable = False
+    return LaunchAtLoginRepairError(
+        code,
+        retryable=retryable,
+        native_codes=native_codes,
+        operation=operation,
+    )
 
 
 def _current_user_sid() -> str:
@@ -242,15 +305,17 @@ class WindowsStartupRegistration:
         )
         self._registry = registry if registry is not None else WinregStartupRegistry()
         self._scheduler = scheduler if scheduler is not None else WindowsTaskScheduler()
+        self._lock = threading.RLock()
 
     @property
     def supported(self) -> bool:
         return self._executable_path is not None and sys.platform.startswith("win")
 
     def expected_command(self) -> str:
-        if self._executable_path is None:
-            raise RuntimeError("launch_at_login_unsupported")
-        return f'"{self._executable_path}" {BACKGROUND_ARGUMENT}'
+        with self._lock:
+            if self._executable_path is None:
+                raise RuntimeError("launch_at_login_unsupported")
+            return f'"{self._executable_path}" {BACKGROUND_ARGUMENT}'
 
     def _task_spec(self) -> StartupTaskSpec:
         if self._executable_path is None:
@@ -275,97 +340,125 @@ class WindowsStartupRegistration:
             return False
         if not isinstance(value, str):
             return False
-        return ntpath.normcase(value.strip()) == ntpath.normcase(self.expected_command())
+        return ntpath.normcase(value.strip()) == ntpath.normcase(
+            self.expected_command()
+        )
 
     def is_canonical(self) -> bool:
-        if not self.supported:
-            return False
-        try:
-            return self._scheduler.is_configured(TASK_NAME, self._task_spec())
-        except Exception:
-            return False
+        with self._lock:
+            if not self.supported:
+                return False
+            try:
+                return self._scheduler.is_configured(
+                    TASK_NAME,
+                    self._task_spec(),
+                )
+            except Exception:
+                return False
 
     def is_configured(self) -> bool:
-        if not self.supported:
-            return False
-        if self.is_canonical():
-            return True
-        return self._legacy_is_configured()
+        with self._lock:
+            if not self.supported:
+                return False
+            if self.is_canonical():
+                return True
+            return self._legacy_is_configured()
 
     def enable(self, executable_path: Path | None = None) -> None:
-        if executable_path is not None:
-            self._executable_path = Path(executable_path).resolve()
-        if not self.supported:
-            raise RuntimeError("launch_at_login_unsupported")
+        with self._lock:
+            if executable_path is not None:
+                self._executable_path = Path(executable_path).resolve()
+            if not self.supported:
+                raise RuntimeError("launch_at_login_unsupported")
 
-        spec = self._task_spec()
-        if not self._scheduler.is_configured(TASK_NAME, spec):
-            self._scheduler.register(TASK_NAME, spec)
-        if not self._scheduler.is_configured(TASK_NAME, spec):
-            raise OSError("launch_at_login_task_verification_failed")
+            spec = self._task_spec()
+            if not self._scheduler.is_configured(TASK_NAME, spec):
+                self._scheduler.register(TASK_NAME, spec)
+            if not self._scheduler.is_configured(TASK_NAME, spec):
+                raise OSError("launch_at_login_task_verification_failed")
 
-        # Delete the retired Run entry only after the scheduled task is verified,
-        # so a registration failure cannot silently remove a working startup path.
-        self._registry.delete_run_value(RUN_VALUE_NAME)
+            # Delete the retired Run entry only after the scheduled task is
+            # verified, so registration failure cannot remove a working path.
+            self._registry.delete_run_value(RUN_VALUE_NAME)
 
-    def repair_if_needed(self) -> str:
-        """Repair an existing launch-at-login intent without creating new intent."""
+    def repair_if_needed(self) -> LaunchAtLoginRepairOutcome:
+        """Repair existing launch-at-login intent without creating new intent."""
 
-        if not self.supported:
-            return "unsupported"
+        with self._lock:
+            if not self.supported:
+                return LaunchAtLoginRepairOutcome.UNSUPPORTED
 
-        task_exists = self._scheduler.exists(TASK_NAME)
-        legacy_enabled = self._legacy_is_enabled()
-        if not task_exists and not legacy_enabled:
-            return "disabled"
+            task_exists = self._scheduler.exists(TASK_NAME)
+            legacy_enabled = self._legacy_is_enabled()
+            if not task_exists and not legacy_enabled:
+                return LaunchAtLoginRepairOutcome.DISABLED
 
-        if self._scheduler.is_configured(TASK_NAME, self._task_spec()):
-            if legacy_enabled:
-                self._registry.delete_run_value(RUN_VALUE_NAME)
-                return "repaired"
-            return "canonical"
+            if self._scheduler.is_configured(TASK_NAME, self._task_spec()):
+                if legacy_enabled:
+                    self._registry.delete_run_value(RUN_VALUE_NAME)
+                    return LaunchAtLoginRepairOutcome.REPAIRED
+                return LaunchAtLoginRepairOutcome.CANONICAL
 
-        self.enable()
-        return "repaired"
+            self.enable()
+            return LaunchAtLoginRepairOutcome.REPAIRED
 
     def migrate_legacy_registration(self) -> None:
-        if not self.supported:
-            raise RuntimeError("launch_at_login_unsupported")
-        self.repair_if_needed()
+        with self._lock:
+            if not self.supported:
+                raise RuntimeError("launch_at_login_unsupported")
+            self.repair_if_needed()
 
     def disable(self) -> None:
-        if not self.supported:
-            raise RuntimeError("launch_at_login_unsupported")
+        with self._lock:
+            if not self.supported:
+                raise RuntimeError("launch_at_login_unsupported")
 
-        first_error: Exception | None = None
-        try:
-            self._scheduler.delete(TASK_NAME)
-        except Exception as exc:
-            first_error = exc
-        try:
-            self._registry.delete_run_value(RUN_VALUE_NAME)
-        except Exception as exc:
-            if first_error is None:
+            first_error: Exception | None = None
+            try:
+                self._scheduler.delete(TASK_NAME)
+            except Exception as exc:
                 first_error = exc
-        if first_error is not None:
-            raise first_error
+            try:
+                self._registry.delete_run_value(RUN_VALUE_NAME)
+            except Exception as exc:
+                if first_error is None:
+                    first_error = exc
+            if first_error is not None:
+                raise first_error
 
 
-def repair_launch_at_login_for_current_user() -> str:
-    """Best-effort repair entry for a frozen process worker thread."""
+class WindowsLaunchAtLoginRepair:
+    """COM apartment adapter for one classified startup repair attempt."""
 
-    registration = WindowsStartupRegistration()
-    if not registration.supported:
-        return "unsupported"
+    def __init__(self, registration: WindowsStartupRegistration) -> None:
+        self._registration = registration
 
-    import pythoncom
+    def repair_once(self) -> LaunchAtLoginRepairOutcome:
+        if not self._registration.supported:
+            return LaunchAtLoginRepairOutcome.UNSUPPORTED
 
-    pythoncom.CoInitialize()
-    try:
-        return registration.repair_if_needed()
-    finally:
-        pythoncom.CoUninitialize()
+        try:
+            import pythoncom
 
+            pythoncom.CoInitialize()
+        except Exception as exc:
+            raise _classify_launch_at_login_failure(
+                exc,
+                operation="com_initialize",
+            ) from exc
+
+        try:
+            try:
+                return self._registration.repair_if_needed()
+            except LaunchAtLoginRepairError:
+                raise
+            except Exception as exc:
+                raise _classify_launch_at_login_failure(
+                    exc,
+                    operation="repair",
+                ) from exc
+        finally:
+            pythoncom.CoUninitialize()
 
 __all__ = [
     "BACKGROUND_ARGUMENT",
@@ -373,8 +466,8 @@ __all__ = [
     "RUN_VALUE_NAME",
     "TASK_NAME",
     "StartupTaskSpec",
+    "WindowsLaunchAtLoginRepair",
     "WindowsStartupRegistration",
     "WindowsTaskScheduler",
     "installed_executable_path",
-    "repair_launch_at_login_for_current_user",
 ]
