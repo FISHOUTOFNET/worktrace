@@ -11,8 +11,10 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from ..database_failure_policy import DatabaseFailureKind, classify_database_failure
 from ..constants import (
     EXCLUDED_PROJECT,
     STATUS_NORMAL,
@@ -350,8 +352,16 @@ def request_refresh_for_hot_projects() -> int:
     return queued
 
 
-def reconcile_open_unclassified_activities() -> int:
-    """Converge open auto-unclassified rows after a new index is published."""
+@dataclass(frozen=True)
+class FolderReconciliationOutcome:
+    attempted: int = 0
+    reconciled: int = 0
+    failed: int = 0
+    infrastructure_failure: DatabaseFailureKind | None = None
+
+
+def reconcile_open_unclassified_activities_outcome() -> FolderReconciliationOutcome:
+    """Converge open rows and retain partial/infrastructure failure information."""
 
     with get_connection() as conn:
         rows = conn.execute(
@@ -378,29 +388,57 @@ def reconcile_open_unclassified_activities() -> int:
             (STATUS_NORMAL,),
         ).fetchall()
     if not rows:
-        return 0
+        return FolderReconciliationOutcome()
 
     from . import project_inference_service
 
+    attempted = 0
     reconciled = 0
+    failed = 0
     for row in rows:
         activity_id = int(row["id"])
+        attempted += 1
         try:
             project_inference_service.sync_persisted_open_activity_from_current_folder_index(
                 activity_id
             )
             reconciled += 1
-        except Exception:
-            # Index maintenance is best-effort. A classification retry must not
-            # make the folder-index worker unhealthy or roll back a ready index.
+        except Exception as exc:
+            database_failure = classify_database_failure(exc)
+            if database_failure is not None:
+                logging.warning(
+                    "open activity convergence paused activity_id=%s code=%s",
+                    activity_id,
+                    database_failure.value,
+                    exc_info=True,
+                )
+                return FolderReconciliationOutcome(
+                    attempted=attempted,
+                    reconciled=reconciled,
+                    failed=failed,
+                    infrastructure_failure=database_failure,
+                )
+            failed += 1
             logging.exception(
                 "open activity convergence after folder index refresh failed activity_id=%s",
                 activity_id,
             )
-    return reconciled
+    return FolderReconciliationOutcome(
+        attempted=attempted,
+        reconciled=reconciled,
+        failed=failed,
+    )
+
+
+def reconcile_open_unclassified_activities() -> int:
+    """Compatibility API returning only the number reconciled."""
+
+    return reconcile_open_unclassified_activities_outcome().reconciled
+
 
 
 __all__ = [
+    "FolderReconciliationOutcome",
     "HOT_INDEX_FRESHNESS_MINUTES",
     "HOT_PROJECT_ACTIVITY_DAYS",
     "HOT_PROJECT_LIMIT",
@@ -408,6 +446,7 @@ __all__ = [
     "UNRESOLVED_FILE_REFRESH_COOLDOWN_SECONDS",
     "note_unresolved_file_miss",
     "reconcile_open_unclassified_activities",
+    "reconcile_open_unclassified_activities_outcome",
     "request_refresh_for_hot_projects",
     "request_refresh_for_unresolved_file_misses",
     "unresolved_file_indexes_refreshed_since",

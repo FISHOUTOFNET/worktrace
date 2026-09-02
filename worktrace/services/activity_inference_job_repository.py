@@ -252,6 +252,12 @@ def record_failure(
         ),
     )
     return attempts
+def has_failed_jobs(conn) -> bool:
+    """Return whether durable inference failures still await retry."""
+
+    return conn.execute(
+        "SELECT 1 FROM activity_inference_job WHERE status = 'failed' LIMIT 1"
+    ).fetchone() is not None
 
 
 def clear_all_jobs(conn) -> int:
@@ -269,6 +275,7 @@ __all__ = [
     "defer_job",
     "delete_job",
     "enqueue_closed_activity_ids",
+    "has_failed_jobs",
     "list_runnable_jobs",
     "read_activity_and_assignment",
     "record_failure",

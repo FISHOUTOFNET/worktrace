@@ -6,6 +6,7 @@ import threading
 from datetime import datetime, time as datetime_time, timedelta
 
 from ..constants import STATUS_ERROR, TIME_FORMAT
+from ..database_failure_policy import DatabaseFailureKind, classify_database_failure
 from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 from ..retry_state import RetryEpisode
@@ -483,24 +484,18 @@ def _segment_command(
 def _classify_recovery_failure(
     exc: BaseException,
 ) -> startup_recovery_job_repository.RecoveryFailureCode:
-    if isinstance(exc, sqlite3.OperationalError):
-        sqlite_code = getattr(exc, "sqlite_errorcode", None)
-        message = str(exc).strip().lower()
-        if sqlite_code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED} or message in {
-            "database is locked",
-            "database table is locked",
-            "database is busy",
-        }:
-            return startup_recovery_job_repository.RecoveryFailureCode.DATABASE_BUSY
-        if message == (
-            startup_recovery_job_repository.RecoveryFailureCode.DATABASE_MAINTENANCE_IN_PROGRESS.value
-        ):
-            return startup_recovery_job_repository.RecoveryFailureCode.DATABASE_MAINTENANCE_IN_PROGRESS
-        if message == (
-            startup_recovery_job_repository.RecoveryFailureCode.DATABASE_GENERATION_CHANGED.value
-        ):
-            return startup_recovery_job_repository.RecoveryFailureCode.DATABASE_GENERATION_CHANGED
+    database_failure = classify_database_failure(exc)
+    if database_failure is DatabaseFailureKind.BUSY:
+        return startup_recovery_job_repository.RecoveryFailureCode.DATABASE_BUSY
+    if database_failure in {
+        DatabaseFailureKind.MAINTENANCE,
+        DatabaseFailureKind.RECOVERY_REQUIRED,
+    }:
+        return startup_recovery_job_repository.RecoveryFailureCode.DATABASE_MAINTENANCE_IN_PROGRESS
+    if database_failure is DatabaseFailureKind.GENERATION_CHANGED:
+        return startup_recovery_job_repository.RecoveryFailureCode.DATABASE_GENERATION_CHANGED
     return startup_recovery_job_repository.RecoveryFailureCode.UNEXPECTED_FAILURE
+
 
 
 def _record_recovery_failure_safely(

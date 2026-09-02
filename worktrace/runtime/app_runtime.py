@@ -20,6 +20,7 @@ from ..services import (
     activity_fact_repair_service,
     activity_inference_job_service,
     database_maintenance_service,
+    folder_index_runtime_service,
     folder_index_service,
     history_mutation_job_service,
     project_inference_service,
@@ -27,7 +28,7 @@ from ..services import (
     runtime_activity_state_service,
 )
 from ..services.settings_service import set_setting
-from ..worker_health import WorkerHealthRegistry, WorkerHealthReporter
+from ..worker_health import WorkerFailure, WorkerHealthRegistry, WorkerHealthReporter
 from .collector_supervisor import CollectorSupervisor
 from .contracts import RuntimeStartResult as _RuntimeStartResult
 from .contracts import WorkerStartupState as _WorkerStartupState
@@ -126,13 +127,20 @@ class _OwnedWorkerReporter:
         self._on_health_change = on_health_change
         self.name = health.name
 
+    def progressed(self) -> None:
+        self._handle.serving_event.set()
+        self._health.progressed()
+        self._on_health_change()
+
     def succeeded(self) -> None:
         self._handle.serving_event.set()
         self._health.succeeded()
         self._on_health_change()
 
-    def failed(self, code: str) -> None:
+    def failed(self, code: str | WorkerFailure) -> None:
         self._health.failed(code)
+        if isinstance(code, WorkerFailure) and code.immediate_degraded:
+            self._handle.serving_event.set()
         self._on_health_change()
 
     def maintenance_paused(self, paused: bool) -> None:
@@ -214,7 +222,7 @@ class AppRuntime:
             "folder_index": WorkerSpec(
                 name="folder_index",
                 thread_name="WorkTraceFolderIndex",
-                target=folder_index_service.run_folder_index_worker,
+                target=folder_index_runtime_service.run_folder_index_worker,
                 args_factory=lambda stop: (stop,),
                 progress_timeout_seconds=300.0,
             ),

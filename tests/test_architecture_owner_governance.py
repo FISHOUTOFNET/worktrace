@@ -203,7 +203,7 @@ def test_app_runtime_has_one_registry_driven_thread_creation_site() -> None:
 
 def test_fixed_workers_require_health_as_keyword_only_dependency() -> None:
     workers = {
-        "services/folder_index_service.py": "run_folder_index_worker",
+        "services/folder_index_runtime_service.py": "run_folder_index_worker",
         "services/history_mutation_job_service.py": "run_history_worker",
         "services/activity_inference_job_service.py": "run_inference_worker",
         "services/activity_fact_repair_service.py": "run_activity_resource_repair_worker",
