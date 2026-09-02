@@ -181,11 +181,33 @@ class CollectorStateMachine:
             sequence_number=event.sequence_number,
         )
 
-    def reset_for_time_jump(self, at_time: str | None = None) -> None:
+    def reset_for_runtime_discontinuity(
+        self,
+        at_time: str | None = None,
+        reason: str = "runtime_discontinuity",
+    ) -> None:
+        """Idempotently cut continuity after a runtime clock/stall discontinuity."""
+
         transition_time = at_time or now_str()
-        self._stop_recording_at_boundary(transition_time, "sleep_resume")
+        if (
+            self.state != "stopped"
+            or self.recorder.current_payload is not None
+            or self.recorder.persisted_activity_id is not None
+        ):
+            # Keep the established durable boundary taxonomy stable; the precise
+            # discontinuity reason belongs to runtime telemetry rather than facts.
+            self._stop_recording_at_boundary(transition_time, "sleep_resume")
         self.state = "stopped"
         self.active_signature = None
+        logging.info("collector runtime state reset reason=%s", str(reason or "runtime_discontinuity"))
+
+    def reset_for_time_jump(self, at_time: str | None = None) -> None:
+        """Compatibility wrapper for callers using the old clock-specific API."""
+
+        self.reset_for_runtime_discontinuity(
+            at_time=at_time,
+            reason="clock_discontinuity",
+        )
 
     def reset_runtime_state(self, reason: str = "runtime_reset") -> None:
         """Forget process-local identity after the durable generation changed."""

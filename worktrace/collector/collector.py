@@ -26,7 +26,7 @@ from ..services.settings_service import (
     set_setting,
 )
 from . import collector_health
-from .clock_tracker import ClockTracker
+from .clock_tracker import ClockDiscontinuity, ClockTracker
 from .collector_failure_policy import classify_collector_failure
 from .heartbeat import update_heartbeat
 from .state_machine import CollectorStateMachine
@@ -365,6 +365,7 @@ def run_collector(
         )
         last_loop_time: str | None = None
         last_safe_boundary_time: str | None = None
+        pending_discontinuity: ClockDiscontinuity | None = None
         heartbeat_counter = 0
         prune_counter = 0
         fatal_stop = False
@@ -404,6 +405,22 @@ def run_collector(
                 startup_runtime_pending = False
 
             now = now_str()
+
+            # Retry incomplete discontinuity recovery before sampling new facts.
+            if pending_discontinuity is not None:
+                phase = "runtime_recovery"
+                recovery_monotonic = time.monotonic()
+                next_poll_deadline = _recover_runtime_discontinuity(
+                    adapter=adapter,
+                    machine=machine,
+                    discontinuity=pending_discontinuity,
+                    at_time=now,
+                    monotonic_time=recovery_monotonic,
+                )
+                last_safe_boundary_time = pending_discontinuity.safe_end_time
+                last_loop_time = pending_discontinuity.safe_end_time
+                pending_discontinuity = None
+                continue
 
             if held:
                 reset_command_id = (
@@ -501,12 +518,19 @@ def run_collector(
                 stall_threshold_seconds=collector_stall_threshold_seconds,
             )
             if discontinuity is not None:
-                _set_clipboard_capture_enabled(adapter, False)
-                clock_tracker.apply_discontinuity(machine, discontinuity)
-                collector_health.record_health_code(discontinuity.reason, now)
+                pending_discontinuity = discontinuity
+                _log_runtime_discontinuity(discontinuity)
+                phase = "runtime_recovery"
+                next_poll_deadline = _recover_runtime_discontinuity(
+                    adapter=adapter,
+                    machine=machine,
+                    discontinuity=discontinuity,
+                    at_time=now,
+                    monotonic_time=monotonic_now,
+                )
                 last_safe_boundary_time = discontinuity.safe_end_time
                 last_loop_time = discontinuity.safe_end_time
-                next_poll_deadline = monotonic_now + POLL_CADENCE_SECONDS
+                pending_discontinuity = None
                 continue
 
             # This pre-sampling wall time is the latest boundary the Collector
@@ -597,15 +621,19 @@ def run_collector(
                 stall_threshold_seconds=collector_stall_threshold_seconds,
             )
             if discontinuity is not None:
-                _set_clipboard_capture_enabled(adapter, False)
-                clock_tracker.apply_discontinuity(machine, discontinuity)
-                collector_health.record_health_code(
-                    discontinuity.reason,
-                    observation_time,
+                pending_discontinuity = discontinuity
+                _log_runtime_discontinuity(discontinuity)
+                phase = "runtime_recovery"
+                next_poll_deadline = _recover_runtime_discontinuity(
+                    adapter=adapter,
+                    machine=machine,
+                    discontinuity=discontinuity,
+                    at_time=observation_time,
+                    monotonic_time=observation_monotonic,
                 )
                 last_safe_boundary_time = discontinuity.safe_end_time
                 last_loop_time = discontinuity.safe_end_time
-                next_poll_deadline = observation_monotonic + POLL_CADENCE_SECONDS
+                pending_discontinuity = None
                 continue
 
             phase = "transition"
@@ -677,7 +705,8 @@ def run_collector(
                     )
                 elif retry.summary_log_due:
                     logging.warning(
-                        "collector transient startup failure continues code=%s consecutive=%s elapsed_seconds=%.1f",
+                        "collector transient startup failure continues "
+                        "code=%s consecutive=%s elapsed_seconds=%.1f",
                         disposition.code.value,
                         retry.attempt,
                         retry.elapsed_seconds,
@@ -700,7 +729,8 @@ def run_collector(
                 )
             elif retry.summary_log_due:
                 logging.warning(
-                    "collector transient failure continues phase=%s code=%s consecutive=%s elapsed_seconds=%.1f",
+                    "collector transient failure continues "
+                    "phase=%s code=%s consecutive=%s elapsed_seconds=%.1f",
                     phase,
                     disposition.code.value,
                     retry.attempt,
@@ -756,6 +786,51 @@ def run_collector(
         except Exception:
             logging.exception("collector stopped-state persistence failed")
     logging.info("collector stop")
+
+
+def _log_runtime_discontinuity(discontinuity: ClockDiscontinuity) -> None:
+    logging.warning(
+        "collector runtime discontinuity discontinuity_reason=%s "
+        "wall_delta_seconds=%.3f monotonic_delta_seconds=%.3f",
+        discontinuity.reason,
+        discontinuity.wall_delta_seconds,
+        discontinuity.monotonic_delta_seconds,
+    )
+
+
+def _recover_runtime_discontinuity(
+    *,
+    adapter: PlatformAdapter,
+    machine: CollectorStateMachine,
+    discontinuity: ClockDiscontinuity,
+    at_time: str,
+    monotonic_time: float,
+) -> float:
+    """Apply one retryable Collector/Platform recovery transaction."""
+
+    _set_clipboard_capture_enabled(adapter, False)
+    machine.reset_for_runtime_discontinuity(
+        at_time=discontinuity.safe_end_time,
+        reason=discontinuity.reason,
+    )
+    logging.info(
+        "platform runtime reset platform_reset_started=true discontinuity_reason=%s",
+        discontinuity.reason,
+    )
+    try:
+        adapter.reset_runtime_state()
+    except Exception:
+        logging.error(
+            "platform runtime reset platform_reset_completed=false discontinuity_reason=%s",
+            discontinuity.reason,
+        )
+        raise
+    logging.info(
+        "platform runtime reset platform_reset_completed=true discontinuity_reason=%s",
+        discontinuity.reason,
+    )
+    collector_health.record_health_code(discontinuity.reason, at_time)
+    return float(monotonic_time) + POLL_CADENCE_SECONDS
 
 
 def _normalize_poll_interval_setting() -> None:

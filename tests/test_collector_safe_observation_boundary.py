@@ -22,8 +22,8 @@ class _FakeMachine:
     def transition_to(self, state: str, *_args, at_time: str) -> None:
         self.transitions.append((state, at_time))
 
-    def reset_for_time_jump(self, safe_end_time: str) -> None:
-        self.resets.append(safe_end_time)
+    def reset_for_runtime_discontinuity(self, *, at_time: str, reason: str) -> None:
+        self.resets.append(at_time)
         self.stop_event.set()
 
     def stop(self, *, at_time: str, reason: str) -> None:
@@ -47,6 +47,9 @@ class _LateSuccessAdapter:
 
     def get_clipboard_events(self):
         return []
+
+    def reset_runtime_state(self) -> None:
+        return None
 
 
 class _LateFatalAdapter(_LateSuccessAdapter):
