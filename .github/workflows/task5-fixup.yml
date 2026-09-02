@@ -108,6 +108,22 @@ jobs:
               raise SystemExit("no inline HRESULT comments removed")
           startup = startup[: match.start(2)] + cleaned_body + startup[match.end(2):]
           startup_path.write_text(startup, encoding="utf-8")
+
+          reliability_path = Path("tests/test_launch_at_login_repair_reliability.py")
+          reliability = reliability_path.read_text(encoding="utf-8")
+          replacements = (
+              ("WorkerStartPhase", "WorkerLaunchKind"),
+              ("start_phase", "launch_kind"),
+              (
+                  "test_launch_repair_worker_is_initialize_phase_and_not_runtime_relevant",
+                  "test_launch_repair_worker_uses_initialize_launch_kind_and_is_not_runtime_relevant",
+              ),
+          )
+          for old, new in replacements:
+              if old not in reliability:
+                  raise SystemExit(f"reliability test anchor not found: {old}")
+              reliability = reliability.replace(old, new)
+          reliability_path.write_text(reliability, encoding="utf-8")
           '@ | python -
 
       - name: Compile
@@ -122,6 +138,7 @@ jobs:
           tests/test_runtime_startup_handshake_contract.py
           tests/test_runtime_worker_liveness_regressions.py
           tests/test_worker_progress_lease.py
+          tests/test_launch_at_login_repair_reliability.py
           tests/test_code_comment_hygiene.py
           tests/test_comment_hygiene.py
           --timeout=90 --timeout-method=thread
@@ -139,7 +156,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/task5-fixup.yml
-          git add worktrace/runtime/app_runtime.py worktrace/platforms/windows_startup.py
+          git add worktrace/runtime/app_runtime.py worktrace/platforms/windows_startup.py tests/test_launch_at_login_repair_reliability.py
           git diff --cached --check
           git commit -m "fix: complete launch-at-login repair integration"
           git push origin HEAD:fix/tray-capability-recovery
