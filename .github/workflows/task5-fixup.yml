@@ -143,6 +143,10 @@ jobs:
           tests/test_comment_hygiene.py
           --timeout=90 --timeout-method=thread
 
+      - name: Stage final repository shape
+        shell: pwsh
+        run: git rm .github/workflows/task5-fixup.yml
+
       - name: Full Python suite
         shell: pwsh
         run: >-
@@ -150,12 +154,11 @@ jobs:
           -m "not benchmark"
           --timeout=90 --timeout-method=thread
 
-      - name: Commit validated fixup and remove staging workflow
+      - name: Commit validated fixup
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/task5-fixup.yml
           git add worktrace/runtime/app_runtime.py worktrace/platforms/windows_startup.py tests/test_launch_at_login_repair_reliability.py
           git diff --cached --check
           git commit -m "fix: complete launch-at-login repair integration"
