@@ -1,0 +1,145 @@
+name: Task 5 Fixup
+
+on:
+  push:
+    branches:
+      - fix/tray-capability-recovery
+    paths:
+      - .github/workflows/task5-fixup.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-validate:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/tray-capability-recovery
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11.9'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            constraints-release.txt
+
+      - name: Install dependencies
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt -c constraints-release.txt
+
+      - name: Apply fixup
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          import re
+
+          runtime_path = Path("worktrace/runtime/app_runtime.py")
+          runtime = runtime_path.read_text(encoding="utf-8")
+
+          if runtime.count("class WorkerStartPhase(str, Enum):") != 1:
+              raise SystemExit("unexpected WorkerStartPhase count")
+          runtime = runtime.replace("WorkerStartPhase", "WorkerLaunchKind")
+          runtime = runtime.replace("start_phase", "launch_kind")
+          runtime = runtime.replace("_worker_specs_for_phase", "_worker_specs_for_launch_kind")
+
+          old_selector = '''    def _worker_specs_for_launch_kind(
+                  self,
+                  phase: WorkerLaunchKind,
+              ) -> tuple[tuple[str, WorkerSpec], ...]:
+                  return tuple(
+                      (name, spec)
+                      for name, spec in self._worker_specs.items()
+                      if spec.launch_kind is phase
+                  )
+          '''
+          new_selector = '''    def _worker_specs_for_launch_kind(
+                  self,
+                  launch_kind: WorkerLaunchKind,
+              ) -> tuple[tuple[str, WorkerSpec], ...]:
+                  return tuple(
+                      (name, spec)
+                      for name, spec in self._worker_specs.items()
+                      if spec.launch_kind is launch_kind
+                  )
+          '''
+          if old_selector not in runtime:
+              raise SystemExit("worker selector anchor not found")
+          runtime = runtime.replace(old_selector, new_selector, 1)
+
+          start = runtime.find("\ndef _blocked_worker_report(self) -> WorkerStartupReport:\n")
+          end = runtime.find("\n    def start_authorized_collection(self) -> _RuntimeStartResult:\n", start)
+          if start < 0 or end < 0:
+              raise SystemExit("AppRuntime method-boundary anchors not found")
+          segment = runtime[start + 1:end]
+          if segment.startswith("    def "):
+              raise SystemExit("AppRuntime methods already indented")
+          fixed_segment = "\n".join(
+              ("    " + line) if line else line
+              for line in segment.split("\n")
+          )
+          runtime = runtime[: start + 1] + fixed_segment + runtime[end:]
+
+          forbidden = ("WorkerStartPhase", "start_phase", "_worker_specs_for_phase")
+          leftovers = [token for token in forbidden if token in runtime]
+          if leftovers:
+              raise SystemExit(f"historical worker naming remains: {leftovers}")
+          runtime_path.write_text(runtime, encoding="utf-8")
+
+          startup_path = Path("worktrace/platforms/windows_startup.py")
+          startup = startup_path.read_text(encoding="utf-8")
+          transient_pattern = re.compile(
+              r"(_TASK_TRANSIENT_HRESULTS = \{\n)(.*?)(\n\})",
+              re.DOTALL,
+          )
+          match = transient_pattern.search(startup)
+          if match is None:
+              raise SystemExit("transient HRESULT block not found")
+          body = match.group(2)
+          cleaned_lines = [re.sub(r",\s+#.*$", ",", line) for line in body.splitlines()]
+          cleaned_body = "\n".join(cleaned_lines)
+          if cleaned_body == body:
+              raise SystemExit("no inline HRESULT comments removed")
+          startup = startup[: match.start(2)] + cleaned_body + startup[match.end(2):]
+          startup_path.write_text(startup, encoding="utf-8")
+          '@ | python -
+
+      - name: Compile
+        shell: pwsh
+        run: python -m compileall -q worktrace scripts
+
+      - name: Focused regression
+        shell: pwsh
+        run: >-
+          python -m pytest -q
+          tests/test_app_runtime_privacy_gate.py
+          tests/test_runtime_startup_handshake_contract.py
+          tests/test_runtime_worker_liveness_regressions.py
+          tests/test_worker_progress_lease.py
+          tests/test_code_comment_hygiene.py
+          tests/test_comment_hygiene.py
+          --timeout=90 --timeout-method=thread
+
+      - name: Full Python suite
+        shell: pwsh
+        run: >-
+          python -m pytest -q -ra --tb=short --color=no --cache-clear
+          -m "not benchmark"
+          --timeout=90 --timeout-method=thread
+
+      - name: Commit validated fixup and remove staging workflow
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/task5-fixup.yml
+          git add worktrace/runtime/app_runtime.py worktrace/platforms/windows_startup.py
+          git diff --cached --check
+          git commit -m "fix: complete launch-at-login repair integration"
+          git push origin HEAD:fix/tray-capability-recovery
