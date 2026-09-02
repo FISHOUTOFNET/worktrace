@@ -19,7 +19,7 @@ from worktrace.platforms.windows_startup import (
     WindowsLaunchAtLoginRepair,
     WindowsStartupRegistration,
 )
-from worktrace.runtime.app_runtime import AppRuntime, WorkerStartPhase
+from worktrace.runtime.app_runtime import AppRuntime, WorkerLaunchKind
 from worktrace.runtime.launch_at_login_repair import (
     run_launch_at_login_repair_worker,
 )
@@ -288,7 +288,7 @@ class _Adapter:
     def shutdown(self) -> None: pass
 
 
-def test_launch_repair_worker_is_initialize_phase_and_not_runtime_relevant() -> None:
+def test_launch_repair_worker_uses_initialize_launch_kind_and_is_not_runtime_relevant() -> None:
     repair = _SequenceRepair([LaunchAtLoginRepairOutcome.DISABLED])
     paths = SimpleNamespace(db_path="unused", log_path="unused")
     runtime = AppRuntime(
@@ -298,6 +298,6 @@ def test_launch_repair_worker_is_initialize_phase_and_not_runtime_relevant() -> 
     )
     spec = runtime._worker_specs["launch_at_login_repair"]
 
-    assert spec.start_phase is WorkerStartPhase.INITIALIZE
+    assert spec.launch_kind is WorkerLaunchKind.INITIALIZE
     assert spec.runtime_relevant is False
     assert spec.thread_name == "WorkTraceLaunchAtLoginRepair"

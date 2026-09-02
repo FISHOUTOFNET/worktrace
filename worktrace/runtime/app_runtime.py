@@ -64,7 +64,7 @@ class RuntimePhase(str, Enum):
     FAILED = "failed"
 
 
-class WorkerStartPhase(str, Enum):
+class WorkerLaunchKind(str, Enum):
     INITIALIZE = "initialize"
     AUTHORIZED = "authorized"
 
@@ -78,7 +78,7 @@ class WorkerSpec:
     startup_timeout_seconds: float = 5.0
     critical: bool = False
     progress_timeout_seconds: float = 0.0
-    start_phase: WorkerStartPhase = WorkerStartPhase.AUTHORIZED
+    launch_kind: WorkerLaunchKind = WorkerLaunchKind.AUTHORIZED
     runtime_relevant: bool = True
 
 
@@ -275,7 +275,7 @@ class AppRuntime:
                 thread_name="WorkTraceLaunchAtLoginRepair",
                 target=run_launch_at_login_repair_worker,
                 args_factory=lambda stop: (stop, self._launch_at_login_repair),
-                start_phase=WorkerStartPhase.INITIALIZE,
+                launch_kind=WorkerLaunchKind.INITIALIZE,
                 runtime_relevant=False,
             )
         return specs
@@ -312,18 +312,18 @@ class AppRuntime:
             self._start_initialize_workers()
             return True
 
-    def _worker_specs_for_phase(
+    def _worker_specs_for_launch_kind(
         self,
-        phase: WorkerStartPhase,
+        launch_kind: WorkerLaunchKind,
     ) -> tuple[tuple[str, WorkerSpec], ...]:
         return tuple(
             (name, spec)
             for name, spec in self._worker_specs.items()
-            if spec.start_phase is phase
+            if spec.launch_kind is launch_kind
         )
 
     def _start_initialize_workers(self) -> None:
-        for name, spec in self._worker_specs_for_phase(WorkerStartPhase.INITIALIZE):
+        for name, spec in self._worker_specs_for_launch_kind(WorkerLaunchKind.INITIALIZE):
             handle, _started, immediate_status = self._start_worker(spec)
             if immediate_status is not None or handle is None:
                 logging.error(
@@ -854,91 +854,91 @@ class AppRuntime:
             time.sleep(min(0.05, remaining))
         return statuses
 
-def _blocked_worker_report(self) -> WorkerStartupReport:
-    worker_specs = self._worker_specs_for_phase(WorkerStartPhase.AUTHORIZED)
-    statuses = {
-        name: _WorkerStartupStatus(
-            _WorkerStartupState.FAILED,
-            False,
-            error_code="database_maintenance_recovery_required",
-        )
-        for name, _spec in worker_specs
-    }
-    return WorkerStartupReport(
-        statuses,
-        "database_maintenance_recovery_required",
-    )
-
-def start_background_workers(self) -> WorkerStartupReport:
-    with self._lifecycle_lock:
-        worker_specs = self._worker_specs_for_phase(
-            WorkerStartPhase.AUTHORIZED
-        )
-        if database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked():
-            self.phase = RuntimePhase.RECOVERABLE_FAILURE
-            return self._blocked_worker_report()
-        if not self._initialized or not self.owns_application_instance:
-            statuses = {
-                name: _WorkerStartupStatus(
-                    _WorkerStartupState.FAILED,
-                    False,
-                    error_code="runtime_not_owned",
-                )
-                for name, _spec in worker_specs
-            }
-            return WorkerStartupReport(statuses, "runtime_not_owned")
-        if self._shutdown or self.stop_event.is_set():
-            statuses = {
-                name: _WorkerStartupStatus(
-                    _WorkerStartupState.STOPPED,
-                    False,
-                    error_code="runtime_stopping",
-                )
-                for name, _spec in worker_specs
-            }
-            return WorkerStartupReport(statuses, "runtime_stopping")
-
-        startup_started_at = time.monotonic()
-        statuses: dict[str, _WorkerStartupStatus] = {}
-        pending: dict[str, tuple[WorkerHandle, bool, float]] = {}
-        for name, spec in worker_specs:
-            handle, started, immediate_status = self._start_worker(spec)
-            if immediate_status is not None:
-                statuses[name] = immediate_status
-                continue
-            if handle is None:
-                statuses[name] = _WorkerStartupStatus(
-                    _WorkerStartupState.FAILED,
-                    False,
-                    started=False,
-                    error_code="worker_start_failed",
-                )
-                continue
-            pending[name] = (
-                handle,
-                started,
-                time.monotonic() + max(0.1, spec.startup_timeout_seconds),
+    def _blocked_worker_report(self) -> WorkerStartupReport:
+        worker_specs = self._worker_specs_for_launch_kind(WorkerLaunchKind.AUTHORIZED)
+        statuses = {
+            name: _WorkerStartupStatus(
+                _WorkerStartupState.FAILED,
+                False,
+                error_code="database_maintenance_recovery_required",
             )
-
-        statuses.update(self._await_worker_startups(pending))
-        ordered_statuses = {
-            name: statuses[name]
             for name, _spec in worker_specs
         }
-        error_code = (
-            "worker_start_failed"
-            if any(not status.ready for status in ordered_statuses.values())
-            else None
+        return WorkerStartupReport(
+            statuses,
+            "database_maintenance_recovery_required",
         )
-        report = WorkerStartupReport(ordered_statuses, error_code)
-        logging.info(
-            "background worker startup complete elapsed_ms=%s ready=%s failed=%s",
-            int((time.monotonic() - startup_started_at) * 1000),
-            report.ready,
-            list(report.failed_workers),
-        )
-        self._ensure_worker_progress_watchdog()
-        return report
+
+    def start_background_workers(self) -> WorkerStartupReport:
+        with self._lifecycle_lock:
+            worker_specs = self._worker_specs_for_launch_kind(
+                WorkerLaunchKind.AUTHORIZED
+            )
+            if database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked():
+                self.phase = RuntimePhase.RECOVERABLE_FAILURE
+                return self._blocked_worker_report()
+            if not self._initialized or not self.owns_application_instance:
+                statuses = {
+                    name: _WorkerStartupStatus(
+                        _WorkerStartupState.FAILED,
+                        False,
+                        error_code="runtime_not_owned",
+                    )
+                    for name, _spec in worker_specs
+                }
+                return WorkerStartupReport(statuses, "runtime_not_owned")
+            if self._shutdown or self.stop_event.is_set():
+                statuses = {
+                    name: _WorkerStartupStatus(
+                        _WorkerStartupState.STOPPED,
+                        False,
+                        error_code="runtime_stopping",
+                    )
+                    for name, _spec in worker_specs
+                }
+                return WorkerStartupReport(statuses, "runtime_stopping")
+
+            startup_started_at = time.monotonic()
+            statuses: dict[str, _WorkerStartupStatus] = {}
+            pending: dict[str, tuple[WorkerHandle, bool, float]] = {}
+            for name, spec in worker_specs:
+                handle, started, immediate_status = self._start_worker(spec)
+                if immediate_status is not None:
+                    statuses[name] = immediate_status
+                    continue
+                if handle is None:
+                    statuses[name] = _WorkerStartupStatus(
+                        _WorkerStartupState.FAILED,
+                        False,
+                        started=False,
+                        error_code="worker_start_failed",
+                    )
+                    continue
+                pending[name] = (
+                    handle,
+                    started,
+                    time.monotonic() + max(0.1, spec.startup_timeout_seconds),
+                )
+
+            statuses.update(self._await_worker_startups(pending))
+            ordered_statuses = {
+                name: statuses[name]
+                for name, _spec in worker_specs
+            }
+            error_code = (
+                "worker_start_failed"
+                if any(not status.ready for status in ordered_statuses.values())
+                else None
+            )
+            report = WorkerStartupReport(ordered_statuses, error_code)
+            logging.info(
+                "background worker startup complete elapsed_ms=%s ready=%s failed=%s",
+                int((time.monotonic() - startup_started_at) * 1000),
+                report.ready,
+                list(report.failed_workers),
+            )
+            self._ensure_worker_progress_watchdog()
+            return report
 
     def start_authorized_collection(self) -> _RuntimeStartResult:
         with self._lifecycle_lock:
@@ -1392,7 +1392,7 @@ __all__ = [
     "RuntimePhase",
     "WorkerHandle",
     "WorkerSpec",
-    "WorkerStartPhase",
+    "WorkerLaunchKind",
     "WorkerStartupReport",
     "WorkerStartupReporter",
 ]
