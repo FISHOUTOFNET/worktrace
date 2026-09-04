@@ -402,7 +402,12 @@ class FDWorkWindowController:
             generation = self._navigation_generation
             self._loaded_generation = generation
             self._probe_generation = None
-            self._probe_deadline = self._clock() + self._work_shell_timeout_seconds
+            if self._probe_deadline is None:
+                self._probe_deadline = self._clock() + (
+                    self._work_shell_timeout_seconds
+                    if self._explicit_activation
+                    else self._passive_probe_timeout_seconds
+                )
             self._login_watch_generation = None
             self._login_watch_deadline = None
             renderer_initialized = self._renderer_initialized
