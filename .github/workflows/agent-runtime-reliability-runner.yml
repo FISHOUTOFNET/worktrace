@@ -1,0 +1,43 @@
+name: Launch runtime reliability patch
+
+on:
+  push:
+    branches:
+      - fix/runtime-reliability-followup
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/runtime-reliability-followup
+          fetch-depth: 0
+      - name: Extract staged Python patch
+        shell: bash
+        run: |
+          git show 674a94f7b7c6abd89251cf11b71e47a01f0f2352:.github/workflows/agent-runtime-reliability-fix.yml > /tmp/staged.yml
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('/tmp/staged.yml').read_text(encoding='utf-8')
+          marker = "          python - <<'PY'\n"
+          start = text.index(marker) + len(marker)
+          end = text.index("\n          PY\n", start)
+          raw = text[start:end]
+          lines = [line[10:] if line.startswith('          ') else line for line in raw.splitlines()]
+          Path('/tmp/runtime_fix.py').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          PY
+          python /tmp/runtime_fix.py
+      - name: Commit applied fix
+        shell: bash
+        run: |
+          rm -f .github/workflows/agent-runtime-reliability-fix.yml
+          rm -f .github/workflows/agent-runtime-reliability-runner.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix runtime reliability follow-up"
+          git push origin HEAD:fix/runtime-reliability-followup
