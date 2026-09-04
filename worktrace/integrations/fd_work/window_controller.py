@@ -191,8 +191,11 @@ class FDWorkWindowController:
                 create = False
                 generation = self._navigation_generation
                 if self._session_state in {"idle", "error"}:
+                    page_loaded = self._loaded_generation is not None
                     self._begin_probe_generation_locked(explicit=explicit)
                     generation = self._navigation_generation
+                    if page_loaded:
+                        self._loaded_generation = generation
                 status = self._status_locked()
         if create:
             self._log_event("fd_work_create_reserved")
