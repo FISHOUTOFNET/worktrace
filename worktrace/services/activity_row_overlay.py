@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
@@ -47,6 +48,8 @@ _LIVE_CLOCK_KEYS = {
     "stable_live_key_hash",
 }
 
+_LOGGER = logging.getLogger(__name__)
+
 
 def apply_live_span_to_row(
     row: dict[str, Any],
@@ -58,37 +61,87 @@ def apply_live_span_to_row(
 
     semantic = _duration_semantic_for_row_kind(row_kind)
     if semantic == STATIC_CLOSED:
-        return _fail_static(row)
+        return _fail_static(
+            row,
+            span=span,
+            row_kind=row_kind,
+            reason="static_semantic",
+        )
     if not span or not _span_visible_for_row(span, row_kind):
-        return _fail_static(row)
+        return _fail_static(
+            row,
+            span=span,
+            row_kind=row_kind,
+            reason="span_unavailable_or_hidden",
+        )
 
     context = current_page_read_context()
     if context is None or not context.runtime_consistent:
-        return _fail_static(row)
+        return _fail_static(
+            row,
+            span=span,
+            row_kind=row_kind,
+            reason="runtime_context_inconsistent",
+        )
     anchor_id = int(span.get("anchor_activity_id") or 0)
     if anchor_id <= 0 or context.verified_open_activity_id != anchor_id:
-        return _fail_static(row)
+        return _fail_static(
+            row,
+            span=span,
+            row_kind=row_kind,
+            reason="span_anchor_unverified",
+        )
     if not _row_contains_anchor(row, anchor_id):
-        return _fail_static(row)
+        return _fail_static(
+            row,
+            span=span,
+            row_kind=row_kind,
+            reason="row_anchor_missing",
+        )
 
     row_id = int(row.get("activity_id") or row.get("id") or 0)
     if row_id == anchor_id and row.get("end_time") not in {None, ""}:
-        return _fail_static(row)
+        return _fail_static(
+            row,
+            span=span,
+            row_kind=row_kind,
+            reason="persisted_row_closed",
+        )
 
     live_clock = span.get("live_clock")
     if not _valid_source_clock(live_clock):
-        return _fail_static(row)
+        return _fail_static(
+            row,
+            span=span,
+            row_kind=row_kind,
+            reason="source_clock_invalid",
+        )
     runtime_snapshot = context.runtime_sample.snapshot
     if not isinstance(runtime_snapshot, dict):
-        return _fail_static(row)
+        return _fail_static(
+            row,
+            span=span,
+            row_kind=row_kind,
+            reason="runtime_snapshot_invalid",
+        )
     if str(live_clock["stable_live_key_hash"]) != _stable_live_key_hash(
         runtime_snapshot
     ):
-        return _fail_static(row)
+        return _fail_static(
+            row,
+            span=span,
+            row_kind=row_kind,
+            reason="stable_live_key_mismatch",
+        )
 
     aggregate_base = _aggregate_base(row, row_kind)
     if aggregate_base is None:
-        return _fail_static(row)
+        return _fail_static(
+            row,
+            span=span,
+            row_kind=row_kind,
+            reason="aggregate_base_invalid",
+        )
     elapsed = int(live_clock["elapsed_seconds_at_sample"])
     row_clock: LiveClockContract = {
         "sampled_at_epoch_ms": int(live_clock["sampled_at_epoch_ms"]),
@@ -188,7 +241,58 @@ def _aggregate_base(row: dict[str, Any], row_kind: str) -> int | None:
     return value
 
 
-def _fail_static(row: dict[str, Any]) -> dict[str, Any]:
+def _log_expected_live_degradation(
+    row: dict[str, Any],
+    span: DisplaySpanContract | None,
+    *,
+    row_kind: str,
+    reason: str,
+) -> None:
+    context = current_page_read_context()
+    if context is None or not context.runtime_consistent or span is None:
+        return
+    if not _span_visible_for_row(span, row_kind):
+        return
+
+    verified_open_id = int(context.verified_open_activity_id or 0)
+    anchor_id = int(span.get("anchor_activity_id") or 0)
+    if verified_open_id <= 0:
+        return
+    row_contains_anchor = anchor_id > 0 and _row_contains_anchor(row, anchor_id)
+    row_claims_live = bool(row.get("is_in_progress"))
+    if not row_contains_anchor and not row_claims_live:
+        return
+
+    live_clock = span.get("live_clock")
+    _LOGGER.warning(
+        "live projection overlay degraded reason=%s row_kind=%s "
+        "runtime_consistent=true verified_open_present=true span_visible=true "
+        "anchor_matches_verified=%s row_contains_anchor=%s row_claims_live=%s "
+        "source_clock_valid=%s aggregate_base_valid=%s",
+        reason,
+        row_kind,
+        anchor_id > 0 and anchor_id == verified_open_id,
+        row_contains_anchor,
+        row_claims_live,
+        _valid_source_clock(live_clock),
+        _aggregate_base(row, row_kind) is not None,
+    )
+
+
+def _fail_static(
+    row: dict[str, Any],
+    *,
+    span: DisplaySpanContract | None = None,
+    row_kind: str = "",
+    reason: str = "static_fallback",
+) -> dict[str, Any]:
+    if row_kind:
+        _log_expected_live_degradation(
+            row,
+            span,
+            row_kind=row_kind,
+            reason=reason,
+        )
     duration = max(0, int(row.get("duration_seconds") or 0))
     row["live_clock"] = {
         "sampled_at_epoch_ms": int(time.time() * 1000),
