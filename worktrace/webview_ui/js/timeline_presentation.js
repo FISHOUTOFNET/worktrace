@@ -237,8 +237,175 @@
     App.renderSessionDetails = renderSessionDetails;
     App.renderSessionActivitySummary = renderSessionDetails;
 
+    function rowContainsActivity(row, activityId) {
+        if (!row || activityId <= 0) return false;
+        var direct = [
+            row.activity_id,
+            row.id,
+            row.first_activity_id,
+            row.open_activity_id,
+            row.anchor_activity_id,
+            row.live_anchor_activity_id
+        ];
+        for (var index = 0; index < direct.length; index++) {
+            if (parseInt(direct[index], 10) === activityId) return true;
+        }
+        var collections = [row.activity_ids, row.summary_activity_ids];
+        for (var listIndex = 0; listIndex < collections.length; listIndex++) {
+            var values = collections[listIndex];
+            if (!Array.isArray(values)) continue;
+            for (var valueIndex = 0; valueIndex < values.length; valueIndex++) {
+                if (parseInt(values[valueIndex], 10) === activityId) return true;
+            }
+        }
+        return false;
+    }
+
+    function aggregateLiveClock(value) {
+        var clock = App.validateLiveClock(value);
+        return clock
+            && clock.is_live === true
+            && clock.duration_semantic === "aggregate_live"
+            ? clock
+            : null;
+    }
+
+    function compatibleRoleTarget(selector, runtime) {
+        var targets = document.querySelectorAll(selector);
+        for (var index = 0; index < targets.length; index++) {
+            if (App.liveTargetCompatibleWithRuntime(targets[index], runtime)) return true;
+        }
+        return false;
+    }
+
+    function publishTimelineLiveHealth(healthy, reason) {
+        var result = Object.freeze({
+            healthy: healthy === true,
+            refreshRequired: healthy !== true,
+            reason: String(reason || "")
+        });
+        App.lastTimelineLiveProjectionHealth = result;
+        return result;
+    }
+
+    function healthyTimelineLiveProjection(reason) {
+        return publishTimelineLiveHealth(true, reason || "healthy");
+    }
+
+    function unhealthyTimelineLiveProjection(reason) {
+        return publishTimelineLiveHealth(false, reason);
+    }
+
+    function timelineLiveProjectionHealth(runtime) {
+        if (App.currentPage !== "timeline"
+            || App.timelineLoaded !== true
+            || !App.lastTimelineData) {
+            return healthyTimelineLiveProjection("inactive");
+        }
+        if (App.timeline && typeof App.timeline.isEditingActive === "function"
+            && App.timeline.isEditingActive()) {
+            return healthyTimelineLiveProjection("editing_deferred");
+        }
+
+        var data = App.lastTimelineData;
+        var reportDate = String(data.date || App.timelineDate || "");
+        var today = String(data.today || (App.localTodayStr ? App.localTodayStr() : ""));
+        if (!reportDate || !today || reportDate !== today) {
+            return healthyTimelineLiveProjection("historical");
+        }
+        if (!runtime || String(runtime.liveReportDate || "") !== today) {
+            return healthyTimelineLiveProjection("runtime_scope_pending");
+        }
+        var runtimeClock = App.validateLiveClock(runtime.liveClock);
+        if (!runtimeClock || runtimeClock.is_live !== true) {
+            return healthyTimelineLiveProjection("runtime_not_live");
+        }
+        if (runtime.runtimeConsistent !== true || runtime.needsFullRefresh === true) {
+            return unhealthyTimelineLiveProjection("timeline_runtime_snapshot_inconsistent");
+        }
+
+        if (!aggregateLiveClock(data.total_live_clock)) {
+            return unhealthyTimelineLiveProjection("timeline_total_live_clock_missing");
+        }
+        var totalTarget = document.getElementById("timeline-total");
+        if (!totalTarget || !App.liveTargetCompatibleWithRuntime(totalTarget, runtime)) {
+            return unhealthyTimelineLiveProjection("timeline_total_live_target_missing");
+        }
+
+        var current = runtime.currentActivity || {};
+        var openActivityId = parseInt(
+            current.persisted_activity_id || current.activity_id || 0,
+            10
+        );
+        if (!(openActivityId > 0)) {
+            return unhealthyTimelineLiveProjection("timeline_runtime_open_activity_missing");
+        }
+
+        var entries = Array.isArray(data.entries) ? data.entries : [];
+        var liveOwners = entries.filter(function (row) {
+            return rowContainsActivity(row, openActivityId);
+        });
+        if (liveOwners.length === 0) {
+            return unhealthyTimelineLiveProjection("timeline_live_owner_missing");
+        }
+        if (liveOwners.length !== 1) {
+            return unhealthyTimelineLiveProjection("timeline_live_owner_ambiguous");
+        }
+        var liveOwner = liveOwners[0];
+        if (!aggregateLiveClock(liveOwner.live_clock)) {
+            return unhealthyTimelineLiveProjection("timeline_session_live_clock_missing");
+        }
+
+        var visibleEntries = typeof App.filteredTimelineSessions === "function"
+            ? App.filteredTimelineSessions(entries)
+            : entries;
+        var ownerKey = String(liveOwner.projection_instance_key || "");
+        var ownerVisible = visibleEntries.some(function (row) {
+            return row === liveOwner
+                || String(row.projection_instance_key || "") === ownerKey;
+        });
+        if (ownerVisible && !compatibleRoleTarget(
+            '#timeline-sessions-list [data-live-role="timeline-session"][data-live-clock-target="1"]',
+            runtime
+        )) {
+            return unhealthyTimelineLiveProjection("timeline_session_live_target_missing");
+        }
+
+        var details = App.lastSessionActivitySummaryViewModel;
+        if (details
+            && ownerKey
+            && String(App.selectedProjectionInstanceKey || "") === ownerKey
+            && String(details.projection_instance_key || "") === ownerKey) {
+            var detailRows = Array.isArray(details.summary_rows) ? details.summary_rows : [];
+            var detailOwners = detailRows.filter(function (row) {
+                return rowContainsActivity(row, openActivityId);
+            });
+            if (detailOwners.length === 0) {
+                return unhealthyTimelineLiveProjection("timeline_detail_live_owner_missing");
+            }
+            if (detailOwners.length !== 1) {
+                return unhealthyTimelineLiveProjection("timeline_detail_live_owner_ambiguous");
+            }
+            if (!aggregateLiveClock(detailOwners[0].live_clock)) {
+                return unhealthyTimelineLiveProjection("timeline_detail_live_clock_missing");
+            }
+            if (!compatibleRoleTarget(
+                '#timeline-details-list [data-live-role="timeline-detail"][data-live-clock-target="1"]',
+                runtime
+            )) {
+                return unhealthyTimelineLiveProjection("timeline_detail_live_target_missing");
+            }
+        }
+
+        return healthyTimelineLiveProjection("healthy");
+    }
+
+    App.liveProjectionHealthChecks = App.liveProjectionHealthChecks || {};
+    App.liveProjectionHealthChecks.timeline = timelineLiveProjectionHealth;
+
     App.timelinePresentation = Object.freeze({
         exactRowClock: exactRowClock,
-        clockedSeconds: clockedSeconds
+        clockedSeconds: clockedSeconds,
+        liveProjectionHealth: timelineLiveProjectionHealth
     });
 })();
