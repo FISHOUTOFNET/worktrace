@@ -14,6 +14,8 @@ function runtimePayload({
   page = "overview",
   reportDate = REPORT_DATE,
   databaseEpoch = 0,
+  runtimeConsistent = true,
+  needsFullRefresh = false,
 }) {
   return {
     ok: true,
@@ -57,8 +59,8 @@ function runtimePayload({
       },
       database_replacement_epoch: databaseEpoch,
       error_codes: [],
-      runtime_consistent: true,
-      needs_full_refresh: false,
+      runtime_consistent: runtimeConsistent,
+      needs_full_refresh: needsFullRefresh,
     },
   };
 }
@@ -274,4 +276,26 @@ test("page model may bootstrap only before a same-scope heartbeat authority exis
 
   assert.equal(App.acceptPagePayloadRuntime(laterPage, "overview", REPORT_DATE), true);
   assert.equal(App.liveRuntimeStore.get().sampleId, "heartbeat");
+});
+
+test("inconsistent page model can never bootstrap runtime authority", () => {
+  const { App } = harness();
+  const inconsistentPage = runtimePayload({
+    sampleId: "inconsistent-bootstrap",
+    liveRevision: "live-1",
+    pageRevision: "page-1",
+    runtimeConsistent: false,
+    needsFullRefresh: true,
+  });
+
+  assert.equal(
+    App.acceptPagePayloadRuntime(inconsistentPage, "overview", REPORT_DATE),
+    false
+  );
+  assert.equal(App.liveRuntimeStore.get(), null);
+  assert.equal(App.liveClockContractRefreshRequested, true);
+  assert.equal(
+    App.liveClockContractViolation.reason,
+    "runtime_page_snapshot_inconsistent"
+  );
 });
