@@ -69,7 +69,7 @@ class PathCapabilityHealth:
             return
         safe_route = str(route or "unknown").strip().lower() or "unknown"
         safe_outcome = str(outcome or "unknown").strip().lower() or "unknown"
-        if path_found and safe_outcome == "success":
+        if safe_outcome in {"success", "no_match"}:
             with self._lock:
                 previous = self._state
                 failures = self._consecutive_failures
@@ -79,8 +79,9 @@ class PathCapabilityHealth:
             if previous != "healthy" or failures:
                 logging.info(
                     "path capability path_capability_state=healthy "
-                    "path_probe_route=%s recovered=%s prior_failures=%s",
+                    "path_probe_route=%s path_found=%s recovered=%s prior_failures=%s",
                     safe_route,
+                    str(bool(path_found)).lower(),
                     str(previous in {"recovering", "degraded"}).lower(),
                     failures,
                 )

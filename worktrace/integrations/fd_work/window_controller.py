@@ -120,6 +120,7 @@ class FDWorkWindowController:
         self._renderer_available = True
         self._renderer_initialized = False
         self._renderer_name = "unknown"
+        self._loaded_generation: int | None = None
         self._navigation_generation = 0
         self._operation_generation = 0
         self._adapter_installed_generation: int | None = None
@@ -206,6 +207,7 @@ class FDWorkWindowController:
         self._navigation_generation += 1
         self._operation_generation += 1
         self._adapter_installed_generation = None
+        self._loaded_generation = None
         self._session_state = "probing"
         self._page_phase = "none"
         self._operation = "none"
@@ -252,6 +254,7 @@ class FDWorkWindowController:
             self._navigation_generation += 1
             self._operation_generation += 1
             self._adapter_installed_generation = None
+            self._loaded_generation = None
             self._explicit_activation = False
             self._creating_window = False
             self._session_state = state
@@ -278,6 +281,7 @@ class FDWorkWindowController:
             self._navigation_generation += 1
             self._operation_generation += 1
             self._adapter_installed_generation = None
+            self._loaded_generation = None
             self._creating_window = False
             self._session_state = "error"
             self._page_phase = "none"
@@ -344,11 +348,9 @@ class FDWorkWindowController:
                 self._window_visible = False
                 self._creating_window = False
                 generation = self._navigation_generation
-                renderer_initialized = self._renderer_initialized
             else:
                 keep = False
                 generation = self._navigation_generation
-                renderer_initialized = False
             status = self._status_locked()
         if not keep:
             self._destroy_window(window)
@@ -360,8 +362,6 @@ class FDWorkWindowController:
         is_loaded = getattr(loaded_event, "is_set", None)
         if callable(is_loaded) and is_loaded():
             self._schedule(lambda: self._on_loaded(window))
-        elif renderer_initialized:
-            self._arm_probe_if_needed(window, generation)
         return {"ok": True, "status": self.get_status()}
 
     def _on_before_load(self, window: Any) -> None:
@@ -371,6 +371,7 @@ class FDWorkWindowController:
             self._navigation_generation += 1
             self._operation_generation += 1
             self._adapter_installed_generation = None
+            self._loaded_generation = None
             self._session_state = "probing"
             self._page_phase = "none"
             self._operation = "none"
@@ -396,6 +397,7 @@ class FDWorkWindowController:
             self._operation = "none"
             self._error_code = None
             generation = self._navigation_generation
+            self._loaded_generation = generation
             self._probe_generation = None
             self._probe_deadline = self._clock() + self._work_shell_timeout_seconds
             self._login_watch_generation = None
@@ -412,6 +414,7 @@ class FDWorkWindowController:
             if (
                 not self._navigation_is_current_locked(window, generation)
                 or not self._renderer_initialized
+                or self._loaded_generation != generation
                 or self._session_state != "probing"
                 or self._probe_generation == generation
             ):
@@ -438,8 +441,24 @@ class FDWorkWindowController:
         )
         try:
             url = guarded_window.get_current_url()
-        except FDWorkWindowCommandError:
-            url = None
+        except FDWorkWindowCommandError as exc:
+            if exc.kind == "guard_rejected":
+                return
+            if exc.kind in {"callback_timeout", "request_timeout", "executor_rejected"}:
+                remaining = self._remaining(deadline)
+                if remaining > 0:
+                    self._schedule_after(
+                        min(self._probe_interval_seconds, remaining),
+                        lambda: self._probe_current_page(window, generation),
+                    )
+                    return
+            error = (
+                "window_executor_stalled"
+                if exc.kind == "executor_stalled"
+                else "window_probe_failed"
+            )
+            self._set_page_error_if_current(window, generation, error)
+            return
         if not self._page_adapter.navigation_allowed(url):
             self._set_page_error_if_current(window, generation, "navigation_blocked")
             return
@@ -665,6 +684,7 @@ class FDWorkWindowController:
             self._navigation_generation += 1
             self._operation_generation += 1
             self._adapter_installed_generation = None
+            self._loaded_generation = None
             self._explicit_activation = False
             self._window_visible = False
             self._session_state = "idle"
@@ -692,6 +712,7 @@ class FDWorkWindowController:
             self._window_visible = False
             self._creating_window = False
             self._adapter_installed_generation = None
+            self._loaded_generation = None
             self._explicit_activation = False
             self._session_state = "idle"
             self._page_phase = "none"

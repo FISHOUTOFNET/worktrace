@@ -5,6 +5,8 @@ import json
 import logging
 import re
 import sqlite3
+import threading
+import time
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
@@ -31,6 +33,9 @@ _WRITE_TOKEN_RE = re.compile(
     r"\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|VACUUM|REINDEX|ATTACH|DETACH)\b",
     re.IGNORECASE,
 )
+_WRITER_WAIT_WARNING_MS = 100.0
+_WRITER_HOLD_WARNING_MS = 250.0
+
 _DB_MUTATING_PRAGMAS = {
     "APPLICATION_ID",
     "AUTO_VACUUM",
@@ -74,19 +79,98 @@ def _sql_records_business_read(sql: str) -> bool:
 
 
 class WorkTraceConnection(sqlite3.Connection):
-    """SQLite infrastructure enforcing write exclusion and read observation."""
+    """SQLite infrastructure enforcing write exclusion and writer telemetry."""
 
     def _require_write_allowed(self, sql: str) -> None:
         if _sql_requires_write_gate(sql):
             DATABASE_WRITE_GATE.require_current_thread_allowed(sql)
 
+    @staticmethod
+    def _writer_thread_name() -> str:
+        return str(threading.current_thread().name or "unknown")[:64]
+
+    def _writer_acquired(self, started: float, kind: str) -> None:
+        acquired = time.perf_counter()
+        self._worktrace_writer_acquired_at = acquired
+        self._worktrace_writer_kind = str(kind or "unknown")[:32]
+        wait_ms = (acquired - started) * 1000.0
+        if wait_ms >= _WRITER_WAIT_WARNING_MS:
+            logging.warning(
+                "database writer wait thread=%s transaction_kind=%s wait_ms=%.0f",
+                self._writer_thread_name(),
+                self._worktrace_writer_kind,
+                wait_ms,
+            )
+
+    def _writer_finished(self, outcome: str) -> None:
+        acquired = getattr(self, "_worktrace_writer_acquired_at", None)
+        if acquired is None:
+            return
+        kind = str(getattr(self, "_worktrace_writer_kind", "unknown"))
+        hold_ms = (time.perf_counter() - float(acquired)) * 1000.0
+        self._worktrace_writer_acquired_at = None
+        self._worktrace_writer_kind = ""
+        if hold_ms >= _WRITER_HOLD_WARNING_MS:
+            logging.warning(
+                "database writer slow thread=%s transaction_kind=%s hold_ms=%.0f outcome=%s",
+                self._writer_thread_name(),
+                kind,
+                hold_ms,
+                str(outcome or "unknown")[:32],
+            )
+
     def execute(self, sql, parameters=(), /):  # type: ignore[override]
         text = str(sql)
         self._require_write_allowed(text)
-        cursor = super().execute(sql, parameters)
+        upper = text.lstrip().upper()
+        explicit_begin = upper.startswith("BEGIN IMMEDIATE") or upper.startswith("BEGIN EXCLUSIVE")
+        implicit_begin = bool(
+            not self.in_transaction
+            and _sql_requires_write_gate(text)
+            and not upper.startswith("PRAGMA")
+            and not explicit_begin
+        )
+        started = time.perf_counter() if explicit_begin or implicit_begin else None
+        try:
+            cursor = super().execute(sql, parameters)
+        except sqlite3.OperationalError as exc:
+            if started is not None and "locked" in str(exc).casefold():
+                logging.warning(
+                    "database writer contention thread=%s transaction_kind=%s wait_ms=%.0f outcome=database_busy",
+                    self._writer_thread_name(),
+                    "explicit" if explicit_begin else "implicit",
+                    (time.perf_counter() - started) * 1000.0,
+                )
+            raise
+        if started is not None and self.in_transaction:
+            self._writer_acquired(started, "explicit" if explicit_begin else "implicit")
         if _sql_records_business_read(text):
             DATABASE_WRITE_GATE.note_current_thread_read()
         return cursor
+
+    def commit(self):  # type: ignore[override]
+        try:
+            return super().commit()
+        finally:
+            self._writer_finished("commit")
+
+    def rollback(self):  # type: ignore[override]
+        try:
+            return super().rollback()
+        finally:
+            self._writer_finished("rollback")
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self._writer_finished("rollback" if exc_type is not None else "commit")
+
+    def close(self):  # type: ignore[override]
+        try:
+            return super().close()
+        finally:
+            self._writer_finished("close")
 
     def executemany(self, sql, seq_of_parameters, /):  # type: ignore[override]
         text = str(sql)

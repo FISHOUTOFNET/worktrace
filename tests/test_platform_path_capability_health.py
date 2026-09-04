@@ -131,3 +131,38 @@ def test_windows_adapter_reset_marks_path_recovering_until_authoritative_success
     snapshot = adapter.capability_health_snapshot()["path_resolution"]
     assert snapshot["state"] == "degraded"
     assert snapshot["last_failure_code"] == "open_files_timeout"
+
+
+
+def test_successful_no_match_resets_technical_failure_streak():
+    health = PathCapabilityHealth(failure_threshold=3)
+    health.observe_probe(route="com", outcome="timeout", attempted=True, path_found=False)
+    health.observe_probe(route="open_files", outcome="helper_error", attempted=True, path_found=False)
+    assert health.snapshot().consecutive_failures == 2
+
+    health.observe_probe(route="open_files", outcome="no_match", attempted=True, path_found=False)
+
+    snapshot = health.snapshot()
+    assert snapshot.state == "healthy"
+    assert snapshot.consecutive_failures == 0
+    assert snapshot.last_failure_code == ""
+
+
+def test_path_failure_backoff_is_short_first_and_bounded(monkeypatch):
+    now = {"value": 100.0}
+    monkeypatch.setattr(windows_path_resolver.time, "monotonic", lambda: now["value"])
+    failures = {}
+
+    WindowsPathResolver._mark_failed(failures, "target")
+    assert WindowsPathResolver._available(failures, "target") is False
+    now["value"] += 2.1
+    assert WindowsPathResolver._available(failures, "target") is True
+
+    WindowsPathResolver._mark_failed(failures, "target")
+    now["value"] += 4.9
+    assert WindowsPathResolver._available(failures, "target") is False
+    now["value"] += 0.2
+    assert WindowsPathResolver._available(failures, "target") is True
+
+    WindowsPathResolver._mark_succeeded(failures, "target")
+    assert failures == {}

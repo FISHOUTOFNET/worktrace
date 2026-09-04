@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 from typing import Any
 
 _ALLOWED_OPERATIONS = {"com_path", "open_files"}
@@ -71,8 +72,16 @@ def execute(operation: str, payload: dict[str, Any]) -> Any:
 def main(argv: list[str] | None = None) -> int:
     try:
         operation, payload = _payload(list(sys.argv[1:] if argv is None else argv))
+        started = time.perf_counter()
         result = execute(operation, payload)
-        print(json.dumps({"ok": True, "value": result}, ensure_ascii=False), flush=True)
+        operation_ms = (time.perf_counter() - started) * 1000.0
+        print(
+            json.dumps(
+                {"ok": True, "value": result, "operation_ms": round(operation_ms, 3)},
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
         return 0
     except Exception as exc:
         print(

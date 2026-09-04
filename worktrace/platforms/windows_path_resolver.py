@@ -30,7 +30,8 @@ _PATH_FAILURE_TTL_SECONDS = 0.75
 _MAX_PATH_CACHE = 256
 _COM_CALL_TIMEOUT_SECONDS = 2.0
 _OPEN_FILES_TIMEOUT_SECONDS = 2.0
-_FAILURE_COOLDOWN_SECONDS = 30.0
+_FAILURE_BACKOFF_SECONDS = (2.0, 5.0, 15.0, 30.0)
+_PATH_PROBE_SLOW_LOG_MS = 500.0
 _EXTRA_LOCAL_FILE_PROCESSES = {
     "code.exe",
     "devenv.exe",
@@ -177,8 +178,8 @@ class WindowsPathResolver:
             tuple[int | None, int | None, str, str],
             tuple[float, str | None],
         ] = {}
-        self._com_failure_times: dict[str, float] = {}
-        self._open_files_failure_times: dict[int, float] = {}
+        self._com_failure_times: dict[str, tuple[float, int]] = {}
+        self._open_files_failure_times: dict[int, tuple[float, int]] = {}
         self._catalog = (
             *_BUILTIN_COM_PATH_CATALOG,
             *_load_user_com_catalog_entries(),
@@ -303,6 +304,7 @@ class WindowsPathResolver:
                 continue
             try:
                 path = _get_com_file_path_subprocess(prog_id, expression)
+                self._mark_succeeded(self._com_failure_times, prog_id)
                 normalized = _normalize_com_file_path(path)
                 if _is_valid_com_path(normalized, window_title):
                     return PathResolutionResult(
@@ -389,6 +391,7 @@ class WindowsPathResolver:
             return PathResolutionResult(None, route="open_files", outcome="cooldown")
         try:
             paths = _get_process_open_file_paths(pid)
+            self._mark_succeeded(self._open_files_failure_times, pid)
         except TimeoutError:
             self._mark_failed(self._open_files_failure_times, pid)
             logging.debug("active file path open-files lookup timed out")
@@ -417,12 +420,25 @@ class WindowsPathResolver:
 
     @staticmethod
     def _available(failures: dict, key) -> bool:
-        last_fail = failures.get(key)
-        return last_fail is None or time.monotonic() - last_fail > _FAILURE_COOLDOWN_SECONDS
+        entry = failures.get(key)
+        if entry is None:
+            return True
+        if isinstance(entry, tuple):
+            last_fail, attempts = entry
+        else:
+            last_fail, attempts = float(entry), 1
+        index = min(max(1, int(attempts)) - 1, len(_FAILURE_BACKOFF_SECONDS) - 1)
+        return time.monotonic() - float(last_fail) > _FAILURE_BACKOFF_SECONDS[index]
 
     @staticmethod
     def _mark_failed(failures: dict, key) -> None:
-        failures[key] = time.monotonic()
+        previous = failures.get(key)
+        attempts = int(previous[1]) + 1 if isinstance(previous, tuple) else 1
+        failures[key] = (time.monotonic(), attempts)
+
+    @staticmethod
+    def _mark_succeeded(failures: dict, key) -> None:
+        failures.pop(key, None)
 
     def _cached(
         self,
@@ -484,6 +500,7 @@ def _run_probe(
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    started = time.perf_counter()
     try:
         completed = subprocess.run(
             _probe_command(operation, payload),
@@ -497,9 +514,17 @@ def _run_probe(
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
+        total_ms = (time.perf_counter() - started) * 1000.0
+        logging.warning(
+            "windows path probe timeout path_probe_route=%s total_ms=%.0f budget_ms=%.0f",
+            operation,
+            total_ms,
+            timeout_seconds * 1000.0,
+        )
         raise TimeoutError(
             f"{operation} helper timed out after {timeout_seconds:.1f}s"
         ) from exc
+    total_ms = (time.perf_counter() - started) * 1000.0
     try:
         response = json.loads(completed.stdout or "{}")
     except json.JSONDecodeError as exc:
@@ -507,6 +532,14 @@ def _run_probe(
     if completed.returncode != 0 or not isinstance(response, dict) or response.get("ok") is not True:
         error = str(response.get("error") if isinstance(response, dict) else "probe_failed")
         raise RuntimeError(f"{operation} helper failed: {error}")
+    if total_ms >= _PATH_PROBE_SLOW_LOG_MS:
+        operation_ms = float(response.get("operation_ms") or 0.0)
+        logging.info(
+            "windows path probe slow path_probe_route=%s total_ms=%.0f helper_operation_ms=%.0f",
+            operation,
+            total_ms,
+            operation_ms,
+        )
     return response.get("value")
 
 

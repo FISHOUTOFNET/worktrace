@@ -256,7 +256,8 @@ def test_passive_probe_never_mutates_window_visibility_or_focus():
     controller, webview, _adapter = _controller(renderer_initialized=False, delayed=delayed)
     controller.prepare_window_before_start(False)
     controller.on_renderer_initialized("edgechromium")
-    _run_next(delayed)
+    assert delayed == []
+    webview.window.events.loaded.fire()
 
     assert (webview.window.shown, webview.window.restored, webview.window.focused) == (0, 0, 0)
     assert controller.get_status()["session_state"] == "ready"
@@ -276,6 +277,8 @@ def test_passive_unknown_probe_uses_one_bounded_deadline():
     controller.prepare_window_before_start(False)
     webview.window.url = "https://work.fangdalaw.com/loading"
     controller.on_renderer_initialized("edgechromium")
+    assert delayed == []
+    webview.window.events.loaded.fire()
 
     while delayed:
         _run_next(delayed, clock)
@@ -312,6 +315,8 @@ def test_probe_timeout_logs_only_safe_dom_contract_booleans(caplog):
     caplog.set_level("INFO")
     controller.prepare_window_before_start(False)
     controller.on_renderer_initialized("edgechromium")
+    assert delayed == []
+    _webview.window.events.loaded.fire()
 
     while delayed:
         _run_next(delayed, clock)
