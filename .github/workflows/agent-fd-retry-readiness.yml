@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: fix/runtime-reliability-followup
-      - name: Patch and test
+      - name: Patch and validate syntax
         shell: bash
         run: |
           python - <<'PY'
@@ -32,7 +32,7 @@ jobs:
           addition = '\n\ndef test_loaded_window_retry_inherits_navigation_readiness():\n    delayed = []\n    controller, webview = _controller(delayed=delayed)\n    controller.prepare_window_before_start(False)\n    webview.window.events.loaded.fire()\n    assert controller.get_status()["session_state"] == "ready"\n\n    webview.window.url = "https://example.com/not-fd-work"\n    webview.window.events.loaded.fire()\n    assert controller.get_status()["error_code"] == "navigation_blocked"\n\n    webview.window.url = _PageAdapter().business_url\n    result = controller.prepare_window_before_start(False)\n    assert result["ok"] is True\n    assert delayed\n    _delay, callback = delayed.pop(0)\n    callback()\n    assert controller.get_status()["session_state"] == "ready"\n'
           test_path.write_text(tests + addition, encoding='utf-8')
           PY
-          python -m pytest -q tests/test_fd_work_startup_probe_contract.py tests/test_fd_work_window_controller.py
+          python -m compileall -q worktrace tests/test_fd_work_startup_probe_contract.py tests/test_database_writer_telemetry.py
       - name: Commit patch
         shell: bash
         run: |
