@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import pytest
 
+from tests.test_fd_work_window_controller import _PageAdapter, _WebView
 from worktrace.integrations.fd_work.window_controller import FDWorkWindowController
 from worktrace.integrations.fd_work.window_executor import FDWorkWindowCommandError
 
-from tests.test_fd_work_window_controller import _PageAdapter, _WebView
-
-pytestmark = [pytest.mark.integration, pytest.mark.collector_runtime, pytest.mark.contract, pytest.mark.serial]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.collector_runtime,
+    pytest.mark.contract,
+    pytest.mark.serial,
+]
 
 
 def _controller(*, delayed: list[tuple[float, object]]):
@@ -43,9 +47,13 @@ def test_executor_stall_is_not_reported_as_navigation_blocked(monkeypatch):
 
     class BrokenWindow:
         def get_current_url(self):
-  raise FDWorkWindowCommandError("executor_stalled")
+            raise FDWorkWindowCommandError("executor_stalled")
 
-    monkeypatch.setattr(controller, "_executor_window", lambda *_args: BrokenWindow())
+    monkeypatch.setattr(
+        controller,
+        "_executor_window",
+        lambda *_args: BrokenWindow(),
+    )
     webview.window.events.loaded.fire()
 
     status = controller.get_status()
