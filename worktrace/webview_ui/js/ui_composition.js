@@ -103,8 +103,38 @@
         };
     }
 
+    function composeLiveProjectionHealthCapabilities() {
+        var checks = App.liveProjectionHealthChecks;
+        if (!checks || typeof checks !== "object") return;
+        Object.keys(checks).forEach(function (page) {
+            var capability = App[page];
+            var check = checks[page];
+            if (!capability || typeof capability !== "object" || typeof check !== "function") return;
+            var baseLocalTick = capability.applyLocalTick;
+            var composed = Object.assign({}, capability, {
+                applyLocalTick: function () {
+                    var args = arguments;
+                    var baseResult = typeof baseLocalTick === "function"
+                        ? baseLocalTick.apply(capability, args)
+                        : false;
+                    return Promise.resolve(baseResult).then(function (result) {
+                        if (result === true || (result && result.refreshRequired === true)) {
+                            return result;
+                        }
+                        var runtime = App.liveRuntimeStore && App.liveRuntimeStore.get
+                            ? App.liveRuntimeStore.get()
+                            : null;
+                        return check(runtime);
+                    });
+                }
+            });
+            App[page] = Object.freeze(composed);
+        });
+    }
+
     wrapRuntimeAcceptance("acceptRefreshStateRuntime", "refresh-state");
     wrapRuntimeAcceptance("acceptPagePayloadRuntime", "page-payload");
+    composeLiveProjectionHealthCapabilities();
 
     var baseShowStatus = App.showStatus;
     if (typeof baseShowStatus === "function") {

@@ -621,6 +621,9 @@
         if (!candidate) {
             return { ok: false, reason: "runtime_payload_invalid" };
         }
+        if (candidate.runtimeConsistent !== true || candidate.needsFullRefresh === true) {
+            return { ok: false, reason: "runtime_page_snapshot_inconsistent" };
+        }
         var canonical = liveRuntimeStore.get();
         var expectedScopeKey = runtimeScopeKey(expectedPage, expectedDate);
         if (!canonical || runtimeAuthorityScopeKey !== expectedScopeKey) {
@@ -631,9 +634,6 @@
         }
         if (!candidate.pageRevision || candidate.pageRevision !== canonical.pageRevision) {
             return { ok: false, reason: "runtime_page_revision_mismatch" };
-        }
-        if (candidate.runtimeConsistent !== true || candidate.needsFullRefresh === true) {
-            return { ok: false, reason: "runtime_page_snapshot_inconsistent" };
         }
         return { ok: true, bootstrap: false, candidate: candidate, canonical: canonical };
     }
